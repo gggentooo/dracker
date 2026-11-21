@@ -10,6 +10,20 @@ All major changes to `synth-tracker/` must be recorded in reverse-chronological 
 
 ---
 
+## [2026-11-22 08:46:27 KST]
+- **Timestamp:** `2026-11-22 08:46:27 KST`
+- **Author:** Antigravity (Gemini 4 Neon)
+- **Affected Files:**
+  - `synth-tracker/source/platform/interfaces.d`
+  - `synth-tracker/source/platform/macos/corefoundation.d`
+  - `synth-tracker/source/platform/macos/coreaudio.d`
+  - `synth-tracker/source/platform/macos/coremidi.d`
+  - `synth-tracker/source/main.d`
+  - `synth-tracker/tests/unit/platform_test.d`
+  - `synth-tracker/agents.md`
+  - `synth-tracker/docs/changelog.md`
+- **Description:** Implemented Phase 3 (Native macOS Audio & MIDI Layer): froze `platform.interfaces` (`IAudioDriver`, `IMidiDriver`, `IPlatformWindow`, `IFileDialog`, `MidiPacket`), added `extern(C)` CoreFoundation UTF-8/`ScopedCF`/`MachTimebase` helpers (`corefoundation.d`), implemented `CoreAudioDriver` AUHAL output + same-device direct duplex + dual-device PI `DriftCompensatedInputRing` with `ScopedNoDenormals` and hot-plug/sample-rate property listeners (`coreaudio.d`), implemented `CoreMidiDriver` with architecture-safe `midiPacketNext`, running-status/SysEx MIDI 1.0 parser, multi-source `MpscRing!MidiPacket`, virtual endpoints, and `MidiNoteTracker`/`ModEvent` translation (`coremidi.d`), wired `main.d` (`--list-devices`, `--cli-demo` live polyphonic `CliDemoPolySynth` + `AudioGraph`), and verified with `tests/unit/platform_test.d` under `rt_malloc_trap` and live CoreAudio/CoreMIDI checks.
+
 ## [2026-11-22 07:06:26 KST]
 - **Timestamp:** `2026-11-22 07:06:26 KST`
 - **Author:** Antigravity (Gemini 4 Neon)

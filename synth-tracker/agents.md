@@ -133,12 +133,12 @@ Each phase below tracks status with `[ ]` / `[x]`. Do not mark any item `[x]` un
   - `[x]` `2.5` Smoke-test modules (`output.d`, `amplifier.d`, `dc_blocker.d`, `feedback.d`) + determinism suite
 - **Exit Criteria:** `AudioGraph.render()` compiles `@nogc nothrow` and passes `rt_malloc_trap`; unit tests verify sample-accurate `NoteOn` offsets, `64` vs `512` host buffer invariance, deterministic feedback loops, and leak-free mid-stream `SwapGraphPlan`/`SwapModuleAsset`.
 
-### `[ ]` Phase 3 — Native macOS Audio & MIDI Layer *(Deps: Phases 0, 2)*
+### `[x]` Phase 3 — Native macOS Audio & MIDI Layer *(Deps: Phases 0, 2)*
 - **Subtasks:**
-  - `[ ]` `3.1` Freeze `platform/interfaces.d`; implement `platform/macos/corefoundation.d`
-  - `[ ]` `3.2` Implement `platform/macos/coreaudio.d` (AUHAL output, same-device duplex + dual-AU resampling input, `ScopedNoDenormals`)
-  - `[ ]` `3.3` Implement `platform/macos/coremidi.d` (multi-source `SpscRing`/`MpscRing` + hot-plug)
-  - `[ ]` `3.4` Device hot-unplug/sample-rate listeners + `main.d --cli-demo`
+  - `[x]` `3.1` Freeze `platform/interfaces.d`; implement `platform/macos/corefoundation.d`
+  - `[x]` `3.2` Implement `platform/macos/coreaudio.d` (AUHAL output, same-device duplex + dual-AU resampling input, `ScopedNoDenormals`)
+  - `[x]` `3.3` Implement `platform/macos/coremidi.d` (multi-source `SpscRing`/`MpscRing` + hot-plug)
+  - `[x]` `3.4` Device hot-unplug/sample-rate listeners + `main.d --cli-demo`
 - **Exit Criteria:** Hardware/driver unit & integration tests pass; sustained 44.1/48 kHz playback at 64–128 frames with zero xruns; MIDI-to-audio latency $< 10$ ms; callback verified unregistered with GC and allocation-free.
 
 ### `[ ]` Phase 4 — Built-In Module Library *(Deps: Phases 0, 1, 2, 3)*
