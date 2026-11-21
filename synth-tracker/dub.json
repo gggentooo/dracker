@@ -1,0 +1,89 @@
+{
+    "name": "synth-tracker",
+    "description": "Clean-slate modular synth tracker in idiomatic D",
+    "license": "BSL-1.0",
+    "targetType": "executable",
+    "targetPath": "build",
+    "dependencies": {
+        "audio-formats": "~>3.1.0"
+    },
+    "subConfigurations": {
+        "audio-formats": "boost"
+    },
+    "configurations": [
+        {
+            "name": "app",
+            "platforms": [
+                "osx"
+            ],
+            "versions": [
+                "StudioGUI"
+            ],
+            "frameworks-osx": [
+                "Cocoa",
+                "Foundation",
+                "Metal",
+                "QuartzCore",
+                "CoreGraphics",
+                "CoreText",
+                "CoreAudio",
+                "AudioToolbox",
+                "CoreMIDI",
+                "CoreFoundation"
+            ],
+            "preBuildCommands-osx": [
+                "mkdir -p build",
+                "clang -x objective-c -fobjc-arc -O2 -mmacosx-version-min=12.0 -arch arm64 -arch x86_64 -c source/platform/macos/objc_blocks_shim.m -o build/objc_blocks_shim.o",
+                "xcrun -sdk macosx metal -c shaders/ui2d.metal -o build/ui2d.air && xcrun -sdk macosx metallib build/ui2d.air -o build/ui2d.metallib"
+            ],
+            "sourceFiles-osx": [
+                "build/objc_blocks_shim.o"
+            ]
+        },
+        {
+            "name": "headless",
+            "versions": [
+                "HeadlessCore"
+            ],
+            "excludedSourceFiles": [
+                "source/gui/*",
+                "source/gui/**/*",
+                "source/platform/macos/appkit.d",
+                "source/platform/macos/coretext.d",
+                "source/platform/macos/metal_renderer.d",
+                "source/platform/macos/objc_runtime.d"
+            ],
+            "frameworks-osx": [
+                "CoreAudio",
+                "AudioToolbox",
+                "CoreMIDI",
+                "CoreFoundation"
+            ]
+        }
+    ],
+    "buildTypes": {
+        "debug": {
+            "buildOptions": [
+                "debugMode",
+                "debugInfo"
+            ]
+        },
+        "release": {
+            "buildOptions": [
+                "releaseMode",
+                "optimize",
+                "inline"
+            ],
+            "dflags-ldc": [
+                "-O3"
+            ]
+        },
+        "unittest": {
+            "buildOptions": [
+                "unittests",
+                "debugMode",
+                "debugInfo"
+            ]
+        }
+    }
+}

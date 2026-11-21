@@ -1,0 +1,57 @@
+# Ignore everything at the repository root outside synth-tracker/
+/*
+!.gitignore
+!synth-tracker/
+
+# Standard OS / macOS files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+Desktop.ini
+
+# D / LDC2 / DUB / Metal build artifacts (keep dub.selections.json tracked)
+.dub/
+build/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.air
+*.metallib
+*.dSYM/
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+*.lst
+*.map
+__pycache__/
+*.pyc
+
+# macOS .app bundles & Xcode / Instruments artifacts
+*.app/
+*.dmg
+*.pkg
+*.trace/
+DerivedData/
+xcuserdata/
+
+# IDE, editor, temporary & secret files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.bak
+*.tmp
+*.log
+.env
+.env.*
