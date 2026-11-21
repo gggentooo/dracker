@@ -115,13 +115,13 @@ Each phase below tracks status with `[ ]` / `[x]`. Do not mark any item `[x]` un
   - `[x]` `0.5` Implement `io/audio_io.d`, `tests/audio_harness.d`, `tests/rt_malloc_trap.d`, `tests/unit/foundation_test.d`.
 - **Exit Criteria:** `dub test --compiler=ldc2 --config=headless` passes with zero warnings; unit tests cover `OwnedBuffer!T`, `FixedArray`, `Arena`, `TripleBuffer`, `audio_io`, `SpscRing`/`MpscRing` 10M-message stress tests, `ScopedNoDenormals` (`arm64` & `x86_64`), and `rt_malloc_trap` failure detection.
 
-### `[ ]` Phase 1 — Core DSP Primitives & Shared Polyphony *(Deps: Phase 0)*
+### `[x]` Phase 1 — Core DSP Primitives & Shared Polyphony *(Deps: Phase 0)*
 - **Subtasks:**
-  - `[ ]` `1.1` `dsp/tables.d`, `dsp/interp.d`, `dsp/resampler.d`
-  - `[ ]` `1.2` `dsp/fft.d` (explicit `float`/`double`)
-  - `[ ]` `1.3` `dsp/filter_biquad.d` (`double` state), `dsp/filter_svf.d`
-  - `[ ]` `1.4` `dsp/oscillator.d`, `dsp/smoother.d`, `dsp/envelope.d`, `dsp/delay_line.d`
-  - `[ ]` `1.5` `dsp/voice_pool.d` (`VoicePool!(VoiceT, MaxVoices)`)
+  - `[x]` `1.1` `dsp/tables.d`, `dsp/interp.d`, `dsp/resampler.d`
+  - `[x]` `1.2` `dsp/fft.d` (explicit `float`/`double`)
+  - `[x]` `1.3` `dsp/filter_biquad.d` (`double` state), `dsp/filter_svf.d`
+  - `[x]` `1.4` `dsp/oscillator.d`, `dsp/smoother.d`, `dsp/envelope.d`, `dsp/delay_line.d`
+  - `[x]` `1.5` `dsp/voice_pool.d` (`VoicePool!(VoiceT, MaxVoices)`)
 - **Exit Criteria:** Every `dsp/` unit compiles `@nogc nothrow`; unit tests pass for all 11 DSP files (`fft` round-trip error $< 10^{-6}$, filter impulse/frequency sweeps with zero `NaN`/Inf, `VoicePool` stealing/deactivation).
 
 ### `[ ]` Phase 2 — Fixed-Quantum AudioGraph & UDA Module Protocol *(Deps: Phases 0, 1)*
