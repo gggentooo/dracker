@@ -4,6 +4,7 @@
     "license": "BSL-1.0",
     "targetType": "executable",
     "targetPath": "build",
+    "mainSourceFile": "source/main.d",
     "dependencies": {
         "audio-formats": "~>3.1.0"
     },
@@ -44,6 +45,14 @@
             "name": "headless",
             "versions": [
                 "HeadlessCore"
+            ],
+            "sourcePaths": [
+                "source",
+                "tests"
+            ],
+            "importPaths": [
+                "source",
+                "."
             ],
             "excludedSourceFiles": [
                 "source/gui/*",

@@ -54,6 +54,9 @@ All major changes to the codebase must be recorded in [docs/changelog.md](./docs
 3. **List of affected files/directories**.
 4. **Brief description of the change(s)**.
 
+### Rule 5 - Require Explicit Owner Confirmation for Critical Changes/Decisions
+For any changes or decisions that may have significant impact on the codebase, the human owner of the codebase must be consulted for approval before the change is made. This is to ensure that the change is in line with the project's goals and vision.
+
 ---
 
 ## 2. Core Architecture & Real-Time Invariants
@@ -103,13 +106,13 @@ All major changes to the codebase must be recorded in [docs/changelog.md](./docs
 
 Each phase below tracks status with `[ ]` / `[x]`. Do not mark any item `[x]` until **all** exit criteria (including unit tests for every implemented component) pass.
 
-### `[ ]` Phase 0 — Scaffolding, `@nogc` Foundation & Verification Harness *(No dependencies)*
+### `[x]` Phase 0 — Scaffolding, `@nogc` Foundation & Verification Harness *(No dependencies)*
 - **Subtasks:**
-  - `[ ]` `0.1` Verify `dub.json` (`audio-formats` Boost subconfig via `dub describe`) and `ci/macos.yml`.
-  - `[ ]` `0.2` Implement `foundation/memory.d` (`OwnedBuffer!T`, `FixedArray!(T, N)`, `Arena`).
-  - `[ ]` `0.3` Implement `foundation/concurrency.d` (`SpscRing!T`, `MpscRing!T`, `Atomic!T`, `TripleBuffer!T`).
-  - `[ ]` `0.4` Implement `foundation/types.d` & `foundation/math_rt.d` (`ScopedNoDenormals`, pitch/dB helpers).
-  - `[ ]` `0.5` Implement `io/audio_io.d`, `tests/audio_harness.d`, `tests/rt_malloc_trap.d`, `tests/unit/foundation_test.d`.
+  - `[x]` `0.1` Verify `dub.json` (`audio-formats` Boost subconfig via `dub describe`) and `ci/macos.yml`.
+  - `[x]` `0.2` Implement `foundation/memory.d` (`OwnedBuffer!T`, `FixedArray!(T, N)`, `Arena`).
+  - `[x]` `0.3` Implement `foundation/concurrency.d` (`SpscRing!T`, `MpscRing!T`, `Atomic!T`, `TripleBuffer!T`).
+  - `[x]` `0.4` Implement `foundation/types.d` & `foundation/math_rt.d` (`ScopedNoDenormals`, pitch/dB helpers).
+  - `[x]` `0.5` Implement `io/audio_io.d`, `tests/audio_harness.d`, `tests/rt_malloc_trap.d`, `tests/unit/foundation_test.d`.
 - **Exit Criteria:** `dub test --compiler=ldc2 --config=headless` passes with zero warnings; unit tests cover `OwnedBuffer!T`, `FixedArray`, `Arena`, `TripleBuffer`, `audio_io`, `SpscRing`/`MpscRing` 10M-message stress tests, `ScopedNoDenormals` (`arm64` & `x86_64`), and `rt_malloc_trap` failure detection.
 
 ### `[ ]` Phase 1 — Core DSP Primitives & Shared Polyphony *(Deps: Phase 0)*

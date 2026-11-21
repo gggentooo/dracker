@@ -21,6 +21,9 @@ on:
 jobs:
   headless-test-and-build:
     runs-on: macos-14
+    defaults:
+      run:
+        working-directory: synth-tracker
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -33,13 +36,23 @@ jobs:
           dub --version
 
       - name: Verify audio-formats Boost subconfiguration
-        run: dub describe --compiler=ldc2 --config=headless | head -n 60
+        run: |
+          dub describe --compiler=ldc2 --config=headless > /tmp/dub-describe.json
+          head -n 60 /tmp/dub-describe.json
+          grep -q '"rootConfiguration": "boost"' /tmp/dub-describe.json
 
       - name: Run headless tests (unit, rt_malloc_trap, golden WAV, fuzz smoke)
         run: dub test --compiler=ldc2 --config=headless
 
       - name: Verify headless release build
         run: dub build --compiler=ldc2 --config=headless --build=release
+
+      - name: Verify standalone x86_64 foundation cross-compile and macOS tooling lints
+        run: |
+          ldc2 -mtriple=x86_64-apple-macos12.0 -w -c -o- -Isource source/foundation/types.d source/foundation/memory.d source/foundation/concurrency.d source/foundation/math_rt.d
+          clang -x objective-c -fobjc-arc -mmacosx-version-min=12.0 -fsyntax-only -Wall -Wextra source/platform/macos/objc_blocks_shim.m
+          plutil -lint packaging/macos/Info.plist packaging/macos/entitlements.plist
+          bash -n packaging/macos/bundle_macos.sh
 
       - name: Verify full app configuration compilation (when Metal toolchain available)
         run: |

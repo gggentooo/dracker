@@ -24,7 +24,16 @@
  */
 module main;
 
+/**
+ * Application entry point for headless CLI modes and the native macOS studio GUI.
+ *
+ * Params:
+ *   args = Command-line arguments passed by the operating system.
+ *
+ * Returns:
+ *   Process exit status code where 0 indicates success.
+ */
 int main(string[] args) {
-    // Phase 0 scaffold entry point: CLI/GUI dispatch implemented in Phases 3 & 8.
+    cast(void) args;
     return 0;
 }
