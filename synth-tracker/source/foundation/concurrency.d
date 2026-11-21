@@ -304,7 +304,7 @@ struct SpscRing(T) {
         storage_.reset();
     }
 
-    private bool tryPushImpl(scope const ref T item) {
+    private bool tryPushImpl(T item) {
         if (cap_ == 0) {
             return false;
         }
@@ -320,30 +320,45 @@ struct SpscRing(T) {
         return true;
     }
 
-    /**
-     * Attempts to push an item by const reference from the single producer thread.
-     *
-     * Params:
-     *   item = Element to enqueue.
-     *
-     * Returns:
-     *   True if enqueued; false if the ring is full.
-     */
-    bool tryPush(scope const ref T item) {
-        return tryPushImpl(item);
-    }
+    static if (hasIndirections!T) {
+        /**
+         * Attempts to push an item from the single producer thread.
+         *
+         * Params:
+         *   item = Element value to enqueue.
+         *
+         * Returns:
+         *   True if enqueued; false if the ring is full.
+         */
+        bool tryPush(T item) {
+            return tryPushImpl(item);
+        }
+    } else {
+        /**
+         * Attempts to push an item by const reference from the single producer thread.
+         *
+         * Params:
+         *   item = Element to enqueue.
+         *
+         * Returns:
+         *   True if enqueued; false if the ring is full.
+         */
+        bool tryPush(scope const ref T item) {
+            return tryPushImpl(item);
+        }
 
-    /**
-     * Attempts to push a rvalue or scalar item from the single producer thread.
-     *
-     * Params:
-     *   item = Element value to enqueue.
-     *
-     * Returns:
-     *   True if enqueued; false if the ring is full.
-     */
-    bool tryPush(T item) {
-        return tryPushImpl(item);
+        /**
+         * Attempts to push an rvalue or scalar item from the single producer thread.
+         *
+         * Params:
+         *   item = Element value to enqueue.
+         *
+         * Returns:
+         *   True if enqueued; false if the ring is full.
+         */
+        bool tryPush(T item) {
+            return tryPushImpl(item);
+        }
     }
 
     /**
@@ -519,7 +534,7 @@ struct MpscRing(T) {
         storage_.reset();
     }
 
-    private bool tryPushImpl(scope const ref T item) {
+    private bool tryPushImpl(T item) {
         if (cap_ == 0) {
             return false;
         }
@@ -543,30 +558,45 @@ struct MpscRing(T) {
         }
     }
 
-    /**
-     * Attempts to enqueue an item concurrently from any producer thread.
-     *
-     * Params:
-     *   item = Element to enqueue.
-     *
-     * Returns:
-     *   True if enqueued; false if the bounded ring is currently full.
-     */
-    bool tryPush(scope const ref T item) {
-        return tryPushImpl(item);
-    }
+    static if (hasIndirections!T) {
+        /**
+         * Attempts to enqueue an item concurrently from any producer thread.
+         *
+         * Params:
+         *   item = Element value to enqueue.
+         *
+         * Returns:
+         *   True if enqueued; false if the bounded ring is currently full.
+         */
+        bool tryPush(T item) {
+            return tryPushImpl(item);
+        }
+    } else {
+        /**
+         * Attempts to enqueue an item concurrently from any producer thread.
+         *
+         * Params:
+         *   item = Element to enqueue.
+         *
+         * Returns:
+         *   True if enqueued; false if the bounded ring is currently full.
+         */
+        bool tryPush(scope const ref T item) {
+            return tryPushImpl(item);
+        }
 
-    /**
-     * Attempts to enqueue a value item concurrently from any producer thread.
-     *
-     * Params:
-     *   item = Element value to enqueue.
-     *
-     * Returns:
-     *   True if enqueued; false if the bounded ring is currently full.
-     */
-    bool tryPush(T item) {
-        return tryPushImpl(item);
+        /**
+         * Attempts to enqueue a value item concurrently from any producer thread.
+         *
+         * Params:
+         *   item = Element value to enqueue.
+         *
+         * Returns:
+         *   True if enqueued; false if the bounded ring is currently full.
+         */
+        bool tryPush(T item) {
+            return tryPushImpl(item);
+        }
     }
 
     /**

@@ -124,13 +124,13 @@ Each phase below tracks status with `[ ]` / `[x]`. Do not mark any item `[x]` un
   - `[x]` `1.5` `dsp/voice_pool.d` (`VoicePool!(VoiceT, MaxVoices)`)
 - **Exit Criteria:** Every `dsp/` unit compiles `@nogc nothrow`; unit tests pass for all 11 DSP files (`fft` round-trip error $< 10^{-6}$, filter impulse/frequency sweeps with zero `NaN`/Inf, `VoicePool` stealing/deactivation).
 
-### `[ ]` Phase 2 — Fixed-Quantum AudioGraph & UDA Module Protocol *(Deps: Phases 0, 1)*
+### `[x]` Phase 2 — Fixed-Quantum AudioGraph & UDA Module Protocol *(Deps: Phases 0, 1)*
 - **Subtasks:**
-  - `[ ]` `2.1` `graph/port.d`, `graph/context.d`, `graph/event.d`, `graph/buffer.d`
-  - `[ ]` `2.2` `graph/module_api.d`, `graph/registry.d` (`@Param`, `assertNoNaNInit!T`, named `onParamChanged`, `ModuleAdapter!T`)
-  - `[ ]` `2.3` `graph/plan.d` (off-RT `GraphCompiler`, topological sort, fixed-delay `Feedback` splitting)
-  - `[ ]` `2.4` `graph/audio_graph.d` (fixed 64-frame quantum, sub-blocking, silence skip, `SwapGraphPlan`, `SwapModuleAsset`, telemetry)
-  - `[ ]` `2.5` Smoke-test modules (`output.d`, `amplifier.d`, `dc_blocker.d`, `feedback.d`) + determinism suite
+  - `[x]` `2.1` `graph/port.d`, `graph/context.d`, `graph/event.d`, `graph/buffer.d`
+  - `[x]` `2.2` `graph/module_api.d`, `graph/registry.d` (`@Param`, `assertNoNaNInit!T`, named `onParamChanged`, `ModuleAdapter!T`)
+  - `[x]` `2.3` `graph/plan.d` (off-RT `GraphCompiler`, topological sort, fixed-delay `Feedback` splitting)
+  - `[x]` `2.4` `graph/audio_graph.d` (fixed 64-frame quantum, sub-blocking, silence skip, `SwapGraphPlan`, `SwapModuleAsset`, telemetry)
+  - `[x]` `2.5` Smoke-test modules (`output.d`, `amplifier.d`, `dc_blocker.d`, `feedback.d`) + determinism suite
 - **Exit Criteria:** `AudioGraph.render()` compiles `@nogc nothrow` and passes `rt_malloc_trap`; unit tests verify sample-accurate `NoteOn` offsets, `64` vs `512` host buffer invariance, deterministic feedback loops, and leak-free mid-stream `SwapGraphPlan`/`SwapModuleAsset`.
 
 ### `[ ]` Phase 3 — Native macOS Audio & MIDI Layer *(Deps: Phases 0, 2)*

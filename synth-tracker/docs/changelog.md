@@ -10,6 +10,28 @@ All major changes to `synth-tracker/` must be recorded in reverse-chronological 
 
 ---
 
+## [2026-11-22 07:06:26 KST]
+- **Timestamp:** `2026-11-22 07:06:26 KST`
+- **Author:** Antigravity (Gemini 4 Neon)
+- **Affected Files:**
+  - `synth-tracker/source/foundation/concurrency.d`
+  - `synth-tracker/source/graph/port.d`
+  - `synth-tracker/source/graph/event.d`
+  - `synth-tracker/source/graph/context.d`
+  - `synth-tracker/source/graph/buffer.d`
+  - `synth-tracker/source/graph/module_api.d`
+  - `synth-tracker/source/graph/registry.d`
+  - `synth-tracker/source/graph/plan.d`
+  - `synth-tracker/source/graph/audio_graph.d`
+  - `synth-tracker/source/modules/output.d`
+  - `synth-tracker/source/modules/effects/amplifier.d`
+  - `synth-tracker/source/modules/effects/dc_blocker.d`
+  - `synth-tracker/source/modules/control/feedback.d`
+  - `synth-tracker/tests/unit/graph_test.d`
+  - `synth-tracker/agents.md`
+  - `synth-tracker/docs/changelog.md`
+- **Description:** Implemented Phase 2 (Fixed-Quantum AudioGraph & UDA Module Protocol): typed port descriptors, sample-accurate `ModEvent`/`EventArena`/`EventSink`, `ProcessContext`/`ProcessIO` audio+CV slice views, UDA `@Param` + `assertNoNaNInit!T` + named `onParamChanged!field` + `@nogc` `ModuleAdapter!T`, `ModuleRegistry`, off-RT `GraphCompiler` with topological sort and `FeedbackReceive`/`FeedbackSend` cycle splitting into `@nogc` `GraphPlan`, real-time `AudioGraph` with 64-frame fixed quanta, sample-accurate event sub-blocking, fan-in audio/sidechain/CV mixing, silence skipping, mid-stream `swapPlan`/`swapModuleAsset` retirement, and `TripleBuffer!GraphTelemetry`, plus Tier 1 modules (`MasterOutput`, `Amplifier`, `DcBlocker`, `Feedback`), `SpscRing`/`MpscRing` pointer-indirection safety fix in `concurrency.d`, and comprehensive `graph_test.d` determinism/allocation-trap unit tests.
+
 ## [2026-11-21 21:42:01 KST]
 - **Author:** Antigravity (Gemini 4 Neon)
 - **Affected Files:**
