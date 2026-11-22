@@ -10,6 +10,54 @@ All major changes to `synth-tracker/` must be recorded in reverse-chronological 
 
 ---
 
+## [2026-11-22 13:17:47 KST]
+- **Author:** Claude Opus 5.5 (Claude Code), with a Claude subagent implementing `app/pattern_ops.d`, the block clipboard codec/fuzzer, and the keymap expansion
+- **Reason / Summary:** Implemented Phase 7.5 (Studio Backend Integration) per the owner-approved design in `dev_plan.md`.
+  - `7.5.1` The session `Engine` is now calloc-allocated (`dispose()` / finalizer free it). New `app/audio_host.d`:
+    - `EngineRtContext` is unmanaged and statically asserted GC-free.
+    - The `@nogc nothrow` `renderHostBufferRt`/`engineRenderCallback` bridge does the MIDI drain, renders through `processHostBuffer` with duplex input, and measures DSP load.
+    - `AudioHost` owns CoreAudio + CoreMIDI. It handles device selection, follows the device sample rate via the new `StudioSession.changeSampleRate()` (document, ids, path, dirty flag and undo history are preserved), and recovers hot-plugged MIDI sources and device changes.
+  - `7.5.2` RT-thread MIDI:
+    - Notes become live voices on the MIDI target module (`Engine.liveNoteOnRt` / `liveNoteOffRt`).
+    - CCs go through `MidiMapSnapshot` (`EngineCmdKind.swapMidiMap` + retire). Other messages become ModEvents (`enqueueLiveEventRt`).
+    - A copy goes to a UI ring. `StudioSession` adds MIDI learn, undoable mappings, document mirroring of mapped values, and note reports for recording.
+    - New optional `.msv` `MIDI` chunk, validated on save and load, and covered by the fuzzer.
+  - `7.5.3` `EngineCmdKind.setScopeTaps` (master + 4 modules) publishes `ScopeBlock`s to an `SpscRing` (512 blocks, drops counted). New `app/telemetry.d` provides `ScopeHistory` (snapshots, gap detection, Hann/FFT dBFS spectra) and `StudioTelemetry`.
+  - `7.5.4` `StudioSession` operations:
+    - transport (play, stop, toggle, seek, transient `playPattern` audition) and undoable `doSetLoop`
+    - pattern add, duplicate, remove (clips restored on undo) and rename
+    - module mute, bypass, rename and transient solo
+    - live asset replacement via the new generic `ModuleVTable.buildAssetsFromExtra` (6 modules declare `ASSET_SLOT_COUNT`/`assetDestroyFn`), plus `doLoadSample` and `samplePeaks`
+    - an off-thread `ExportJob` (separate Engine, 32-bit float WAV + stems, progress and cancel)
+  - `7.5.5` `UndoHistory.beginGroup`/`endGroup` + `CompoundCommand` (atomic rollback on failure, nested groups flatten), `DelegateCommand`, `doReplacePatternCells`. New `app/pattern_ops.d`: blocks, transpose, interpolate, and the `SynthTracker-Block-v1` codec.
+  - `7.5.6` `keymap.d`: 24 new `StudioAction`s whose default bindings match the menu key equivalents, `addBinding`, `hasConflicts`, `shadowsPianoKey`, `StudioCommandSink`, `isDocumentLevel`, `forwardToSink`. The session handles `playPattern`.
+  - `7.5.7` New `tests/unit/studio_backend_test.d`, `tests/unit/pattern_ops_test.d`, `tests/unit/keymap_test.d`, and `tests/fuzz/block_text_fuzz.d` (20,000 inputs). The MIDI chunk was added to the `project_format_fuzz.d` seed. New `--studio-selftest` (`app/studio_selftest.d`).
+  - **Deviations from the design:**
+    - Live MIDI is applied at host-buffer offset 0, because `AudioRenderCallback` carries no host timestamp. This adds at most one buffer of latency.
+    - Solo mutes only `synth`-category modules, so effect chains of soloed sources keep running.
+    - `Keymap.bindAction` now also clears the action's extra bindings.
+- **Verification Results:**
+  - `dub test --config=headless`: 15 modules passed.
+  - `DFLAGS="-unittest -O3 -w"`: headless 16 modules and app 5 modules passed, with zero warnings.
+  - The render bridge (MIDI notes, MIDI-map CC, UI copy, scope push, load telemetry) runs inside `verifyZeroRtAllocationsNothrow`.
+  - The x86_64 cross-compiles (`HeadlessCore` and `StudioGUI`) pass, the comment audit is clean, and the headless `--cli-demo` had 0 xruns.
+  - `./build/synth-tracker --studio-selftest` (full) passed 5/5:
+    - 30 s @64 frames: 20,674 callbacks, 0 xruns, 2,503 concurrent UI edits, DSP load avg 3.8 % / peak 9.1 %
+    - 30 s @128 frames: 0 xruns, 2,478 edits
+    - MIDI-in -> rendered audio latency: 0.54 ms
+    - a forced 48 kHz mismatch was restored to the 44.1 kHz device rate and playback resumed
+    - export bit-identical to an offline render
+- **Affected Files:**
+  - `synth-tracker/source/app/{audio_host,telemetry,pattern_ops,studio_selftest}.d` (created)
+  - `synth-tracker/source/app/{session,history,keymap}.d`
+  - `synth-tracker/source/sequencer/engine.d`, `synth-tracker/source/graph/{audio_graph,module_api}.d`, `synth-tracker/source/io/project_format.d`
+  - `synth-tracker/source/modules/{effects/waveshaper,control/multisynth,control/multictl,synths/analog_gen,synths/spectravoice,synths/sampler}.d`
+  - `synth-tracker/source/main.d`
+  - `synth-tracker/tests/unit/{studio_backend_test,pattern_ops_test,keymap_test}.d`, `synth-tracker/tests/fuzz/block_text_fuzz.d` (created), `synth-tracker/tests/fuzz/project_format_fuzz.d`
+  - `synth-tracker/agents.md`, `synth-tracker/docs/changelog.md`
+
+---
+
 ## [2026-11-22 12:56:07 KST]
 - **Author:** Claude Opus 5.5 (Claude Code)
 - **Reason / Summary:** Owner decisions after the Phase 8 readiness check: mark Phase 7 complete with the 100k-frame autorelease soak waived, and insert a new Phase 7.5 for the backend pieces Phase 8 needs. Documentation and design only; no code changed.

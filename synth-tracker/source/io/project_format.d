@@ -15,10 +15,10 @@
  *
  * Planned API (Types, Functions & Hooks):
  *   - enum uint MSV_FORMAT_VERSION = 1
- *   - struct SavedModule / SavedWire / SavedPattern / LoadedProject / LoadedPreset
+ *   - struct SavedModule / SavedWire / SavedPattern / SavedMidiMapping / LoadedProject / LoadedPreset
  *   - serializeProject(), saveProject(), loadProject(), loadProjectFile()
  *   - serializePreset(), savePreset(), loadPreset(), loadPresetFile()
- *   - isValidTempo(), isValidPatternShape(), validateModuleForSave(), validateProjectForSave()
+ *   - isValidTempo(), isValidPatternShape(), isValidMidiMapping(), validateModuleForSave(), validateProjectForSave()
  *   - materializeProjectToEngine()
  *
  * See_Also:
@@ -53,6 +53,7 @@ enum double MIN_PROJECT_BPM = 20.0;
 enum double MAX_PROJECT_BPM = 999.0;
 enum uint MAX_PROJECT_TPL = 255;
 enum size_t MAX_CLIPS = 4096;
+enum size_t MAX_MIDI_MAPPINGS = 256;
 enum size_t MAX_EXTRA_BLOB_BYTES = 64u * 1024u * 1024u;
 
 /**
@@ -98,6 +99,18 @@ struct SavedPattern {
 }
 
 /**
+ * Serializable MIDI-learn binding (stored in the optional .msv MIDI chunk).
+ */
+struct SavedMidiMapping {
+    ubyte channel = 0;
+    ubyte cc = 0;
+    uint moduleId = 0;
+    uint paramIdx = 0;
+    float min01 = 0.0f;
+    float max01 = 1.0f;
+}
+
+/**
  * Complete off-RT SynthTracker project document (.msv) ready for session loading or disk export.
  */
 struct LoadedProject {
@@ -112,6 +125,7 @@ struct LoadedProject {
     SavedWire[] wires;
     SavedPattern[] patterns;
     TimelineClip[] clips;
+    SavedMidiMapping[] midiMappings;
 }
 
 /**
@@ -252,6 +266,16 @@ bool validateProjectForSave(scope const ref LoadedProject proj, out string err, 
     foreach (ref w; proj.wires) {
         if (!isFinite(w.gain)) {
             err = "Non-finite wire gain";
+            return false;
+        }
+    }
+    if (proj.midiMappings.length > MAX_MIDI_MAPPINGS) {
+        err = "Too many MIDI mappings";
+        return false;
+    }
+    foreach (ref mm; proj.midiMappings) {
+        if (!isValidMidiMapping(mm)) {
+            err = "Invalid MIDI mapping";
             return false;
         }
     }
@@ -509,8 +533,36 @@ bool serializeProject(const ref LoadedProject proj, out ubyte[] bytes, out strin
         }
     });
 
+    if (proj.midiMappings.length > 0) {
+        w.writeChunk(['M', 'I', 'D', 'I'], (ref BinaryWriter cw) @safe nothrow {
+            cw.writeU32(cast(uint) proj.midiMappings.length);
+            foreach (ref mm; proj.midiMappings) {
+                cw.writeU8(mm.channel);
+                cw.writeU8(mm.cc);
+                cw.writeU32(mm.moduleId);
+                cw.writeU32(mm.paramIdx);
+                cw.writeF32(mm.min01);
+                cw.writeF32(mm.max01);
+            }
+        });
+    }
+
     bytes = w.bytes().dup;
     return true;
+}
+
+/**
+ * Reports whether a MIDI mapping is storable and loadable.
+ *
+ * Params:
+ *   mm = Mapping to check.
+ *
+ * Returns:
+ *   True if channel < 16, cc < 128, moduleId != 0, and the range is finite within [0, 1].
+ */
+bool isValidMidiMapping(scope const ref SavedMidiMapping mm) @safe nothrow pure @nogc {
+    return mm.channel < 16 && mm.cc < 128 && mm.moduleId != 0 && isFinite(mm.min01) && isFinite(mm.max01)
+        && mm.min01 >= 0.0f && mm.min01 <= 1.0f && mm.max01 >= 0.0f && mm.max01 <= 1.0f;
 }
 
 /**
@@ -709,6 +761,30 @@ bool loadProject(
                     }
                     proj.patterns[i] = pat;
                 }
+            }
+        } else if (chunkId == ['M', 'I', 'D', 'I']) {
+            uint mapCount = 0;
+            if (!sub.readU32(mapCount) || mapCount > MAX_MIDI_MAPPINGS) {
+                err = "Invalid mapping count in MIDI chunk";
+                return false;
+            }
+            if (sub.remaining() < cast(size_t) mapCount * 18) {
+                err = "Insufficient remaining bytes for MIDI entries";
+                return false;
+            }
+            proj.midiMappings = new SavedMidiMapping[mapCount];
+            foreach (i; 0 .. mapCount) {
+                SavedMidiMapping mm;
+                if (!sub.readU8(mm.channel) || !sub.readU8(mm.cc) || !sub.readU32(mm.moduleId)
+                        || !sub.readU32(mm.paramIdx) || !sub.readF32(mm.min01) || !sub.readF32(mm.max01)) {
+                    err = "Truncated MIDI mapping entry";
+                    return false;
+                }
+                if (!isValidMidiMapping(mm)) {
+                    err = "Invalid MIDI mapping entry";
+                    return false;
+                }
+                proj.midiMappings[i] = mm;
             }
         } else if (chunkId == ['T', 'I', 'M', 'E']) {
             uint clipCount = 0;

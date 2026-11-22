@@ -123,6 +123,22 @@ struct MultiSynth {
         return true;
     }
 
+    enum uint ASSET_SLOT_COUNT = 1;
+
+    /**
+     * Returns the destructor for the asset type held in slot (used by live asset replacement).
+     *
+     * Params:
+     *   slot = Asset slot index.
+     *
+     * Returns:
+     *   Type-erased destructor.
+     */
+    static void function(void*) @nogc nothrow assetDestroyFn(uint slot) @nogc nothrow pure @safe {
+        cast(void) slot;
+        return &MultiSynthCurveAsset.destroyErased;
+    }
+
     /**
      * Restores a persisted MultiSynthCurveAsset blob off the real-time thread.
      *

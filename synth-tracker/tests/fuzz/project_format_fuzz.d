@@ -4,7 +4,7 @@
  * Phase:        Phase 6.4 — Project, Preset & Importer Fuzz Harness
  *
  * Purpose:
- *   Exercises 100,000+ seeded mutated, truncated, corrupted-length, non-finite-float, and deeply nested inputs across .msv, .msym, .mid, .xm, and .sunvox parsers to guarantee zero panics or OOB reads, then materializes and renders every accepted project to prove parser acceptance implies Engine-loadability.
+ *   Exercises 100,000+ seeded mutated, truncated, corrupted-length, non-finite-float, and deeply nested inputs across .msv (including the MIDI-mapping chunk), .msym, .mid, .xm, and .sunvox parsers to guarantee zero panics or OOB reads, then materializes and renders every accepted project to prove parser acceptance implies Engine-loadability.
  *
  * Real-Time & Safety Contract:
  *   Off-RT verification harness (parsers under test are @safe nothrow) reusing bounded scratch buffers for fast 100k+ execution in Debug and Release/O3 builds.
@@ -32,7 +32,7 @@ import io.importers.xm_importer : importXmFile;
 import foundation.types : FIXED_BLOCK_FRAMES;
 import graph.module_api : ModuleInstance;
 import io.project_format : LoadedPreset, LoadedProject, loadPreset, loadProject, materializeProjectToEngine,
-    MSV_FORMAT_VERSION, SavedModule, SavedPattern, SavedWire, serializePreset, serializeProject;
+    MSV_FORMAT_VERSION, SavedMidiMapping, SavedModule, SavedPattern, SavedWire, serializePreset, serializeProject;
 import modules.control.metamodule : MAX_METAMODULE_DEPTH, MetaModuleAsset;
 import sequencer.engine : Engine;
 import sequencer.note : NoteCell;
@@ -105,10 +105,12 @@ private ubyte[] buildSeedMsv() @safe nothrow {
     pat.cells[0] = NoteCell.makeNote(60, 0.9f, 2);
     p.patterns = [pat];
     p.clips = [TimelineClip(1, 1, 0, 0, 4, 0, 0, false, false, false)];
+    p.midiMappings = [SavedMidiMapping(0, 7, 1, 0, 0.0f, 1.0f), SavedMidiMapping(3, 74, 2, 1, 0.25f, 0.75f)];
 
     ubyte[] bytes;
     string err;
-    serializeProject(p, bytes, err);
+    immutable bool ok = serializeProject(p, bytes, err);
+    assert(ok);
     return bytes;
 }
 

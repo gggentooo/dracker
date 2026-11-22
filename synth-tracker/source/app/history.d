@@ -15,7 +15,8 @@
  *
  * Planned API (Types, Functions & Hooks):
  *   - interface IUndoCommand
- *   - class UndoHistory : pushAndExecute(), pushAndExecuteAt(), setCoalesceWindow(), undo(), redo(), canUndo(), canRedo(), clear()
+ *   - class UndoHistory : pushAndExecute(), pushAndExecuteAt(), beginGroup(), endGroup(), inGroup(), setCoalesceWindow(), undo(), redo(), canUndo(), canRedo(), clear()
+ *   - class CompoundCommand (atomic group) / class DelegateCommand (delegate-defined reversible step)
  *   - Reversible command classes: PatchCellCommand, ResizePatternCommand, AddModuleCommand, RemoveModuleCommand, ConnectWireCommand, DisconnectWireCommand, SetParamCommand, MoveModulePositionCommand, AddClipCommand, MoveClipCommand, CloneClipCommand, RemoveClipCommand, SetClipFlagsCommand, SetTempoCommand
  *
  * See_Also:
@@ -95,6 +96,10 @@ class UndoHistory {
     private Duration coalesceWindow_ = dur!"msecs"(500);
     private MonoTime lastPushTime_;
     private bool hasLastPush_ = false;
+    private uint groupDepth_ = 0;
+    private IUndoCommand[] groupChildren_;
+    private string groupLabel_;
+    private bool groupFailed_ = false;
 
     /**
      * Constructs an UndoHistory capped at maxDepth reversible entries.
@@ -137,6 +142,14 @@ class UndoHistory {
     bool pushAndExecuteAt(IUndoCommand cmd, StudioSession session, MonoTime now) {
         if (cmd is null || session is null) {
             return false;
+        }
+        if (groupDepth_ > 0) {
+            if (groupFailed_ || !cmd.execute(session)) {
+                groupFailed_ = true;
+                return false;
+            }
+            groupChildren_ ~= cmd;
+            return true;
         }
         if (!cmd.execute(session)) {
             return false;
@@ -201,6 +214,72 @@ class UndoHistory {
         undoStack_ ~= cmd;
         breakCoalesce();
         return true;
+    }
+
+    /**
+     * Opens (or nests into) an undo group: commands pushed until the matching endGroup() execute immediately and
+     * are recorded as a single atomic step. Nested groups flatten into the outermost one.
+     *
+     * Params:
+     *   label = Undo menu label for the group (the outermost label wins).
+     */
+    void beginGroup(string label) {
+        if (groupDepth_ == 0) {
+            groupChildren_ = null;
+            groupLabel_ = label;
+            groupFailed_ = false;
+        }
+        groupDepth_++;
+    }
+
+    /**
+     * Closes the current group level. At the outermost level, records the group as one CompoundCommand, or, if
+     * any child failed, undoes every executed child in reverse order and records nothing.
+     *
+     * Params:
+     *   session = Active StudioSession.
+     *
+     * Returns:
+     *   True if the group was recorded (or is still open at an outer level); false if it was rolled back or was
+     *   empty.
+     */
+    bool endGroup(StudioSession session) {
+        if (groupDepth_ == 0) {
+            return false;
+        }
+        groupDepth_--;
+        if (groupDepth_ > 0) {
+            return !groupFailed_;
+        }
+        IUndoCommand[] children = groupChildren_;
+        groupChildren_ = null;
+        if (groupFailed_) {
+            groupFailed_ = false;
+            foreach_reverse (c; children) {
+                c.undo(session);
+            }
+            return false;
+        }
+        if (children.length == 0) {
+            return false;
+        }
+        redoStack_.length = 0;
+        undoStack_ ~= new CompoundCommand(groupLabel_, children);
+        if (undoStack_.length > maxDepth_) {
+            undoStack_ = undoStack_[undoStack_.length - maxDepth_ .. $];
+        }
+        breakCoalesce();
+        return true;
+    }
+
+    /**
+     * Reports whether an undo group is open.
+     *
+     * Returns:
+     *   True between beginGroup() and the outermost endGroup().
+     */
+    bool inGroup() const {
+        return groupDepth_ > 0;
     }
 
     /**
@@ -899,6 +978,115 @@ class SetTempoCommand : IUndoCommand {
 
     override string label() const {
         return "Change Tempo";
+    }
+
+    override bool canMergeWith(IUndoCommand next) const {
+        return false;
+    }
+
+    override void mergeFrom(IUndoCommand next) {
+        cast(void) next;
+    }
+}
+
+/**
+ * Atomic group of already-executed commands recorded by UndoHistory.endGroup().
+ */
+class CompoundCommand : IUndoCommand {
+    private string label_;
+    private IUndoCommand[] children_;
+
+    /**
+     * Creates a group.
+     *
+     * Params:
+     *   label = Undo menu label.
+     *   children = Commands in execution order.
+     */
+    this(string label, IUndoCommand[] children) {
+        label_ = label;
+        children_ = children;
+    }
+
+    /**
+     * Returns the number of grouped commands.
+     *
+     * Returns:
+     *   Child count.
+     */
+    size_t childCount() const {
+        return children_.length;
+    }
+
+    override bool execute(StudioSession session) {
+        foreach (i, c; children_) {
+            if (!c.execute(session)) {
+                foreach_reverse (done; children_[0 .. i]) {
+                    done.undo(session);
+                }
+                return false;
+            }
+        }
+        return true;
+    }
+
+    override bool undo(StudioSession session) {
+        foreach_reverse (i, c; children_) {
+            if (!c.undo(session)) {
+                foreach (redone; children_[i + 1 .. $]) {
+                    redone.execute(session);
+                }
+                return false;
+            }
+        }
+        return true;
+    }
+
+    override string label() const {
+        return label_;
+    }
+
+    override bool canMergeWith(IUndoCommand next) const {
+        return false;
+    }
+
+    override void mergeFrom(IUndoCommand next) {
+        cast(void) next;
+    }
+}
+
+/**
+ * Reversible command defined by a pair of session-bound delegates (used by Phase 7.5 session operations).
+ */
+class DelegateCommand : IUndoCommand {
+    private string label_;
+    private bool delegate() apply_;
+    private bool delegate() revert_;
+
+    /**
+     * Creates the command.
+     *
+     * Params:
+     *   label = Undo menu label.
+     *   apply = Performs the change; returns false (leaving state unchanged) on failure.
+     *   revert = Reverts the change; returns false (leaving state unchanged) on failure.
+     */
+    this(string label, bool delegate() apply, bool delegate() revert) {
+        label_ = label;
+        apply_ = apply;
+        revert_ = revert;
+    }
+
+    override bool execute(StudioSession session) {
+        return apply_ !is null && apply_();
+    }
+
+    override bool undo(StudioSession session) {
+        return revert_ !is null && revert_();
+    }
+
+    override string label() const {
+        return label_;
     }
 
     override bool canMergeWith(IUndoCommand next) const {

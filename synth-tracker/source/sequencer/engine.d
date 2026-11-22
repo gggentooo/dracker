@@ -14,8 +14,10 @@
  *   External: core.lifetime (move), std.math (fabs, isFinite)
  *
  * Planned API (Types, Functions & Hooks):
- *   - enum EngineCmdKind / struct EngineCommand / struct EngineTelemetry / struct StemExportSpec
- *   - struct Engine : tryInit(), reset(), pushCommand(), drainRetireRing(), tryPopRetired(), applyPendingCommandsOffRT(), appliedFence(), processHostBuffer(), processDirectSubFrames(), renderOfflineToBuffer(), exportOfflineWav(), exportStemsWav()
+ *   - enum EngineCmdKind / struct EngineCommand / struct EngineTelemetry / struct StemExportSpec / struct MidiMapEntry
+ *     / struct MidiMapSnapshot / struct ScopeBlock
+ *   - struct Engine : tryInit(), reset(), pushCommand(), drainRetireRing(), tryPopRetired(), applyPendingCommandsOffRT(), appliedFence(), liveNoteOnRt(), liveNoteOffRt(),
+ *     enqueueLiveEventRt(), applyMidiCcRt(), tryPopScopeBlock(), scopeBlocksDropped(), processHostBuffer(), processDirectSubFrames(), renderOfflineToBuffer(), exportOfflineWav(), exportStemsWav()
  *
  * See_Also:
  *   architecture_proposal.md, dev_plan_proposal.md
@@ -23,7 +25,8 @@
 module sequencer.engine;
 
 import core.atomic : atomicLoad, atomicStore, MemoryOrder;
-import core.lifetime : move;
+import core.lifetime : emplace, move;
+import core.stdc.stdlib : calloc, free;
 import std.math : fabs, isFinite;
 
 import foundation.concurrency : hasGcReference, SpscRing, TripleBuffer;
@@ -63,7 +66,104 @@ enum EngineCmdKind : ubyte {
     liveNoteOff = 16,
     allNotesOff = 17,
     sendModEvent = 18,
-    fence = 19
+    fence = 19,
+    swapMidiMap = 20,
+    setScopeTaps = 21
+}
+
+/**
+ * One MIDI-learn binding: a controller (channel, CC number) driving a module parameter over [min01, max01].
+ */
+struct MidiMapEntry {
+    ubyte channel = 0;
+    ubyte cc = 0;
+    ModuleId moduleId = ModuleId.invalid;
+    uint paramIdx = 0;
+    float min01 = 0.0f;
+    float max01 = 1.0f;
+}
+
+/**
+ * Immutable-after-build unmanaged MIDI map swapped into the Engine with EngineCmdKind.swapMidiMap.
+ */
+struct MidiMapSnapshot {
+    enum size_t MAX_ENTRIES = 256;
+
+    OwnedBuffer!MidiMapEntry entries;
+    size_t count = 0;
+
+    @disable this(this);
+
+    /**
+     * Builds a snapshot off-RT.
+     *
+     * Params:
+     *   src = Bindings (at most MAX_ENTRIES are kept).
+     *
+     * Returns:
+     *   Unmanaged snapshot, or null on OOM.
+     */
+    static MidiMapSnapshot* createOffRT(const(MidiMapEntry)[] src) @nogc nothrow {
+        auto snap = cast(MidiMapSnapshot*) calloc(1, MidiMapSnapshot.sizeof);
+        if (snap is null) {
+            return null;
+        }
+        emplace(snap);
+        immutable size_t n = src.length < MAX_ENTRIES ? src.length : MAX_ENTRIES;
+        if (n > 0) {
+            if (!OwnedBuffer!MidiMapEntry.tryAllocate(n, snap.entries)) {
+                destroyOffRT(snap);
+                return null;
+            }
+            snap.entries.opSlice()[0 .. n] = src[0 .. n];
+        }
+        snap.count = n;
+        return snap;
+    }
+
+    /**
+     * Frees a snapshot off-RT.
+     *
+     * Params:
+     *   snap = Snapshot (null-safe).
+     */
+    static void destroyOffRT(MidiMapSnapshot* snap) @nogc nothrow {
+        if (snap is null) {
+            return;
+        }
+        destroy(*snap);
+        free(snap);
+    }
+
+    /**
+     * Type-erased destructor for RetireRing.
+     *
+     * Params:
+     *   p = MidiMapSnapshot pointer.
+     */
+    static void destroyErased(void* p) @nogc nothrow {
+        destroyOffRT(cast(MidiMapSnapshot*) p);
+    }
+
+    /**
+     * Returns the bindings.
+     *
+     * Returns:
+     *   Entry slice.
+     */
+    const(MidiMapEntry)[] view() const @nogc nothrow {
+        return count == 0 ? null : entries.opSlice()[0 .. count];
+    }
+}
+
+/**
+ * One 64-frame stereo block of a tapped signal (master = source id 0) published RT -> UI for scopes/spectra.
+ */
+struct ScopeBlock {
+    uint sourceId = 0;
+    ulong frame = 0;
+    float[FIXED_BLOCK_FRAMES] left = 0.0f;
+    float[FIXED_BLOCK_FRAMES] right = 0.0f;
 }
 
 /**
@@ -86,6 +186,7 @@ struct EngineCommand {
     NoteCell cell;
     ModEvent modEvent;
     GraphPlan* graphPlan = null;
+    MidiMapSnapshot* midiMap = null;
     PatternSnapshot* patternSnap = null;
     TimelineSnapshot* timelineSnap = null;
     void* assetPtr = null;
@@ -437,6 +538,43 @@ struct EngineCommand {
     }
 
     /**
+     * Builds a MIDI map swap command (the displaced map is retired).
+     *
+     * Params:
+     *   snap = New map (ownership transfers to the Engine); null clears the map.
+     *
+     * Returns:
+     *   Populated EngineCommand.
+     */
+    static EngineCommand makeSwapMidiMap(MidiMapSnapshot* snap) {
+        EngineCommand c;
+        c.kind = EngineCmdKind.swapMidiMap;
+        c.midiMap = snap;
+        return c;
+    }
+
+    /**
+     * Enables scope publishing for master plus up to four tapped modules (invalid ids leave a slot unused).
+     *
+     * Params:
+     *   enabled = False stops all scope publishing.
+     *   taps = Module ids to tap.
+     *
+     * Returns:
+     *   Populated EngineCommand.
+     */
+    static EngineCommand makeSetScopeTaps(bool enabled, ModuleId[4] taps) {
+        EngineCommand c;
+        c.kind = EngineCmdKind.setScopeTaps;
+        c.boolVal = enabled;
+        c.tag = taps[0].value;
+        c.slot = taps[1].value;
+        c.track = taps[2].value;
+        c.line = taps[3].value;
+        return c;
+    }
+
+    /**
      * Builds an ordering fence acknowledged by the RT thread once every earlier queued command has been applied.
      *
      * Params:
@@ -499,6 +637,8 @@ struct Engine {
     enum size_t MAX_PATTERNS = 256;
     enum size_t MAX_LINE_CLIPS = 32;
     enum size_t MAX_LIVE_VOICES = 64;
+    enum size_t SCOPE_RING_BLOCKS = 512;
+    enum uint MIDI_KEY_TAG_BASE = 0x0100_0000u;
 
     private AudioGraph graph_;
     private RationalClock clock_;
@@ -528,6 +668,12 @@ struct Engine {
     private float sampleRate_ = 44_100.0f;
     private bool initialized_ = false;
     private shared ulong appliedFence_ = 0;
+    private MidiMapSnapshot* midiMap_ = null;
+    private SpscRing!ScopeBlock scopeRing_;
+    private ModuleId[4] scopeTaps_;
+    private bool scopeEnabled_ = false;
+    private shared ulong scopeDropped_ = 0;
+    private ScopeBlock scopeScratch_;
 
     @disable this(this);
 
@@ -705,7 +851,14 @@ struct Engine {
             }
             p = PatternSlotEntry.init;
         }
+        if (midiMap_ !is null) {
+            MidiMapSnapshot.destroyOffRT(midiMap_);
+            midiMap_ = null;
+        }
         drainRetireRing();
+        scopeRing_.reset();
+        scopeEnabled_ = false;
+        scopeTaps_ = ModuleId.init;
         hostInRingL_.reset();
         hostInRingR_.reset();
         cmdRing_.reset();
@@ -736,6 +889,9 @@ struct Engine {
             return false;
         }
         if (!SpscRing!RetiredResource.tryCreate(retireCap, retireRing_)) {
+            return false;
+        }
+        if (!SpscRing!ScopeBlock.tryCreate(SCOPE_RING_BLOCKS, scopeRing_)) {
             return false;
         }
         if (!OwnedBuffer!float.tryAllocate(8192, hostInRingL_)
@@ -886,6 +1042,104 @@ struct Engine {
         if (initialized_) {
             drainCommands();
         }
+    }
+
+    /**
+     * RT-thread live note-on from an RT-side source (MIDI drained inside the render callback); never touches the
+     * UI command ring. Call before processHostBuffer() of the same callback.
+     *
+     * Params:
+     *   target = Module receiving the note.
+     *   keyTag = Caller tag identifying the key (MIDI uses MIDI_KEY_TAG_BASE | channel << 8 | note).
+     *   midiNote = MIDI note number.
+     *   velocity = Velocity in [0, 1].
+     *   hostOffset = Frame offset inside the current host buffer.
+     */
+    void liveNoteOnRt(ModuleId target, uint keyTag, float midiNote, float velocity, uint hostOffset) {
+        if (initialized_) {
+            triggerLiveNote(target, keyTag, midiNote, velocity, hostOffsetToFrame(hostOffset));
+        }
+    }
+
+    /**
+     * RT-thread live note-off matching liveNoteOnRt().
+     *
+     * Params:
+     *   target = Module that received the note (invalid = any).
+     *   keyTag = Tag used at note-on.
+     *   hostOffset = Frame offset inside the current host buffer.
+     */
+    void liveNoteOffRt(ModuleId target, uint keyTag, uint hostOffset) {
+        if (initialized_) {
+            releaseLiveNote(target, keyTag, hostOffsetToFrame(hostOffset));
+        }
+    }
+
+    /**
+     * RT-thread delivery of an arbitrary ModEvent (pitch bend, aftertouch, unmapped CC).
+     *
+     * Params:
+     *   target = Destination module.
+     *   ev = Event payload.
+     *   hostOffset = Frame offset inside the current host buffer.
+     *
+     * Returns:
+     *   True if scheduled.
+     */
+    bool enqueueLiveEventRt(ModuleId target, ModEvent ev, uint hostOffset) {
+        if (!initialized_ || !target.isValid()) {
+            return false;
+        }
+        return graph_.enqueueEvent(target, ev, hostOffsetToFrame(hostOffset));
+    }
+
+    /**
+     * RT-thread MIDI CC application through the active MIDI map.
+     *
+     * Params:
+     *   channel = MIDI channel 0..15.
+     *   cc = Controller number 0..127.
+     *   value = Controller value 0..127.
+     *
+     * Returns:
+     *   Number of parameters driven (0 = unmapped).
+     */
+    uint applyMidiCcRt(ubyte channel, ubyte cc, ubyte value) {
+        if (!initialized_ || midiMap_ is null) {
+            return 0;
+        }
+        uint hits = 0;
+        immutable float v = (value > 127 ? 127 : value) / 127.0f;
+        foreach (ref e; midiMap_.view()) {
+            if (e.channel == channel && e.cc == cc) {
+                graph_.setModuleParamNormalized(e.moduleId, e.paramIdx, e.min01 + (e.max01 - e.min01) * v, false);
+                hits++;
+            }
+        }
+        return hits;
+    }
+
+    /**
+     * UI-thread consumer of published scope blocks (single consumer).
+     *
+     * Params:
+     *   block = Receives the oldest unread block.
+     *
+     * Returns:
+     *   True if a block was popped.
+     */
+    bool tryPopScopeBlock(out ScopeBlock block) {
+        return initialized_ && scopeRing_.tryPop(block);
+    }
+
+    /**
+     * Returns how many scope blocks the RT thread dropped because the ring was full.
+     *
+     * Returns:
+     *   Drop count.
+     */
+    ulong scopeBlocksDropped() const {
+        return atomicLoad!(MemoryOrder.acq)(scopeDropped_);
     }
 
     /**
@@ -1134,6 +1388,42 @@ struct Engine {
         transport_.ticksPerLine = clock_.ticksPerLine();
         graph_.renderQuantumDirect(outSlice, inSlice, transport_, qFrames);
         publishTelemetry();
+        if (scopeEnabled_ && qFrames == FIXED_BLOCK_FRAMES) {
+            publishScopeBlocks(outSlice);
+        }
+    }
+
+    private void publishScopeBlocks(float[][2] master) {
+        immutable ulong frame = graph_.renderedFrames() - FIXED_BLOCK_FRAMES;
+        scopeScratch_.sourceId = 0;
+        scopeScratch_.frame = frame;
+        scopeScratch_.left[] = master[0][0 .. FIXED_BLOCK_FRAMES];
+        scopeScratch_.right[] = master[1][0 .. FIXED_BLOCK_FRAMES];
+        pushScopeScratch();
+        foreach (tap; scopeTaps_) {
+            if (!tap.isValid()) {
+                continue;
+            }
+            if (graph_.copyLastNodeAudioBus(tap, scopeScratch_.left[], scopeScratch_.right[])) {
+                scopeScratch_.sourceId = tap.value;
+                scopeScratch_.frame = frame;
+                pushScopeScratch();
+            }
+        }
+    }
+
+    private void pushScopeScratch() {
+        if (!scopeRing_.tryPush(scopeScratch_)) {
+            atomicStore!(MemoryOrder.rel)(scopeDropped_, atomicLoad!(MemoryOrder.raw)(scopeDropped_) + 1);
+        }
+    }
+
+    private FrameTime hostOffsetToFrame(uint hostOffset) const {
+        immutable FrameTime rendered = graph_.renderedFrames();
+        immutable uint pending = stageOutAvail_ > stageOutRead_ ? stageOutAvail_ - stageOutRead_ : 0;
+        immutable FrameTime base = rendered >= pending ? rendered - pending : 0;
+        immutable FrameTime target = base + hostOffset;
+        return target < rendered ? rendered : target;
     }
 
     private RetireSink retireSink() pure {
@@ -1257,6 +1547,20 @@ struct Engine {
                     if (cmd.targetMod.isValid()) {
                         graph_.enqueueEvent(cmd.targetMod, cmd.modEvent, nowFrame);
                     }
+                    break;
+
+                case EngineCmdKind.swapMidiMap: {
+                    MidiMapSnapshot* old = midiMap_;
+                    midiMap_ = cmd.midiMap;
+                    if (old !is null) {
+                        rs.push(RetiredResource(RetiredKind.midiMap, old, &MidiMapSnapshot.destroyErased));
+                    }
+                    break;
+                }
+
+                case EngineCmdKind.setScopeTaps:
+                    scopeEnabled_ = cmd.boolVal;
+                    scopeTaps_ = [ModuleId(cmd.tag), ModuleId(cmd.slot), ModuleId(cmd.track), ModuleId(cmd.line)];
                     break;
 
                 case EngineCmdKind.fence:

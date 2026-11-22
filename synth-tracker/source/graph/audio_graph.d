@@ -48,7 +48,8 @@ enum RetiredKind : ubyte {
     moduleAsset = 2,
     patternSnapshot = 3,
     timelineSnapshot = 4,
-    childEngine = 5
+    childEngine = 5,
+    midiMap = 6
 }
 
 /**

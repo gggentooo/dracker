@@ -17,6 +17,7 @@
  *   - int main(string[] args)
  *   - int runListDevices()
  *   - int runCliDemo(string[] args)
+ *   - --studio-selftest -> app.studio_selftest.runStudioSelfTest() (macOS)
  *   - StudioGUI builds: no arguments / --gui -> app.gui_shell.runStudioGui(), --gui-selftest -> runGuiSelfTest()
  *   - struct CliDemoPolySynth (live @nogc ModuleAdapter polyphonic synth)
  *
@@ -846,6 +847,7 @@ private void printUsage() {
     }
     writeln("  synth-tracker --list-devices");
     writeln("  synth-tracker --cli-demo [--duration=<sec>] [--sample-rate=<hz>] [--buffer-frames=<n>] [--auto-chord] [--duplex]");
+    writeln("  synth-tracker --studio-selftest [--quick]   live session audio/MIDI backend verification (plays audio)");
 }
 
 /**
@@ -877,6 +879,11 @@ int main(string[] args) {
             }
             if (arg == "--cli-demo") {
                 return runCliDemo(args);
+            }
+            if (arg == "--studio-selftest") {
+                import app.studio_selftest : runStudioSelfTest;
+
+                return runStudioSelfTest(args);
             }
         }
     }

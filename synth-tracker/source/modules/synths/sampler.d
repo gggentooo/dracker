@@ -595,6 +595,35 @@ struct Sampler {
         return true;
     }
 
+    enum uint ASSET_SLOT_COUNT = MAX_SLOTS;
+
+    /**
+     * Returns the asset in a slot (off-RT inspection of non-live states only, e.g. waveform previews).
+     *
+     * Params:
+     *   slot = Slot index.
+     *
+     * Returns:
+     *   Asset or null.
+     */
+    const(SamplerSlotAsset)* slotAsset(uint slot) const @nogc nothrow {
+        return slot < MAX_SLOTS ? slots_[slot] : null;
+    }
+
+    /**
+     * Returns the destructor for the asset type held in slot (used by live asset replacement).
+     *
+     * Params:
+     *   slot = Asset slot index.
+     *
+     * Returns:
+     *   Type-erased destructor.
+     */
+    static void function(void*) @nogc nothrow assetDestroyFn(uint slot) @nogc nothrow pure @safe {
+        cast(void) slot;
+        return &SamplerSlotAsset.destroyErased;
+    }
+
     /**
      * Deserializes saved sample slots cleanly off the real-time thread.
      *

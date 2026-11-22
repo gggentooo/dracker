@@ -12,42 +12,432 @@
  *   synchronizeEngine() fence round-trip. Removed modules are freed only after the GraphPlan that referenced them
  *   returns through the retire ring. Every Engine teardown (load/new/shutdown) first stops the attached IAudioDriver.
  *   Every mutation is all-or-nothing: if a GraphPlan/snapshot cannot reach the Engine the document is rolled back.
+ *   The Engine itself is calloc-allocated (never GC memory) because AudioHost hands it to the CoreAudio callback;
+ *   it is freed only by dispose()/finalization after audio is stopped. Exports render on a worker thread into a
+ *   separate Engine materialized from a document snapshot.
  *
  * Dependencies:
  *   Internal: app.{history,keymap}, foundation.types, graph.{module_api,plan,registry}, io.importers.*, io.project_format, modules.control.metamodule, platform.interfaces, sequencer.{engine,note,pattern,timeline}
  *   External: core.thread (Thread.sleep), core.time (Duration, MonoTime), std.math (isFinite)
  *
  * Planned API (Types, Functions & Hooks):
- *   - class StudioSession : initialize(), shutdown(), attachAudioDriver(), synchronizeEngine(), setEngineSyncTimeout(), pendingRetiredModuleCount(), newEmptyProject(), compileAndSwapGraph(), doAddModule(), doRemoveModule(), doConnectWire(), doDisconnectWire(), doSetParam(), doPatchCell(), doResizePattern(), doAddClip(), doMoveClip(), doCloneClip(), doRemoveClip(), doSetClipFlags(), doSetTempo(), undo(), redo(), saveProject(), openProject(), saveModulePreset(), loadModulePreset(), importMidiBytes(), importXmBytes(), importSunvoxBytes(), handleKeyEvent(), pollRetiredAndTelemetry()
+ *   - class StudioSession : initialize(), shutdown(), dispose(), attachAudioDriver(), synchronizeEngine(),
+ *     setEngineSyncTimeout(), pendingRetiredModuleCount(), sampleRate(), changeSampleRate(), newEmptyProject(),
+ *     compileAndSwapGraph(), doAddModule(), doRemoveModule(), doConnectWire(), doDisconnectWire(), doSetParam(),
+ *     doPatchCell(), doResizePattern(), doReplacePatternCells(), doAddClip(), doMoveClip(), doCloneClip(),
+ *     doRemoveClip(), doSetClipFlags(), doSetTempo(), doSetLoop(), doAddPattern(), doDuplicatePattern(),
+ *     doRemovePattern(), doRenamePattern(), doSetModuleMuted(), doSetModuleBypassed(), doRenameModule(),
+ *     setModuleSolo(), doSetModuleExtra(), doLoadSample(), samplePeaks(), beginEditGroup()/endEditGroup(),
+ *     play()/stop()/togglePlay()/seekLine()/playPattern()/isPlaying(), setScopeTaps(), doAddMidiMapping(),
+ *     doRemoveMidiMapping(), beginMidiLearn()/cancelMidiLearn(), processMidiFromRt(), beginExport()/exportStatus()/
+ *     cancelExport()/waitForExport(), undo(), redo(), save/open/preset/import APIs, handleKeyEvent(),
+ *     pollRetiredAndTelemetry()
+ *   - struct MidiNoteEvent / SamplePeaks / ExportOptions / ExportStatus; enum ExportState; class ExportJob
+ *   - SamplePeaks computeSamplePeaks(...) / float denormalizeParam(...)
  *
  * See_Also:
  *   architecture_proposal.md, dev_plan_proposal.md
  */
 module app.session;
 
+import core.lifetime : emplace;
+import core.stdc.stdlib : calloc, free;
 import core.thread : Thread;
 import core.time : dur, Duration, MonoTime;
+import core.atomic : atomicLoad, atomicStore;
+import std.format : format;
 import std.math : isFinite;
 
 import app.history;
 import app.keymap : Keymap, StudioAction;
 import foundation.types : ModuleId;
 import graph.audio_graph : RetiredKind, RetiredResource;
-import graph.module_api : ModuleDescriptor, ModuleInstance;
+import graph.module_api : AssetSwap, ModuleCategory, ModuleDescriptor, ModuleInstance, ModuleVTable, ParamDescriptor,
+    ParamScale;
 import graph.plan : GraphCompileError, GraphCompiler, GraphPlan, NodeSpec, WireSpec;
 import graph.registry : ModuleRegistry;
 import io.importers.smf_importer : importMidiFile;
 import io.importers.sunvox_importer : ImportReport, importSunvoxFile;
 import io.importers.xm_importer : importXmFile;
 import io.project_format : LoadedPreset, LoadedProject, loadPreset, loadProject, loadProjectFile,
-    isValidPatternShape, isValidTempo, materializeProjectToEngine, savePreset, saveProject, SavedModule, SavedPattern, SavedWire,
+    isValidMidiMapping, isValidPatternShape, isValidTempo, materializeProjectToEngine, MAX_EXTRA_BLOB_BYTES,
+    MAX_MIDI_MAPPINGS, MAX_PATTERNS, MAX_STRING_LEN, SavedMidiMapping, savePreset, saveProject, SavedModule, SavedPattern, SavedWire,
     serializePreset, serializeProject;
 import modules.control.metamodule : MetaMacroBinding, MetaModuleAsset;
-import platform.interfaces : IAudioDriver, PlatformEvent, PlatformEventKind;
-import sequencer.engine : Engine, EngineCommand, EngineTelemetry;
+import io.audio_io : writeWavFile;
+import modules.synths.sampler : createSamplerAssetFromMemory, Sampler, SamplerSlotAsset;
+import platform.interfaces : IAudioDriver, MidiPacket, PlatformEvent, PlatformEventKind;
+import foundation.concurrency : hasGcReference;
+import sequencer.engine : Engine, EngineCommand, EngineTelemetry, MidiMapEntry, MidiMapSnapshot, StemExportSpec;
 import sequencer.note : NoteCell;
 import sequencer.pattern : PatternSnapshot;
 import sequencer.timeline : TimelineClip, TimelineSnapshot;
+
+
+/**
+ * Live MIDI note-on reported to views for recording (playhead line at the time the UI consumed it).
+ */
+struct MidiNoteEvent {
+    ubyte channel = 0;
+    ubyte note = 0;
+    ubyte velocity = 0;
+    long line = 0;
+}
+
+/**
+ * Min/max waveform peaks of a sample for display.
+ */
+struct SamplePeaks {
+    size_t frames = 0;
+    float sampleRate = 0.0f;
+    uint framesPerBucket = 0;
+    float[] minL;
+    float[] maxL;
+    float[] minR;
+    float[] maxR;
+}
+
+/**
+ * Computes min/max peaks over equal-sized buckets.
+ *
+ * Params:
+ *   left = Left samples.
+ *   right = Right samples (same length as left).
+ *   buckets = Bucket count (>= 1).
+ *
+ * Returns:
+ *   Peaks (buckets = min(buckets, frames)).
+ */
+SamplePeaks computeSamplePeaks(const(float)[] left, const(float)[] right, uint buckets) @safe nothrow {
+    SamplePeaks p;
+    p.frames = left.length;
+    if (left.length == 0 || buckets == 0) {
+        return p;
+    }
+    immutable size_t n = buckets < left.length ? buckets : left.length;
+    p.framesPerBucket = cast(uint)((left.length + n - 1) / n);
+    p.minL = new float[n];
+    p.maxL = new float[n];
+    p.minR = new float[n];
+    p.maxR = new float[n];
+    foreach (b; 0 .. n) {
+        immutable size_t a0 = b * left.length / n;
+        immutable size_t a1 = (b + 1) * left.length / n;
+        float mnL = float.max;
+        float mxL = -float.max;
+        float mnR = float.max;
+        float mxR = -float.max;
+        foreach (i; a0 .. (a1 > a0 ? a1 : a0 + 1)) {
+            immutable float l = left[i];
+            immutable float r = i < right.length ? right[i] : l;
+            if (l < mnL) mnL = l;
+            if (l > mxL) mxL = l;
+            if (r < mnR) mnR = r;
+            if (r > mxR) mxR = r;
+        }
+        p.minL[b] = mnL;
+        p.maxL[b] = mxL;
+        p.minR[b] = mnR;
+        p.maxR[b] = mxR;
+    }
+    return p;
+}
+
+/**
+ * Maps a normalized [0, 1] value into a parameter's domain exactly as ModuleAdapter.setParamNormalized does.
+ *
+ * Params:
+ *   d = Parameter descriptor.
+ *   norm01 = Normalized value (clamped).
+ *
+ * Returns:
+ *   Domain value.
+ */
+float denormalizeParam(const ref ParamDescriptor d, float norm01) @safe nothrow {
+    import std.math : exp, floor, log;
+
+    immutable float n = !isFinite(norm01) ? 0.0f : (norm01 < 0.0f ? 0.0f : (norm01 > 1.0f ? 1.0f : norm01));
+    if (d.scale == ParamScale.logarithmic && d.minVal > 0.0f && d.maxVal > d.minVal) {
+        immutable double ratio = cast(double) d.maxVal / cast(double) d.minVal;
+        return cast(float)(cast(double) d.minVal * exp(log(ratio) * cast(double) n));
+    }
+    if (d.scale == ParamScale.discrete) {
+        immutable float span = d.maxVal - d.minVal;
+        return d.minVal + cast(float) floor(n * span + 0.5f);
+    }
+    return d.minVal + (d.maxVal - d.minVal) * n;
+}
+
+/**
+ * Song export options.
+ */
+struct ExportOptions {
+    double tailSeconds = 2.0;
+    uint hostBlockFrames = 512;
+    double maxSeconds = 1800.0;
+    uint[] stemModules;
+    string stemDirectory;
+}
+
+/**
+ * Export job lifecycle.
+ */
+enum ExportState : ubyte {
+    none = 0,
+    running = 1,
+    succeeded = 2,
+    failed = 3,
+    cancelled = 4
+}
+
+/**
+ * Snapshot of an export job's progress.
+ */
+struct ExportStatus {
+    ExportState state = ExportState.none;
+    ulong framesRendered = 0;
+    ulong songFrames = 0;
+    string path;
+    string error;
+}
+
+/**
+ * Off-thread song renderer: materializes a document snapshot into its own unmanaged Engine on a worker thread
+ * and writes a 32-bit float WAV (plus optional per-module stems). Never touches the live session Engine.
+ */
+final class ExportJob {
+    private immutable(ubyte)[] bytes_;
+    private float sampleRate_;
+    private string path_;
+    private ExportOptions options_;
+    private Thread thread_;
+    private shared ulong framesRendered_ = 0;
+    private shared ulong songFrames_ = 0;
+    private shared int state_ = ExportState.none;
+    private shared bool cancel_ = false;
+    private string error_;
+
+    /**
+     * Prepares a job.
+     *
+     * Params:
+     *   docBytes = Serialized .msv snapshot.
+     *   sampleRate = Render sample rate.
+     *   path = Destination WAV path.
+     *   options = Export options.
+     */
+    this(const(ubyte)[] docBytes, float sampleRate, string path, ExportOptions options) {
+        bytes_ = docBytes.idup;
+        sampleRate_ = sampleRate;
+        path_ = path;
+        options_ = options;
+    }
+
+    /**
+     * Starts the worker thread.
+     */
+    void start() {
+        atomicStore(state_, cast(int) ExportState.running);
+        thread_ = new Thread(&run);
+        thread_.start();
+    }
+
+    /**
+     * Requests cancellation.
+     */
+    void cancel() {
+        atomicStore(cancel_, true);
+    }
+
+    /**
+     * Blocks until the worker exits.
+     */
+    void join() {
+        if (thread_ !is null) {
+            thread_.join(false);
+        }
+    }
+
+    /**
+     * Reports whether the worker has finished (successfully or not).
+     *
+     * Returns:
+     *   True once state is no longer running.
+     */
+    bool finished() {
+        return atomicLoad(state_) != ExportState.running;
+    }
+
+    /**
+     * Returns a progress snapshot.
+     *
+     * Returns:
+     *   Status.
+     */
+    ExportStatus status() {
+        ExportStatus st;
+        st.state = cast(ExportState) atomicLoad(state_);
+        st.framesRendered = atomicLoad(framesRendered_);
+        st.songFrames = atomicLoad(songFrames_);
+        st.path = path_;
+        if (st.state != ExportState.running) {
+            st.error = error_;
+        }
+        return st;
+    }
+
+    private void finish(ExportState st, string err) {
+        error_ = err;
+        atomicStore(state_, cast(int) st);
+    }
+
+    private void run() {
+        try {
+            string err;
+            float[] left;
+            float[] right;
+            ulong songFrames = 0;
+            immutable ExportState st = renderMix(left, right, songFrames, err);
+            if (st != ExportState.succeeded) {
+                finish(st, err);
+                return;
+            }
+            const(float)[][2] chans = [left, right];
+            if (!writeWavFile(path_, chans[], cast(uint) sampleRate_, err)) {
+                finish(ExportState.failed, err);
+                return;
+            }
+            if (options_.stemModules.length > 0 && !renderStems(left.length, err)) {
+                finish(atomicLoad(cancel_) ? ExportState.cancelled : ExportState.failed, err);
+                return;
+            }
+            finish(ExportState.succeeded, null);
+        } catch (Exception ex) {
+            finish(ExportState.failed, ex.msg);
+        }
+    }
+
+    private bool materialize(out Engine* eng, out ModuleInstance[] owned, out long endLine, out string err) {
+        LoadedProject proj;
+        if (!loadProject(bytes_, proj, err)) {
+            return false;
+        }
+        proj.loopStartLine = 0;
+        proj.loopEndLine = 0;
+        endLine = 0;
+        foreach (ref c; proj.clips) {
+            if (!c.mute && c.startLine + c.lengthLines > endLine) {
+                endLine = c.startLine + c.lengthLines;
+            }
+        }
+        eng = allocateUnmanagedEngine();
+        if (eng is null || !eng.tryInit(sampleRate_)) {
+            err = "Out of memory creating export Engine";
+            freeEngine(eng);
+            return false;
+        }
+        if (!materializeProjectToEngine(proj, *eng, sampleRate_, owned, err)) {
+            freeEngine(eng);
+            return false;
+        }
+        eng.reset();
+        eng.setTempo(proj.bpm, proj.ticksPerLine);
+        eng.seekLine(0);
+        eng.setPlaying(true);
+        return true;
+    }
+
+    private ExportState renderMix(out float[] left, out float[] right, out ulong songFrames, out string err) {
+        Engine* eng;
+        ModuleInstance[] owned;
+        long endLine;
+        if (!materialize(eng, owned, endLine, err)) {
+            return ExportState.failed;
+        }
+        scope (exit) {
+            eng.releaseAllOwnedResources();
+            foreach (ref m; owned) {
+                m.destroyOffRT();
+            }
+            freeEngine(eng);
+        }
+        immutable uint block = options_.hostBlockFrames == 0 ? 512 : options_.hostBlockFrames;
+        immutable ulong maxFrames = cast(ulong)(options_.maxSeconds * sampleRate_);
+        immutable ulong tailFrames = cast(ulong)(options_.tailSeconds * sampleRate_);
+        float[] bl = new float[block];
+        float[] br = new float[block];
+        const(float[])[2] noInput = [null, null];
+        ulong tailLeft = ulong.max;
+        while (true) {
+            if (atomicLoad(cancel_)) {
+                err = "Export cancelled";
+                return ExportState.cancelled;
+            }
+            if (left.length >= maxFrames) {
+                break;
+            }
+            float[][2] outs = [bl, br];
+            eng.processHostBuffer(outs, noInput, block);
+            left ~= bl;
+            right ~= br;
+            atomicStore(framesRendered_, cast(ulong) left.length);
+            EngineTelemetry tel;
+            eng.readTelemetry(tel);
+            if (tailLeft == ulong.max && tel.currentLine >= endLine) {
+                songFrames = left.length;
+                atomicStore(songFrames_, songFrames);
+                tailLeft = tailFrames;
+            }
+            if (tailLeft != ulong.max) {
+                if (tailLeft <= block) {
+                    break;
+                }
+                tailLeft -= block;
+            }
+        }
+        return ExportState.succeeded;
+    }
+
+    private bool renderStems(size_t totalFrames, out string err) {
+        import std.path : buildPath;
+
+        Engine* eng;
+        ModuleInstance[] owned;
+        long endLine;
+        if (!materialize(eng, owned, endLine, err)) {
+            return false;
+        }
+        scope (exit) {
+            eng.releaseAllOwnedResources();
+            foreach (ref m; owned) {
+                m.destroyOffRT();
+            }
+            freeEngine(eng);
+        }
+        StemExportSpec[] specs;
+        foreach (mid; options_.stemModules) {
+            specs ~= StemExportSpec(ModuleId(mid), buildPath(options_.stemDirectory, format("stem_%s.wav", mid)));
+        }
+        return eng.exportStemsWav(specs, buildPath(options_.stemDirectory, "stem_mix.wav"), totalFrames, err);
+    }
+}
+
+private void freeEngine(Engine* eng) {
+    if (eng !is null) {
+        destroy(*eng);
+        free(eng);
+    }
+}
+
+private Engine* allocateUnmanagedEngine() {
+    void* raw = calloc(1, Engine.sizeof);
+    if (raw is null) {
+        return null;
+    }
+    return emplace(cast(Engine*) raw);
+}
+
+static assert(!hasGcReference!Engine, "Engine is reached from the CoreAudio callback and must hold no GC references");
 
 /**
  * Removed module awaiting proof that no GraphPlan visible to the RT thread still references it.
@@ -65,7 +455,7 @@ private struct PendingModuleRetire {
  * down Engine state and can distinguish RT-owned from UI-owned engine phases.
  */
 class StudioSession {
-    private Engine engine_;
+    private Engine* engine_;
     private UndoHistory history_;
     private Keymap keymap_;
     private LoadedProject doc_;
@@ -75,6 +465,15 @@ class StudioSession {
     private GraphPlan* activePlan_ = null;
     private ulong fenceSeq_ = 0;
     private Duration engineSyncTimeout_ = dur!"seconds"(2);
+    private bool[uint] soloed_;
+    private bool scopeEnabled_ = false;
+    private ModuleId[4] scopeTaps_;
+    private bool transientTimeline_ = false;
+    private bool midiLearnActive_ = false;
+    private uint midiLearnModule_ = 0;
+    private uint midiLearnParam_ = 0;
+    private SamplePeaks[ulong] peaksCache_;
+    private ExportJob exportJob_;
 
     private float sampleRate_ = 44_100.0f;
     private bool initialized_ = false;
@@ -97,6 +496,12 @@ class StudioSession {
      */
     bool initialize(float sampleRate = 44_100.0f) {
         shutdown();
+        if (engine_ is null) {
+            engine_ = allocateUnmanagedEngine();
+            if (engine_ is null) {
+                return false;
+            }
+        }
         if (!engine_.tryInit(sampleRate)) {
             return false;
         }
@@ -114,11 +519,41 @@ class StudioSession {
      */
     void shutdown() {
         suspendAudio();
-        clearLiveAndEngine();
+        if (engine_ !is null) {
+            clearLiveAndEngine();
+        }
         if (history_ !is null) {
             history_.clear();
         }
         initialized_ = false;
+    }
+
+    /**
+     * Shuts down and frees the unmanaged Engine allocation. The session must not be used afterwards except
+     * through initialize(), which allocates a fresh Engine.
+     *
+     * Contract: the attached audio driver (if any) is stopped first, so no render callback can observe the
+     * freed Engine.
+     */
+    void dispose() {
+        shutdown();
+        if (engine_ !is null) {
+            destroy(*engine_);
+            free(engine_);
+            engine_ = null;
+        }
+    }
+
+    /**
+     * Frees the unmanaged Engine if dispose() was never called. Runs during GC finalization, so it touches only
+     * unmanaged memory; callers must stop audio before dropping the last session reference.
+     */
+    ~this() {
+        if (engine_ !is null) {
+            destroy(*engine_);
+            free(engine_);
+            engine_ = null;
+        }
     }
 
     /**
@@ -191,7 +626,7 @@ class StudioSession {
      *   Pointer to internal Engine struct.
      */
     Engine* engine() {
-        return &engine_;
+        return engine_;
     }
 
     /**
@@ -313,6 +748,7 @@ class StudioSession {
         pushPatternSnapshotDirect(initPat, true);
         pushTimelineSnapshot(true);
         engine_.setTempo(doc_.bpm, doc_.ticksPerLine);
+        reapplyTransientEngineState();
     }
 
     /**
@@ -358,7 +794,7 @@ class StudioSession {
         foreach (ref sm; doc_.modules) {
             auto ptr = sm.id in liveModules_;
             if (ptr !is null && ptr.state !is null) {
-                nodes ~= NodeSpec.fromInstance(*ptr, sm.muted, sm.bypassed);
+                nodes ~= NodeSpec.fromInstance(*ptr, effectiveMuted(sm), sm.bypassed);
             }
         }
         WireSpec[] wires = new WireSpec[doc_.wires.length];
@@ -394,6 +830,7 @@ class StudioSession {
      *   True on success.
      */
     bool pushTimelineSnapshot(bool immediate = false) {
+        transientTimeline_ = false;
         TimelineSnapshot* snap = TimelineSnapshot.createOffRT(
             doc_.clips,
             doc_.loopStartLine,
@@ -1208,6 +1645,1027 @@ class StudioSession {
         return true;
     }
 
+
+    /**
+     * Returns the Engine sample rate (follows the audio device when an AudioHost is attached).
+     *
+     * Returns:
+     *   Sample rate in Hz.
+     */
+    float sampleRate() const {
+        return sampleRate_;
+    }
+
+    /**
+     * Re-initializes the Engine at a new sample rate while preserving the document, ids, file path, dirty flag,
+     * and undo history (the document is round-tripped through .msv bytes). The caller stops the audio stream.
+     *
+     * Params:
+     *   newRate = New sample rate in Hz.
+     *   err = Receives a diagnostic on failure.
+     *
+     * Returns:
+     *   True on success.
+     */
+    bool changeSampleRate(float newRate, out string err) {
+        if (!isFinite(newRate) || newRate < 1000.0f) {
+            err = "Invalid sample rate";
+            return false;
+        }
+        ubyte[] bytes;
+        if (!saveProjectToBytes(bytes, err)) {
+            return false;
+        }
+        LoadedProject parsed;
+        if (!loadProject(bytes, parsed, err)) {
+            return false;
+        }
+        immutable float previousRate = sampleRate_;
+        immutable bool wasDirty = dirty_;
+        immutable string path = currentPath_;
+        UndoHistory keep = history_;
+        history_ = null;
+        sampleRate_ = newRate;
+        immutable bool ok = activateLoadedProject(parsed, path, err);
+        history_ = keep;
+        if (!ok) {
+            sampleRate_ = previousRate;
+            string ignored;
+            activateLoadedProject(parsed, path, ignored);
+            return false;
+        }
+        dirty_ = wasDirty;
+        return true;
+    }
+
+    /**
+     * Opens an undo group; every edit until endEditGroup() becomes one atomic undo step.
+     *
+     * Params:
+     *   label = Undo menu label.
+     */
+    void beginEditGroup(string label) {
+        history_.beginGroup(label);
+    }
+
+    /**
+     * Closes an undo group opened by beginEditGroup(); a group containing a failed edit is rolled back.
+     *
+     * Returns:
+     *   True if the group was recorded.
+     */
+    bool endEditGroup() {
+        return history_.endGroup(this);
+    }
+
+    /**
+     * Starts transport playback from the current position (restores the song timeline after playPattern()).
+     *
+     * Returns:
+     *   True if the command was queued.
+     */
+    bool play() {
+        if (transientTimeline_ && !pushTimelineSnapshot(false)) {
+            return false;
+        }
+        return sendCommand(EngineCommand.makePlay());
+    }
+
+    /**
+     * Stops transport playback and restores the song timeline if a pattern was being auditioned.
+     *
+     * Returns:
+     *   True if the command was queued.
+     */
+    bool stop() {
+        immutable bool ok = sendCommand(EngineCommand.makeStop());
+        if (transientTimeline_) {
+            pushTimelineSnapshot(false);
+        }
+        return ok;
+    }
+
+    /**
+     * Toggles playback.
+     *
+     * Returns:
+     *   True if playback is now requested to run.
+     */
+    bool togglePlay() {
+        if (isPlaying()) {
+            stop();
+            return false;
+        }
+        return play();
+    }
+
+    /**
+     * Moves the playhead.
+     *
+     * Params:
+     *   line = Song line (clamped to >= 0).
+     *
+     * Returns:
+     *   True if queued.
+     */
+    bool seekLine(long line) {
+        return sendCommand(EngineCommand.makeSeekLine(line < 0 ? 0 : line));
+    }
+
+    /**
+     * Auditions one pattern in a loop using a transient single-clip timeline (not saved, not undoable).
+     *
+     * Params:
+     *   patternId = Pattern to play.
+     *
+     * Returns:
+     *   True if playback started.
+     */
+    bool playPattern(uint patternId) {
+        SavedPattern* sp = findPatternDoc(patternId);
+        if (sp is null) {
+            return false;
+        }
+        TimelineClip[1] clip = [TimelineClip(uint.max - 1, patternId, 0, 0, sp.lines, 0, 0, false, false, false)];
+        TimelineSnapshot* snap = TimelineSnapshot.createOffRT(clip[], 0, sp.lines);
+        if (snap is null) {
+            return false;
+        }
+        if (!sendCommand(EngineCommand.makeSwapTimeline(snap))) {
+            TimelineSnapshot.destroyOffRT(snap);
+            return false;
+        }
+        transientTimeline_ = true;
+        return sendCommand(EngineCommand.makeSeekLine(0)) && sendCommand(EngineCommand.makePlay());
+    }
+
+    /**
+     * Reports whether a transient pattern audition timeline is active.
+     *
+     * Returns:
+     *   True during playPattern().
+     */
+    bool isAuditioningPattern() const {
+        return transientTimeline_;
+    }
+
+    /**
+     * Reports transport state from the latest telemetry.
+     *
+     * Returns:
+     *   True while playing.
+     */
+    bool isPlaying() {
+        if (engine_ is null) {
+            return false;
+        }
+        EngineTelemetry tel;
+        engine_.readTelemetry(tel);
+        return tel.playing;
+    }
+
+    /**
+     * Undoable loop range edit (endLine 0 disables looping).
+     *
+     * Params:
+     *   startLine = Loop start (>= 0).
+     *   endLine = Loop end (> startLine), or 0 to disable.
+     *
+     * Returns:
+     *   True if valid and applied.
+     */
+    bool doSetLoop(long startLine, long endLine) {
+        if (startLine < 0 || (endLine != 0 && endLine <= startLine)) {
+            return false;
+        }
+        immutable long oldStart = doc_.loopStartLine;
+        immutable long oldEnd = doc_.loopEndLine;
+        return history_.pushAndExecute(new DelegateCommand("Set Loop",
+            () => setLoopDirect(startLine, endLine), () => setLoopDirect(oldStart, oldEnd)), this);
+    }
+
+    /**
+     * Undoable creation of an empty pattern.
+     *
+     * Params:
+     *   tracks = Column count.
+     *   lines = Row count.
+     *   name = Display name.
+     *
+     * Returns:
+     *   New pattern id, or 0 if the shape is invalid or the pattern cap is reached.
+     */
+    uint doAddPattern(uint tracks, uint lines, string name = "") {
+        if (!isValidPatternShape(tracks, lines) || doc_.patterns.length >= MAX_PATTERNS) {
+            return 0;
+        }
+        SavedPattern sp;
+        sp.patternId = nextPatternId();
+        sp.tracks = tracks;
+        sp.lines = lines;
+        sp.name = name.length > 0 ? name : format("Pattern %02d", sp.patternId);
+        sp.cells = new NoteCell[cast(size_t) tracks * lines];
+        return addPatternCommand(sp, "Add Pattern") ? sp.patternId : 0;
+    }
+
+    /**
+     * Undoable duplication of a pattern (cells and dimensions, new id).
+     *
+     * Params:
+     *   patternId = Source pattern.
+     *
+     * Returns:
+     *   New pattern id, or 0 on failure.
+     */
+    uint doDuplicatePattern(uint patternId) {
+        SavedPattern* src = findPatternDoc(patternId);
+        if (src is null || doc_.patterns.length >= MAX_PATTERNS) {
+            return 0;
+        }
+        SavedPattern sp = cloneSavedPattern(*src);
+        sp.patternId = nextPatternId();
+        sp.name = src.name ~ " copy";
+        return addPatternCommand(sp, "Duplicate Pattern") ? sp.patternId : 0;
+    }
+
+    /**
+     * Undoable pattern deletion; clips that reference it are removed too and restored by undo.
+     *
+     * Params:
+     *   patternId = Pattern to delete.
+     *
+     * Returns:
+     *   True if deleted.
+     */
+    bool doRemovePattern(uint patternId) {
+        SavedPattern* sp = findPatternDoc(patternId);
+        if (sp is null) {
+            return false;
+        }
+        SavedPattern archived = cloneSavedPattern(*sp);
+        TimelineClip[] clipsBefore = doc_.clips.dup;
+        return history_.pushAndExecute(new DelegateCommand("Delete Pattern",
+            () => removePatternDirect(patternId),
+            () => restorePatternDirect(archived, clipsBefore)), this);
+    }
+
+    /**
+     * Undoable pattern rename.
+     *
+     * Params:
+     *   patternId = Pattern.
+     *   name = New name.
+     *
+     * Returns:
+     *   True if renamed.
+     */
+    bool doRenamePattern(uint patternId, string name) {
+        SavedPattern* sp = findPatternDoc(patternId);
+        if (sp is null || name.length > MAX_STRING_LEN) {
+            return false;
+        }
+        immutable string oldName = sp.name;
+        return history_.pushAndExecute(new DelegateCommand("Rename Pattern",
+            () => renamePatternDirect(patternId, name), () => renamePatternDirect(patternId, oldName)), this);
+    }
+
+    /**
+     * Undoable replacement of a whole pattern's cells (same dimensions) as one CoW snapshot swap; used by block
+     * write/clear/transpose/interpolate/paste in the pattern editor.
+     *
+     * Params:
+     *   patternId = Pattern.
+     *   cells = New cells (length must equal tracks * lines).
+     *   label = Undo label.
+     *
+     * Returns:
+     *   True if applied.
+     */
+    bool doReplacePatternCells(uint patternId, const(NoteCell)[] cells, string label = "Edit Block") {
+        SavedPattern* sp = findPatternDoc(patternId);
+        if (sp is null || cells.length != cast(size_t) sp.tracks * sp.lines) {
+            return false;
+        }
+        immutable uint tracks = sp.tracks;
+        immutable uint lines = sp.lines;
+        NoteCell[] before = sp.cells.dup;
+        before.length = cast(size_t) tracks * lines;
+        NoteCell[] after = cells.dup;
+        return history_.pushAndExecute(new DelegateCommand(label,
+            () => resizePatternDirect(patternId, tracks, lines, after),
+            () => resizePatternDirect(patternId, tracks, lines, before)), this);
+    }
+
+    /**
+     * Undoable module mute flag.
+     *
+     * Params:
+     *   modId = Module.
+     *   muted = New flag.
+     *
+     * Returns:
+     *   True if applied.
+     */
+    bool doSetModuleMuted(uint modId, bool muted) {
+        SavedModule* sm = findModuleDoc(modId);
+        if (sm is null) {
+            return false;
+        }
+        immutable bool old = sm.muted;
+        return history_.pushAndExecute(new DelegateCommand(muted ? "Mute Module" : "Unmute Module",
+            () => setModuleMutedDirect(modId, muted), () => setModuleMutedDirect(modId, old)), this);
+    }
+
+    /**
+     * Undoable module bypass flag.
+     *
+     * Params:
+     *   modId = Module.
+     *   bypassed = New flag.
+     *
+     * Returns:
+     *   True if applied.
+     */
+    bool doSetModuleBypassed(uint modId, bool bypassed) {
+        SavedModule* sm = findModuleDoc(modId);
+        if (sm is null) {
+            return false;
+        }
+        immutable bool old = sm.bypassed;
+        return history_.pushAndExecute(new DelegateCommand(bypassed ? "Bypass Module" : "Enable Module",
+            () => setModuleBypassedDirect(modId, bypassed), () => setModuleBypassedDirect(modId, old)), this);
+    }
+
+    /**
+     * Undoable module rename.
+     *
+     * Params:
+     *   modId = Module.
+     *   name = New display name.
+     *
+     * Returns:
+     *   True if renamed.
+     */
+    bool doRenameModule(uint modId, string name) {
+        SavedModule* sm = findModuleDoc(modId);
+        if (sm is null || name.length > MAX_STRING_LEN) {
+            return false;
+        }
+        immutable string oldName = sm.name;
+        return history_.pushAndExecute(new DelegateCommand("Rename Module",
+            () => renameModuleDirect(modId, name), () => renameModuleDirect(modId, oldName)), this);
+    }
+
+    /**
+     * Transient solo (not saved, not undoable): while any synth module is soloed, every other synth-category
+     * module is muted; effects, control, and output modules are never solo-muted so soloed sources keep their
+     * processing chain.
+     *
+     * Params:
+     *   modId = Module.
+     *   soloed = New solo state.
+     *
+     * Returns:
+     *   True if the effective graph was updated.
+     */
+    bool setModuleSolo(uint modId, bool soloed) {
+        if (findModuleDoc(modId) is null) {
+            return false;
+        }
+        bool[uint] prev = soloed_.dup;
+        if (soloed) {
+            soloed_[modId] = true;
+        } else {
+            soloed_.remove(modId);
+        }
+        if (!compileAndSwapGraph(false)) {
+            soloed_ = prev;
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Reports whether a module is soloed.
+     *
+     * Params:
+     *   modId = Module.
+     *
+     * Returns:
+     *   True if soloed.
+     */
+    bool isModuleSoloed(uint modId) const {
+        return (modId in soloed_) !is null;
+    }
+
+    /**
+     * Reports whether a module is currently silenced by its mute flag or by another module's solo.
+     *
+     * Params:
+     *   modId = Module.
+     *
+     * Returns:
+     *   Effective mute.
+     */
+    bool isModuleEffectivelyMuted(uint modId) {
+        SavedModule* sm = findModuleDoc(modId);
+        return sm !is null && effectiveMuted(*sm);
+    }
+
+    /**
+     * Undoable replacement of a module's extra state (sample slots, curves, wavetables, control maps) while the
+     * module keeps running: the new assets are built off-RT and swapped in via SwapModuleAsset.
+     *
+     * Params:
+     *   modId = Module whose type implements live asset replacement.
+     *   blob = New serializeExtra-format payload.
+     *   label = Undo label.
+     *
+     * Returns:
+     *   True if applied.
+     */
+    bool doSetModuleExtra(uint modId, const(ubyte)[] blob, string label = "Edit Module Data") {
+        SavedModule* sm = findModuleDoc(modId);
+        auto inst = modId in liveModules_;
+        if (sm is null || inst is null || inst.desc.vtable is null || inst.desc.vtable.buildAssetsFromExtra is null
+                || blob.length > MAX_EXTRA_BLOB_BYTES) {
+            return false;
+        }
+        if (!synchronizeEngine()) {
+            return false;
+        }
+        ubyte[] before = snapshotLiveModule(*sm).extraBlob;
+        ubyte[] after = blob.dup;
+        return history_.pushAndExecute(new DelegateCommand(label,
+            () => setModuleExtraDirect(modId, after), () => setModuleExtraDirect(modId, before)), this);
+    }
+
+    /**
+     * Decodes an audio file into a Sampler slot (keymap and root note set as given) as one undoable edit.
+     *
+     * Params:
+     *   samplerId = Sampler module id.
+     *   slot = Sample slot (0 .. Sampler.MAX_SLOTS-1).
+     *   audioBytes = WAV/FLAC/MP3/OGG file contents.
+     *   rootNote = Unity-pitch MIDI note.
+     *   lowNote = Lowest mapped note.
+     *   highNote = Highest mapped note.
+     *   err = Receives a diagnostic on failure.
+     *
+     * Returns:
+     *   True if loaded.
+     */
+    bool doLoadSample(uint samplerId, uint slot, const(ubyte)[] audioBytes, ubyte rootNote, ubyte lowNote,
+            ubyte highNote, out string err) {
+        SavedModule* sm = findModuleDoc(samplerId);
+        auto inst = samplerId in liveModules_;
+        if (sm is null || inst is null || sm.typeId != "synth.sampler" || slot >= Sampler.MAX_SLOTS
+                || lowNote > highNote || highNote > 127 || rootNote > 127) {
+            err = "Target is not a Sampler slot";
+            return false;
+        }
+        if (!synchronizeEngine()) {
+            err = "Audio engine did not acknowledge pending edits";
+            return false;
+        }
+        SamplerSlotAsset* asset = createSamplerAssetFromMemory(audioBytes, err, rootNote);
+        if (asset is null) {
+            return false;
+        }
+        asset.lowNote = lowNote;
+        asset.highNote = highNote;
+        const(ModuleVTable)* vt = inst.desc.vtable;
+        void* temp = vt.create();
+        if (temp is null) {
+            SamplerSlotAsset.destroyErased(asset);
+            err = "Out of memory";
+            return false;
+        }
+        scope (exit) vt.destroy(temp);
+        immutable ubyte[] current = snapshotLiveModule(*sm).extraBlob.idup;
+        if (current.length > 0 && !vt.deserializeExtra(temp, current, sampleRate_)) {
+            SamplerSlotAsset.destroyErased(asset);
+            err = "Existing sampler data could not be decoded";
+            return false;
+        }
+        void* old = null;
+        vt.swapAsset(temp, slot, asset, old);
+        if (old !is null) {
+            SamplerSlotAsset.destroyErased(old);
+        }
+        ubyte[] blob;
+        if (!vt.serializeExtra(temp, blob)) {
+            err = "Sampler data could not be serialized";
+            return false;
+        }
+        if (!doSetModuleExtra(samplerId, blob, "Load Sample")) {
+            err = "Sample could not be applied";
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Returns min/max waveform peaks of a Sampler slot for display (computed on the UI thread from the document,
+     * cached until the module's data changes).
+     *
+     * Params:
+     *   samplerId = Sampler module id.
+     *   slot = Sample slot.
+     *   buckets = Number of peak buckets (>= 1).
+     *   peaks = Receives the peaks.
+     *
+     * Returns:
+     *   True if the slot holds a sample.
+     */
+    bool samplePeaks(uint samplerId, uint slot, uint buckets, out SamplePeaks peaks) {
+        SavedModule* sm = findModuleDoc(samplerId);
+        auto inst = samplerId in liveModules_;
+        if (sm is null || inst is null || sm.typeId != "synth.sampler" || slot >= Sampler.MAX_SLOTS || buckets == 0) {
+            return false;
+        }
+        immutable ulong key = (cast(ulong) samplerId << 32) | (cast(ulong) slot << 20) | buckets;
+        if (auto hit = key in peaksCache_) {
+            peaks = *hit;
+            return peaks.frames > 0;
+        }
+        if (!synchronizeEngine()) {
+            return false;
+        }
+        const(ModuleVTable)* vt = inst.desc.vtable;
+        void* temp = vt.create();
+        if (temp is null) {
+            return false;
+        }
+        scope (exit) vt.destroy(temp);
+        immutable ubyte[] blob = snapshotLiveModule(*sm).extraBlob.idup;
+        if (blob.length == 0 || !vt.deserializeExtra(temp, blob, sampleRate_)) {
+            return false;
+        }
+        const(SamplerSlotAsset)* a = (cast(const(Sampler)*) temp).slotAsset(slot);
+        if (a is null || a.left.length == 0) {
+            peaksCache_[key] = SamplePeaks.init;
+            return false;
+        }
+        peaks = computeSamplePeaks(a.left[], a.right.length == a.left.length ? a.right[] : a.left[], buckets);
+        peaks.sampleRate = a.sampleRate;
+        peaksCache_[key] = peaks;
+        return true;
+    }
+
+    /**
+     * Enables scope publishing for master plus up to four tapped modules; survives Engine re-initialization.
+     *
+     * Params:
+     *   enabled = False stops publishing.
+     *   moduleIds = Up to four module ids to tap (extra ids are ignored).
+     *
+     * Returns:
+     *   True if queued.
+     */
+    bool setScopeTaps(bool enabled, const(uint)[] moduleIds) {
+        scopeEnabled_ = enabled;
+        scopeTaps_ = ModuleId.init;
+        foreach (i, idv; moduleIds) {
+            if (i >= scopeTaps_.length) {
+                break;
+            }
+            scopeTaps_[i] = ModuleId(idv);
+        }
+        return sendCommand(EngineCommand.makeSetScopeTaps(scopeEnabled_, scopeTaps_));
+    }
+
+    /**
+     * Undoable MIDI-learn binding.
+     *
+     * Params:
+     *   m = Binding.
+     *
+     * Returns:
+     *   True if valid and applied.
+     */
+    bool doAddMidiMapping(SavedMidiMapping m) {
+        auto inst = m.moduleId in liveModules_;
+        if (!isValidMidiMapping(m) || inst is null || m.paramIdx >= inst.desc.params.length
+                || doc_.midiMappings.length >= MAX_MIDI_MAPPINGS) {
+            return false;
+        }
+        SavedMidiMapping[] before = doc_.midiMappings.dup;
+        SavedMidiMapping[] after = before ~ m;
+        return history_.pushAndExecute(new DelegateCommand("Add MIDI Mapping",
+            () => setMidiMappingsDirect(after), () => setMidiMappingsDirect(before)), this);
+    }
+
+    /**
+     * Undoable removal of a MIDI-learn binding.
+     *
+     * Params:
+     *   index = Index into document().midiMappings.
+     *
+     * Returns:
+     *   True if removed.
+     */
+    bool doRemoveMidiMapping(size_t index) {
+        if (index >= doc_.midiMappings.length) {
+            return false;
+        }
+        SavedMidiMapping[] before = doc_.midiMappings.dup;
+        SavedMidiMapping[] after = before[0 .. index] ~ before[index + 1 .. $];
+        return history_.pushAndExecute(new DelegateCommand("Remove MIDI Mapping",
+            () => setMidiMappingsDirect(after), () => setMidiMappingsDirect(before)), this);
+    }
+
+    /**
+     * Arms MIDI learn: the next controller message processed by processMidiFromRt() binds to the parameter.
+     *
+     * Params:
+     *   modId = Module.
+     *   paramIdx = Parameter index.
+     *
+     * Returns:
+     *   True if the parameter exists.
+     */
+    bool beginMidiLearn(uint modId, uint paramIdx) {
+        auto inst = modId in liveModules_;
+        if (inst is null || paramIdx >= inst.desc.params.length) {
+            return false;
+        }
+        midiLearnActive_ = true;
+        midiLearnModule_ = modId;
+        midiLearnParam_ = paramIdx;
+        return true;
+    }
+
+    /**
+     * Disarms MIDI learn.
+     */
+    void cancelMidiLearn() {
+        midiLearnActive_ = false;
+    }
+
+    /**
+     * Reports whether MIDI learn is armed.
+     *
+     * Returns:
+     *   True while waiting for a controller.
+     */
+    bool midiLearnActive() const {
+        return midiLearnActive_;
+    }
+
+    /**
+     * Consumes MIDI packets copied by the RT thread: completes MIDI learn, mirrors mapped controller values into
+     * the document (dirty flag only; no undo entries, since the RT thread already applied them), and reports
+     * note-ons for recording.
+     *
+     * Params:
+     *   packets = Packets drained from AudioHost.drainMidi().
+     *   notes = Receives note-on events with the current playhead line (appended).
+     *
+     * Returns:
+     *   Number of controller values mirrored into the document.
+     */
+    size_t processMidiFromRt(const(MidiPacket)[] packets, ref MidiNoteEvent[] notes) {
+        size_t mirrored = 0;
+        long line = 0;
+        EngineTelemetry tel;
+        if (engine_ !is null) {
+            engine_.readTelemetry(tel);
+            line = tel.currentLine;
+        }
+        foreach (ref pkt; packets) {
+            immutable ubyte kind = pkt.status() & 0xF0;
+            immutable ubyte ch = pkt.status() & 0x0F;
+            if (kind == 0x90 && pkt.len >= 3 && pkt.data2() > 0) {
+                notes ~= MidiNoteEvent(ch, pkt.data1() & 0x7F, pkt.data2() & 0x7F, line);
+                continue;
+            }
+            if (kind != 0xB0 || pkt.len < 3) {
+                continue;
+            }
+            immutable ubyte cc = pkt.data1() & 0x7F;
+            if (midiLearnActive_) {
+                midiLearnActive_ = false;
+                doAddMidiMapping(SavedMidiMapping(ch, cc, midiLearnModule_, midiLearnParam_, 0.0f, 1.0f));
+                continue;
+            }
+            immutable float v = (pkt.data2() & 0x7F) / 127.0f;
+            foreach (ref mm; doc_.midiMappings) {
+                if (mm.channel != ch || mm.cc != cc) {
+                    continue;
+                }
+                SavedModule* sm = findModuleDoc(mm.moduleId);
+                auto inst = mm.moduleId in liveModules_;
+                if (sm is null || inst is null || mm.paramIdx >= inst.desc.params.length) {
+                    continue;
+                }
+                if (sm.paramValues.length < inst.desc.params.length) {
+                    immutable size_t oldLen = sm.paramValues.length;
+                    sm.paramValues.length = inst.desc.params.length;
+                    foreach (pi; oldLen .. sm.paramValues.length) {
+                        sm.paramValues[pi] = inst.desc.params[pi].defaultVal;
+                    }
+                }
+                sm.paramValues[mm.paramIdx] = denormalizeParam(inst.desc.params[mm.paramIdx],
+                    mm.min01 + (mm.max01 - mm.min01) * v);
+                dirty_ = true;
+                mirrored++;
+            }
+        }
+        return mirrored;
+    }
+
+    /**
+     * Starts an off-thread WAV export of the whole song (loop disabled) rendered by a separate Engine
+     * materialized from a document snapshot; the live Engine is never touched.
+     *
+     * Params:
+     *   path = Destination .wav path (32-bit float stereo).
+     *   options = Tail length, host block size, and optional stems.
+     *   err = Receives a diagnostic if the export could not start.
+     *
+     * Returns:
+     *   True if the export job started.
+     */
+    bool beginExport(string path, ExportOptions options, out string err) {
+        if (exportJob_ !is null && !exportJob_.finished()) {
+            err = "An export is already running";
+            return false;
+        }
+        ubyte[] bytes;
+        if (!saveProjectToBytes(bytes, err)) {
+            return false;
+        }
+        exportJob_ = new ExportJob(bytes, sampleRate_, path, options);
+        exportJob_.start();
+        return true;
+    }
+
+    /**
+     * Returns the progress of the most recent export.
+     *
+     * Returns:
+     *   Status snapshot (state none when no export was started).
+     */
+    ExportStatus exportStatus() {
+        return exportJob_ is null ? ExportStatus.init : exportJob_.status();
+    }
+
+    /**
+     * Requests cancellation of the running export.
+     */
+    void cancelExport() {
+        if (exportJob_ !is null) {
+            exportJob_.cancel();
+        }
+    }
+
+    /**
+     * Blocks until the current export finishes (tests and shutdown).
+     */
+    void waitForExport() {
+        if (exportJob_ !is null) {
+            exportJob_.join();
+        }
+    }
+
+    package bool setLoopDirect(long startLine, long endLine) {
+        immutable long s0 = doc_.loopStartLine;
+        immutable long e0 = doc_.loopEndLine;
+        doc_.loopStartLine = startLine;
+        doc_.loopEndLine = endLine;
+        if (!pushTimelineSnapshot(false)) {
+            doc_.loopStartLine = s0;
+            doc_.loopEndLine = e0;
+            return false;
+        }
+        dirty_ = true;
+        return true;
+    }
+
+    package bool addPatternDirect(const ref SavedPattern sp) {
+        if (findPatternDoc(sp.patternId) !is null || doc_.patterns.length >= MAX_PATTERNS) {
+            return false;
+        }
+        SavedPattern copyPat = cloneSavedPattern(sp);
+        if (!pushPatternSnapshotDirect(copyPat, false)) {
+            return false;
+        }
+        doc_.patterns ~= copyPat;
+        dirty_ = true;
+        return true;
+    }
+
+    package bool removePatternDirect(uint patternId) {
+        size_t idx = size_t.max;
+        foreach (i, ref sp; doc_.patterns) {
+            if (sp.patternId == patternId) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx == size_t.max) {
+            return false;
+        }
+        SavedPattern[] prevPatterns = doc_.patterns;
+        TimelineClip[] prevClips = doc_.clips;
+        TimelineClip[] keptClips;
+        foreach (ref c; prevClips) {
+            if (c.patternId != patternId) {
+                keptClips ~= c;
+            }
+        }
+        doc_.patterns = prevPatterns[0 .. idx] ~ prevPatterns[idx + 1 .. $];
+        doc_.clips = keptClips;
+        if (!pushTimelineSnapshot(false)) {
+            doc_.patterns = prevPatterns;
+            doc_.clips = prevClips;
+            return false;
+        }
+        if (!sendCommand(EngineCommand.makeSwapPattern(patternId, null))) {
+            doc_.patterns = prevPatterns;
+            doc_.clips = prevClips;
+            pushTimelineSnapshot(false);
+            return false;
+        }
+        if (currentPatternId_ == patternId) {
+            currentPatternId_ = doc_.patterns.length > 0 ? doc_.patterns[0].patternId : 0;
+        }
+        dirty_ = true;
+        return true;
+    }
+
+    package bool restorePatternDirect(const ref SavedPattern sp, const(TimelineClip)[] clips) {
+        if (!addPatternDirect(sp)) {
+            return false;
+        }
+        TimelineClip[] prev = doc_.clips;
+        doc_.clips = clips.dup;
+        if (!pushTimelineSnapshot(false)) {
+            doc_.clips = prev;
+            removePatternDirect(sp.patternId);
+            return false;
+        }
+        return true;
+    }
+
+    package bool renamePatternDirect(uint patternId, string name) {
+        SavedPattern* sp = findPatternDoc(patternId);
+        if (sp is null) {
+            return false;
+        }
+        sp.name = name;
+        dirty_ = true;
+        return true;
+    }
+
+    package bool setModuleFlagsDirect(uint modId, bool muted, bool bypassed) {
+        SavedModule* sm = findModuleDoc(modId);
+        if (sm is null) {
+            return false;
+        }
+        immutable bool m0 = sm.muted;
+        immutable bool b0 = sm.bypassed;
+        sm.muted = muted;
+        sm.bypassed = bypassed;
+        if (!compileAndSwapGraph(false)) {
+            sm.muted = m0;
+            sm.bypassed = b0;
+            return false;
+        }
+        dirty_ = true;
+        return true;
+    }
+
+    package bool setModuleMutedDirect(uint modId, bool muted) {
+        SavedModule* sm = findModuleDoc(modId);
+        return sm !is null && setModuleFlagsDirect(modId, muted, sm.bypassed);
+    }
+
+    package bool setModuleBypassedDirect(uint modId, bool bypassed) {
+        SavedModule* sm = findModuleDoc(modId);
+        return sm !is null && setModuleFlagsDirect(modId, sm.muted, bypassed);
+    }
+
+    package bool renameModuleDirect(uint modId, string name) {
+        SavedModule* sm = findModuleDoc(modId);
+        if (sm is null) {
+            return false;
+        }
+        sm.name = name;
+        dirty_ = true;
+        return true;
+    }
+
+    package bool setModuleExtraDirect(uint modId, const(ubyte)[] blob) {
+        SavedModule* sm = findModuleDoc(modId);
+        auto inst = modId in liveModules_;
+        if (sm is null || inst is null || inst.desc.vtable.buildAssetsFromExtra is null) {
+            return false;
+        }
+        AssetSwap[] swaps;
+        if (!inst.desc.vtable.buildAssetsFromExtra(blob, sampleRate_, swaps)) {
+            return false;
+        }
+        foreach (i, ref sw; swaps) {
+            if (!sendCommand(EngineCommand.makeSwapModuleAsset(ModuleId(modId), sw.slot, sw.asset, sw.destroyFn))) {
+                foreach (ref rest; swaps[i .. $]) {
+                    if (rest.asset !is null && rest.destroyFn !is null) {
+                        rest.destroyFn(rest.asset);
+                    }
+                }
+                return false;
+            }
+        }
+        sm.extraBlob = blob.dup;
+        invalidatePeaks(modId);
+        dirty_ = true;
+        return true;
+    }
+
+    package bool setMidiMappingsDirect(const(SavedMidiMapping)[] mappings) {
+        SavedMidiMapping[] prev = doc_.midiMappings;
+        doc_.midiMappings = mappings.dup;
+        if (!pushMidiMap()) {
+            doc_.midiMappings = prev;
+            return false;
+        }
+        dirty_ = true;
+        return true;
+    }
+
+    private bool pushMidiMap() {
+        MidiMapEntry[] entries;
+        foreach (ref mm; doc_.midiMappings) {
+            entries ~= MidiMapEntry(mm.channel, mm.cc, ModuleId(mm.moduleId), mm.paramIdx, mm.min01, mm.max01);
+        }
+        MidiMapSnapshot* snap = entries.length > 0 ? MidiMapSnapshot.createOffRT(entries) : null;
+        if (entries.length > 0 && snap is null) {
+            return false;
+        }
+        if (!sendCommand(EngineCommand.makeSwapMidiMap(snap))) {
+            MidiMapSnapshot.destroyOffRT(snap);
+            return false;
+        }
+        return true;
+    }
+
+    private void reapplyTransientEngineState() {
+        transientTimeline_ = false;
+        peaksCache_ = null;
+        bool[uint] keptSolo;
+        foreach (id; soloed_.byKey()) {
+            if (findModuleDoc(id) !is null) {
+                keptSolo[id] = true;
+            }
+        }
+        soloed_ = keptSolo;
+        if (soloed_.length > 0) {
+            compileAndSwapGraph(false);
+        }
+        if (doc_.midiMappings.length > 0) {
+            pushMidiMap();
+        }
+        if (scopeEnabled_) {
+            sendCommand(EngineCommand.makeSetScopeTaps(true, scopeTaps_));
+        }
+    }
+
+    private bool addPatternCommand(SavedPattern sp, string label) {
+        immutable uint pid = sp.patternId;
+        return history_.pushAndExecute(new DelegateCommand(label,
+            () => addPatternDirect(sp), () => removePatternDirect(pid)), this);
+    }
+
+    private uint nextPatternId() const {
+        uint maxId = 0;
+        foreach (ref sp; doc_.patterns) {
+            if (sp.patternId > maxId) maxId = sp.patternId;
+        }
+        return maxId + 1;
+    }
+
+    private bool effectiveMuted(const ref SavedModule sm) const {
+        if (sm.muted) {
+            return true;
+        }
+        if (soloed_.length == 0 || (sm.id in soloed_) !is null) {
+            return false;
+        }
+        const(ModuleDescriptor)* desc = ModuleRegistry.findByTypeId(sm.typeId);
+        return desc !is null && desc.category == ModuleCategory.synth;
+    }
+
+    private void invalidatePeaks(uint modId) {
+        ulong[] drop;
+        foreach (k; peaksCache_.byKey()) {
+            if ((k >> 32) == modId) drop ~= k;
+        }
+        foreach (k; drop) {
+            peaksCache_.remove(k);
+        }
+    }
+
     package bool patchCellDirect(uint patternId, uint track, uint line, NoteCell cell) {
         SavedPattern* sp = findPatternDoc(patternId);
         if (sp is null || track >= sp.tracks || line >= sp.lines) {
@@ -1513,6 +2971,13 @@ class StudioSession {
             case StudioAction.redo:
                 redo();
                 break;
+            case StudioAction.playPattern:
+                if (isAuditioningPattern()) {
+                    stop();
+                } else {
+                    playPattern(currentPatternId_);
+                }
+                break;
             case StudioAction.panic:
                 cast(void) sendCommand(EngineCommand.makeAllNotesOff());
                 break;
@@ -1626,7 +3091,7 @@ class StudioSession {
 
         doc_ = cloneLoadedProject(parsed);
         ModuleInstance[] spawned;
-        if (!materializeProjectToEngine(doc_, engine_, sampleRate_, spawned, err)) {
+        if (!materializeProjectToEngine(doc_, *engine_, sampleRate_, spawned, err)) {
             resetToEmptyProjectSuspended(true);
             return false;
         }
@@ -1657,6 +3122,7 @@ class StudioSession {
         currentPath_ = path;
         dirty_ = false;
         if (history_ !is null) history_.clear();
+        reapplyTransientEngineState();
         return true;
     }
 
@@ -1828,6 +3294,7 @@ class StudioSession {
             dst.patterns[i] = cloneSavedPattern(sp);
         }
         dst.clips = src.clips.dup;
+        dst.midiMappings = src.midiMappings.dup;
         return dst;
     }
 
