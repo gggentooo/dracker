@@ -10,13 +10,14 @@
  *   Main thread handles CLI parsing, device setup, CFRunLoop pumping, and hardware hot-plug reconciliation; CoreAudio render callback is extern(C) @nogc nothrow with zero GC allocations or D TLS accesses.
  *
  * Dependencies:
- *   Internal: foundation.types, foundation.concurrency, dsp.oscillator, dsp.envelope, dsp.filter_svf, dsp.smoother, dsp.voice_pool, graph.port, graph.event, graph.context, graph.module_api, graph.plan, graph.audio_graph, graph.registry, platform.interfaces, platform.macos.corefoundation, platform.macos.coreaudio, platform.macos.coremidi
+ *   Internal: app.gui_shell (StudioGUI only), foundation.types, foundation.concurrency, dsp.oscillator, dsp.envelope, dsp.filter_svf, dsp.smoother, dsp.voice_pool, graph.port, graph.event, graph.context, graph.module_api, graph.plan, graph.audio_graph, graph.registry, platform.interfaces, platform.macos.corefoundation, platform.macos.coreaudio, platform.macos.coremidi
  *   External: core.atomic, core.lifetime, core.stdc.stdlib, core.sys.posix.signal, core.sys.posix.time, std.conv, std.math, std.stdio, std.string
  *
  * Planned API (Types, Functions & Hooks):
  *   - int main(string[] args)
  *   - int runListDevices()
  *   - int runCliDemo(string[] args)
+ *   - StudioGUI builds: no arguments / --gui -> app.gui_shell.runStudioGui(), --gui-selftest -> runGuiSelfTest()
  *   - struct CliDemoPolySynth (live @nogc ModuleAdapter polyphonic synth)
  *
  * See_Also:
@@ -51,6 +52,10 @@ import graph.plan : GraphCompileError, GraphCompiler, GraphPlan, NodeSpec, WireS
 import graph.port : PortDescriptor, PortDirection, PortKind;
 import graph.registry : ModuleRegistry;
 import platform.interfaces;
+
+version (StudioGUI) {
+    import app.gui_shell : runGuiSelfTest, runStudioGui;
+}
 
 version (OSX) {
     import platform.macos.corefoundation : CFRunLoopGetCurrent, CFRunLoopRunInMode, MachTimebase,
@@ -830,8 +835,15 @@ version (OSX) {
 }
 
 private void printUsage() {
-    writeln("SynthTracker Headless CLI");
-    writeln("Usage:");
+    version (StudioGUI) {
+        writeln("SynthTracker (native macOS studio)");
+        writeln("Usage:");
+        writeln("  synth-tracker [--gui]                 launch the studio window (default)");
+        writeln("  synth-tracker --gui-selftest [--quick] run the automated Phase 7 GUI verification");
+    } else {
+        writeln("SynthTracker Headless CLI");
+        writeln("Usage:");
+    }
     writeln("  synth-tracker --list-devices");
     writeln("  synth-tracker --cli-demo [--duration=<sec>] [--sample-rate=<hz>] [--buffer-frames=<n>] [--auto-chord] [--duplex]");
 }
@@ -851,6 +863,14 @@ int main(string[] args) {
             printUsage();
             return 0;
         }
+        version (StudioGUI) {
+            if (arg == "--gui-selftest") {
+                return runGuiSelfTest(args);
+            }
+            if (arg == "--gui") {
+                return runStudioGui(args);
+            }
+        }
         version (OSX) {
             if (arg == "--list-devices") {
                 return runListDevices();
@@ -861,6 +881,11 @@ int main(string[] args) {
         }
     }
 
+    version (StudioGUI) {
+        if (args.length == 1) {
+            return runStudioGui(args);
+        }
+    }
     printUsage();
     return 0;
 }

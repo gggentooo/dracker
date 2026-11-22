@@ -35,7 +35,10 @@
             "preBuildCommands-osx": [
                 "mkdir -p build",
                 "clang -x objective-c -fobjc-arc -O2 -mmacosx-version-min=12.0 -arch arm64 -arch x86_64 -c source/platform/macos/objc_blocks_shim.m -o build/objc_blocks_shim.o",
-                "xcrun -sdk macosx metal -c shaders/ui2d.metal -o build/ui2d.air && xcrun -sdk macosx metallib build/ui2d.air -o build/ui2d.metallib"
+                "sh -c 'if xcrun -sdk macosx --find metal >/dev/null 2>&1; then xcrun -sdk macosx metal -c shaders/ui2d.metal -o build/ui2d.air && xcrun -sdk macosx metallib build/ui2d.air -o build/ui2d.metallib; else rm -f build/ui2d.metallib && echo note: Metal toolchain unavailable, shaders compile at runtime from embedded source; fi'"
+            ],
+            "stringImportPaths": [
+                "shaders"
             ],
             "sourceFiles-osx": [
                 "build/objc_blocks_shim.o"
@@ -55,8 +58,8 @@
                 "."
             ],
             "excludedSourceFiles": [
-                "source/gui/*",
-                "source/gui/**/*",
+                "source/gui/views/*",
+                "source/gui/views/**/*",
                 "source/platform/macos/appkit.d",
                 "source/platform/macos/coretext.d",
                 "source/platform/macos/metal_renderer.d",

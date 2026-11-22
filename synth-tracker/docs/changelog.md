@@ -10,6 +10,54 @@ All major changes to `synth-tracker/` must be recorded in reverse-chronological 
 
 ---
 
+## [2026-11-22 12:56:07 KST]
+- **Author:** Claude Opus 5.5 (Claude Code)
+- **Reason / Summary:** Owner decisions after the Phase 8 readiness check: mark Phase 7 complete with the 100k-frame autorelease soak waived, and insert a new Phase 7.5 for the backend pieces Phase 8 needs. Documentation and design only; no code changed.
+  - Phase 7 and subtasks `7.1`–`7.5` marked `[x]` in `agents.md`, with a sign-off note recording the waived soak result (malloc flat for 9/10 intervals, one unexplained +127 KB / +1,489-block step in the final interval; GC heap +0 KB). This supersedes the "Phase 7 remains `[ ]`" status in the previous entry.
+  - Added Phase 7.5 (Studio Backend Integration, subtasks `7.5.1`–`7.5.7`) to `agents.md` (checklist + exit criteria) and its full design to `dev_plan.md`:
+    - unmanaged `Engine` ownership with a `@nogc nothrow` CoreAudio render bridge (`app/audio_host.d`, `EngineRtContext`), sample-rate follow and hot-unplug recovery;
+    - live MIDI drained on the RT thread, MIDI target module, MIDI learn (`.msv` `MIDI` chunk, `MidiMapSnapshot` swap);
+    - scope/spectrum taps (`ScopeBlock` ring, `app/telemetry.d`) and DSP load telemetry;
+    - session transport, loop, pattern, module, live-asset (`buildAssetsFromExtra`), sample import, and off-thread export operations;
+    - grouped undo with atomic rollback, pattern block operations, and the `SynthTracker-Block-v1` clipboard codec (`app/pattern_ops.d`);
+    - keymap expansion and `StudioCommandSink`;
+    - verification, including `--studio-selftest`.
+  - Phase 8 now depends on Phase 7.5. The `agents.md` UI ↔ RT mutation table gained rows for the audio host, live MIDI, MIDI map, and scope taps, and the package map lists the planned `app/` files. The `dev_plan.md` schedule table and totals were updated.
+  - Rule 5: `7.5.1`–`7.5.3` change the UI ↔ RT boundary and are flagged as needing owner approval of the design before implementation.
+- **Affected Files:**
+  - `synth-tracker/agents.md`
+  - `dev_plan.md`
+  - `synth-tracker/docs/changelog.md`
+
+---
+
+## [2026-11-22 12:10:30 KST]
+- **Author:** Claude Opus 5.5 (Claude Code), with a Claude subagent implementing `7.5`
+- **Reason / Summary:** Implemented Phase 7 (Native macOS AppKit/Metal Shell & Pure-D UI Toolkit). Phase 7 remains `[ ]` in `agents.md`: one exit-criterion check (memory soak tail) is unresolved, see Verification.
+  - `7.1` `objc_runtime.d`: typed `objc_msgSend`/`objc_msgSendSuper` trampolines (x86_64 `_stret` for >16-byte struct returns), `RuntimeClassBuilder` (runtime subclassing with ivars/protocols, idempotent), ivar context pointers, NSString conversion, retain/release/autorelease, `ScopedAutoreleasePool`; extern(C) bindings for the existing `objc_blocks_shim.m`.
+  - `7.2` `appkit.d`: `MacApplication` (regular foreground app, File/Edit/Transport/View/Window menu bar; menu commands are delivered as the same keyDown keyCode+KeyModifiers the keymap binds, Quit -> `closeRequested`), `MacWindow : IPlatformWindow` (runtime `STHostView` flipped NSView hosting a CAMetalLayer; raw keyDown/keyUp/repeat + modifier flagsChanged; mouse buttons/drag/move; precise trackpad scroll and pinch; `NSTextInputClient` IME commit + marked text; Retina backing-scale tracking; live-resize render hook; occlusion tracking; blocking `waitEvents()` for idle; pasteboard text), `MacFileDialog : IFileDialog` (NSOpenPanel/NSSavePanel window-modal sheets via the Block shim, UTType filters), and self-test diagnostics (synthetic NSEvent/CGEvent injection, malloc/footprint/CPU probes).
+  - `7.3` `coretext.d`: `CoreTextRasterizer : IGlyphRasterizer` (system UI + user fixed-pitch fonts at exact physical pixel sizes, R8 coverage bitmaps, CTFontCreateForString fallback, surrogate pairs).
+  - `7.4` `gui/renderer.d` (backend-agnostic `IRenderer2D`, 96-byte `UIInstance`, `DrawList` with scissor/texture command runs, `BatchRenderer2D`, `GlyphCache` + `ShelfAtlasPacker` growable R8 atlas, `HeadlessRenderer`), `shaders/ui2d.metal` (instanced SDF rounded rect/border/gradient, pixel-space R8 glyphs, RGBA images, anti-aliased round-capped segments, premultiplied alpha), `metal_renderer.d` (`MetalRenderer`: metallib if present else runtime compilation of the embedded shader source, triple-buffered instance buffers paced by a dispatch semaphore signalled from command-buffer completion, dirty-row atlas uploads, RGBA textures, offscreen render + read-back).
+  - `7.5` `gui/theme.d`, `gui/layout.d`, `gui/widgets.d`: `StudioTheme`; flex layout, `SplitPaneNode`/`DockLayout`; retained `Widget` tree + `UiContext` (hit-testing, capture, hover, focus/Tab traversal, overlays, double-click, context menus, dirty/animating flags) with Panel, Label, Button, Toggle, Slider (log/fine/reset), RotaryKnob, NumericDragBox, Dropdown, ContextMenu, ScrollView + scrollbars, SplitView, CurveEditor, EnvelopeEditor.
+  - Shell: `app/gui_shell.d` (`GuiShell` main loop: blocking waits when idle, display-paced rendering while animating, no rendering while occluded; `--gui-selftest`), `app/gui_gallery.d` (toolkit + renderer gallery scene); `main.d` launches the shell by default in `app` builds.
+  - Build: `dub.json` `app` config only precompiles `ui2d.metallib` when `xcrun metal` exists (this machine has Command Line Tools only) and string-imports `shaders/`; `headless` now builds and tests the pure-D toolkit (only `gui/views/` stays excluded).
+  - Review follow-ups: atlas `pack()` no longer mutates on failure; the clip stack is unbounded and pops symmetrically.
+- **Verification Results:**
+  - `dub test --config=headless`: 11 modules passed (incl. 35-block `tests/unit/gui_test.d`); `DFLAGS="-unittest -O3 -w"`: 12 passed, zero warnings.
+  - `DFLAGS="-unittest -O3 -w" dub test --config=app`: 5 modules passed (Objective-C runtime subclass/ivar/super/struct-return, CoreText glyphs/fallbacks, Metal GPU pixel read-back of shapes/borders/clip/lines/text/textures, AppKit helpers).
+  - `x86_64-apple-macos12.0 -O3 -w -unittest` cross-compile of all sources with `StudioGUI`; `clang -Wall -Wextra` shim check; no `//` comments in new files; headless `--cli-demo` regression (0 xruns).
+  - `caffeinate -dims ./build/synth-tracker --gui-selftest` (Apple M5 Pro, 120 Hz Retina, final build): 12/13 PASS — window/Retina 2200x1440 @2x (runtime-compiled shader), 8 menu key equivalents, raw keyDown/text/keyUp/Shift flagsChanged/repeat order, Cmd+Z / Cmd+Shift+Z / Cmd+Q routed once each, flipped mouse coordinates, trackpad scroll, toolkit toggle/context menu/Escape via real events, private-pasteboard clipboard, open/save sheets attached and cancelled, resize to 1800x1200 px, 118-120 fps display-paced, idle CPU 0.06-2.11 % across runs.
+  - **Open:** the 100,000-frame soak (100,000 presented frames, 834 s, 120.0 fps; GC heap +0 KB) failed its own tail criterion: malloc stayed flat (+0 to +31 KB) for 9 of 10 checkpoint intervals, then stepped +127 KB / +1,489 blocks in the final interval. A per-frame leak would grow in every interval, so this looks like a one-off allocation burst, but it has not been explained, so Phase 7 stays unchecked pending owner review.
+- **Affected Files:**
+  - `synth-tracker/source/platform/macos/{objc_runtime,appkit,coretext,metal_renderer}.d`
+  - `synth-tracker/shaders/ui2d.metal`
+  - `synth-tracker/source/gui/{renderer,theme,layout,widgets}.d`
+  - `synth-tracker/source/app/gui_shell.d`, `synth-tracker/source/app/gui_gallery.d` (created)
+  - `synth-tracker/tests/unit/gui_test.d` (created)
+  - `synth-tracker/source/main.d`, `synth-tracker/dub.json`, `synth-tracker/agents.md`, `synth-tracker/docs/changelog.md`
+
+---
+
 ## [2026-11-22 10:15:35 KST]
 - **Author:** Claude Opus 5.5 (Claude Code)
 - **Reason / Summary:** Phase 6 review remediation. An independent review of the uncommitted Phase 6 work found nine defects (RT use-after-free, stale saves, unreloadable saves, pattern-slot overflow/leak, live-engine teardown, ignored push/compile failures, SunVox note mis-targeting, unbounded undo coalescing, vacuous tests). Phase 6 was reverted to `[ ]` until all were fixed and verified, with owner approval for the UI/RT boundary changes (Rule 5).

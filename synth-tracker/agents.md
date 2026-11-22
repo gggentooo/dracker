@@ -79,6 +79,10 @@ For any changes or decisions that may have significant impact on the codebase, t
 | **Pattern Resize / Clips / Clones / Supertracks** | Build `@nogc` CoW `PatternSnapshot` / `TimelineSnapshot` | `SwapPatternSnapshot` / `SwapTimelineSnapshot` | Old snapshots → `RetireRing` |
 | **Heavy Assets** (`Sampler`, curves, wavetables, `MetaModule`) | Decoded/built off-RT (`audio_io.d` / `stream_worker.d`) | `SwapModuleAsset` via `ModuleVTable.swapAsset` | Replaced buffer → `RetireRing` |
 | **Scalar Params** | `SetParam(modId, paramId, val, bool instant)` | Instant snap (`instant = true`) or smoother (`false`) | None |
+| **Live Audio Host** *(7.5.1)* | `Engine` + `EngineRtContext` allocated unmanaged (`malloc`) | CoreAudio callback `userData` = `EngineRtContext*` (zero GC pointers) | Freed after `IAudioDriver.stop()` returns |
+| **Live MIDI** *(7.5.2)* | CoreMIDI thread → `MpscRing!MidiPacket` | Drained in the render callback → `Engine.applyLiveMidi*` (RT-thread direct, never the UI command ring) | Copy → `SpscRing!MidiPacket` UI ring |
+| **MIDI Map** *(7.5.2)* | Build immutable POD `MidiMapSnapshot` | `SwapMidiMap` | Old snapshot → `RetireRing` |
+| **Scope Taps & Load** *(7.5.3)* | `SetScopeTaps` (≤ 4 module ids + master) | RT pushes `ScopeBlock` to `SpscRing!ScopeBlock`; load stats via `TripleBuffer!AudioLoadTelemetry` | UI drains (drop-on-full counted) |
 
 ---
 
@@ -92,8 +96,8 @@ For any changes or decisions that may have significant impact on the codebase, t
 | `source/modules/` | `output.d`, `synths/` (8), `effects/` (19), `control/` (11) | `@nogc nothrow` RT; zero syscalls |
 | `source/sequencer/` | `note.d`, `pattern.d`, `timeline.d`, `clock.d`, `track_effects.d`, `stream_worker.d`, `engine.d` | RT step `@nogc nothrow`; `stream_worker.d` off-RT worker |
 | `source/io/` | `binary_stream.d`, `project_format.d`, `audio_io.d`, `importers/` (`.mid`, `.xm`, `.sunvox`) | `@safe` off-RT I/O & `audio-formats` (`boost`) |
-| `source/app/` | `session.d`, `history.d`, `keymap.d` | Main/UI thread orchestration & undo/redo |
-| `source/gui/` | `renderer.d`, `theme.d`, `layout.d`, `widgets.d`, `views/` (7 studio views) | Main/UI thread only (excluded in `headless` DUB config) |
+| `source/app/` | `session.d`, `history.d`, `keymap.d`, `gui_shell.d` + `gui_gallery.d` (`StudioGUI` only); planned 7.5: `audio_host.d`, `telemetry.d`, `pattern_ops.d` | Main/UI thread orchestration, undo/redo, native GUI main loop & `--gui-selftest` |
+| `source/gui/` | `renderer.d`, `theme.d`, `layout.d`, `widgets.d`, `views/` (7 studio views) | Main/UI thread only; pure-D toolkit is built and unit-tested in `headless`, `views/` is excluded there |
 | `source/platform/` | `interfaces.d` + `macos/` (`corefoundation.d`, `coreaudio.d`, `coremidi.d`, `objc_runtime.d`, `objc_blocks_shim.m`, `appkit.d`, `coretext.d`, `metal_renderer.d`) | Only OS FFI boundary in the project |
 | `shaders/` | `ui2d.metal` (Metal 2D instanced UI, Beziers, R8 glyphs) | Compiled to `build/ui2d.metallib` |
 | `packaging/macos/`, `ci/` | `Info.plist`, `entitlements.plist`, `bundle_macos.sh`, `macos.yml` | Release bundling & CI automation |
@@ -173,16 +177,29 @@ Each phase below tracks status with `[ ]` / `[x]`. Do not mark any item `[x]` un
   - `[x]` `6.5` *(Optional)* `io/importers/{smf,xm,sunvox}_importer.d` (`.sunvox` scoped to best-effort musical/structural mapping)
 - **Exit Criteria:** Unit tests for stream bounds, undo/redo, and session bridge pass; complex `.msv`/`.msym` round-trips render bit-identical WAV output; 100k+ fuzz tests pass with zero panics/OOB reads.
 
-### `[ ]` Phase 7 — Native macOS AppKit/Metal Shell & Pure-D UI Toolkit *(Deps: Phases 0, 3; parallelizable with Phases 4–6)*
+### `[x]` Phase 7 — Native macOS AppKit/Metal Shell & Pure-D UI Toolkit *(Deps: Phases 0, 3; parallelizable with Phases 4–6)*
 - **Subtasks:**
-  - `[ ]` `7.1` `platform/macos/objc_runtime.d` (`ScopedAutoreleasePool`) & `objc_blocks_shim.m`
-  - `[ ]` `7.2` `platform/macos/appkit.d` (`NSApplication`, `NSWindow`, `NSView`, menus, dialogs, raw key-up/down, trackpad, IME basics)
-  - `[ ]` `7.3` `platform/macos/coretext.d` (R8 Retina glyph atlas)
-  - `[ ]` `7.4` `shaders/ui2d.metal`, `platform/macos/metal_renderer.d`, `gui/renderer.d` (`IRenderer2D`, triple-buffered `CAMetalLayer`)
-  - `[ ]` `7.5` `gui/theme.d`, `gui/layout.d`, `gui/widgets.d`
+  - `[x]` `7.1` `platform/macos/objc_runtime.d` (`ScopedAutoreleasePool`) & `objc_blocks_shim.m`
+  - `[x]` `7.2` `platform/macos/appkit.d` (`NSApplication`, `NSWindow`, `NSView`, menus, dialogs, raw key-up/down, trackpad, IME basics)
+  - `[x]` `7.3` `platform/macos/coretext.d` (R8 Retina glyph atlas)
+  - `[x]` `7.4` `shaders/ui2d.metal`, `platform/macos/metal_renderer.d`, `gui/renderer.d` (`IRenderer2D`, triple-buffered `CAMetalLayer`)
+  - `[x]` `7.5` `gui/theme.d`, `gui/layout.d`, `gui/widgets.d`
 - **Exit Criteria:** Unit tests pass for layout/hit-testing/widgets; AppKit/Metal shell launches cleanly with native menus/dialogs, $< 3\%$ idle CPU, 60–120 fps Retina rendering, accurate raw key events, and zero autorelease leaks over 100k frames.
+- **Sign-off note (2026-11-22):** Marked complete by owner decision. All criteria verified by `--gui-selftest` except the 100k-frame autorelease soak, which the owner waived: the final run (100,000 frames, 120 fps, GC heap +0 KB) held malloc flat for 9 of 10 intervals and then showed one unexplained +127 KB / +1,489-block step. See `docs/changelog.md`.
 
-### `[ ]` Phase 8 — Modular Synth Tracker Studio GUI *(Deps: Phases 5, 6, 7)*
+### `[ ]` Phase 7.5 — Studio Backend Integration: Live Audio/MIDI Host, Telemetry, Session Operations & Grouped Undo *(Deps: Phases 3, 5, 6, 7)*
+> Inserted 2026-11-22 to close backend gaps found while checking Phase 8 readiness. Full design: [`dev_plan.md` Phase 7.5](../dev_plan.md). Subtask IDs are `7.5.x` and are separate from Phase 7 subtask `7.5` (widget toolkit). **Rule 5:** `7.5.1`–`7.5.3` change the UI ↔ RT boundary and need owner approval of this design before implementation starts.
+- **Subtasks:**
+  - `[ ]` `7.5.1` Unmanaged `Engine` ownership + `app/audio_host.d` (`AudioHost`, `@nogc nothrow` CoreAudio → `Engine` render bridge with an unmanaged `EngineRtContext`, duplex input, device selection, sample-rate follow & hot-unplug recovery)
+  - `[ ]` `7.5.2` Live MIDI routing (RT drains `CoreMidiRtContext.packetRing` in the render callback; UI copy ring), MIDI target module, MIDI learn (`MidiMapping`, `.msv` `MIDI` chunk, `MidiMapSnapshot` swap)
+  - `[ ]` `7.5.3` Extended telemetry: scope/analysis `ScopeBlock` ring with module taps, UI-side `app/telemetry.d` (`ScopeHistory`, FFT spectrum), DSP load / xrun / drop counters
+  - `[ ]` `7.5.4` Session operations: transport (play/stop/seek/play-pattern), loop range, pattern add/duplicate/remove/rename, module mute/bypass/rename/solo, live asset replacement (`buildAssetsFromExtra` hook, sample import + waveform peaks), off-thread WAV/stem export
+  - `[ ]` `7.5.5` Grouped undo (`beginGroup`/`endGroup`, atomic `CompoundCommand`) + `app/pattern_ops.d` block operations (write/clear/transpose/interpolate, single CoW snapshot swap) and `SynthTracker-Block-v1` text clipboard codec
+  - `[ ]` `7.5.6` Keymap expansion (editing/selection/transport/zoom actions matched to `appkit.d` menu equivalents, conflict checks) and a `StudioCommandSink` for view-level actions
+  - `[ ]` `7.5.7` Verification suite: headless unit/fuzz tests, `rt_malloc_trap` on every new RT path, `--studio-selftest` hardware run
+- **Exit Criteria:** Unit tests pass for every new API, including grouped-undo failure rollback, block ops, clipboard-codec fuzzing (10k+ inputs), keymap conflicts, `.msv` `MIDI` chunk round-trip and forward compatibility, and fuzzing of the new chunk. The render bridge, MIDI drain, scope push, and map application compile `@nogc nothrow` and pass `rt_malloc_trap`. No GC pointer is reachable from the audio callback (static asserts + unmanaged ownership). `--studio-selftest` plays a session project through CoreAudio for 30 s at 64 and 128 frames with zero xruns while the UI thread edits concurrently, measures MIDI-in to audio latency under 10 ms, recovers from a device sample-rate change, and exports a WAV bit-identical to an offline render of the same document.
+
+### `[ ]` Phase 8 — Modular Synth Tracker Studio GUI *(Deps: Phases 5, 6, 7, 7.5)*
 - **Subtasks:**
   - `[ ]` `8.1` `views/transport_bar.d` & `views/scope_view.d`
   - `[ ]` `8.2` `views/patchbay_view.d` (typed ports, pulses, `ModuleRegistry` add menu, inline scopes)
@@ -214,8 +231,14 @@ dub test --compiler=ldc2 --config=headless
 dub run --compiler=ldc2 --config=headless -- --cli-demo
 dub build --compiler=ldc2 --config=headless --build=release
 
-# Native macOS AppKit/Metal GUI build (requires Xcode Metal toolchain)
+# Native macOS AppKit/Metal GUI build (precompiles build/ui2d.metallib when the Xcode Metal toolchain exists;
+# otherwise MetalRenderer compiles the embedded shaders/ui2d.metal source at runtime)
 dub build --compiler=ldc2 --config=app --build=debug
+./build/synth-tracker                      # launch the studio window
+dub test --compiler=ldc2 --config=app      # Objective-C runtime, CoreText, Metal GPU read-back, AppKit unit tests
+
+# Unattended Phase 7 GUI verification on real hardware (keeps its window floating; ~15 min, --quick ~4 min)
+caffeinate -dims ./build/synth-tracker --gui-selftest [--quick]
 
 # Standalone compiler / shim / config checks
 ldc2 -o- -w -Isource source/**/*.d
