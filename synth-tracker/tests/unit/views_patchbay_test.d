@@ -813,6 +813,19 @@ version (unittest) {
         f.view.setView(3.0f, Point2F(-2000.0f, -900.0f));
         f.frame();
         f.doubleClick(f.view.emptyCanvasPoint());
+        ContextMenu m = f.topMenu();
+        assert(m !is null, "double-click on empty canvas should open context menu");
+        string[] labels;
+        foreach (ref it; m.items) labels ~= it.label;
+        assert(labels.canFind("Add Synth ▸"), "menu should contain 'Add Synth ▸'");
+        assert(labels.canFind("Add Effect ▸"), "menu should contain 'Add Effect ▸'");
+        assert(labels.canFind("Add Control ▸"), "menu should contain 'Add Control ▸'");
+        assert(labels.canFind("Add Core ▸"), "menu should contain 'Add Core ▸'");
+        assert(labels.canFind("Fit All"), "menu should contain 'Fit All'");
+        assert(labels.canFind("Reset Zoom"), "menu should contain 'Reset Zoom'");
+        // Verify Fit All still works via the menu
+        f.clickMenu("Fit All");
+        f.frame();
         foreach (idv; [f.gen, f.amp, f.amp2, 1u]) {
             assert(rectInside(f.view.nodeRect(idv), f.view.bounds));
         }

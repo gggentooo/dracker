@@ -958,7 +958,13 @@ final class PatchbayView : Widget, StudioCommandSink {
             break;
         case PatchbayHitKind.none:
             if (e.clickCount >= 2) {
-                fitAll();
+                auto ui = context();
+                if (ui !is null) {
+                    MenuItem[] items = buildContextMenu(e.pos);
+                    if (items.length > 0) {
+                        ui.openContextMenu(items, e.pos);
+                    }
+                }
                 drag_ = DragMode.none;
             } else {
                 hasSelectedWire_ = false;
