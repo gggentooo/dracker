@@ -76,7 +76,9 @@ version (unittest) {
         Expect(StudioAction.zoomOut, 27, CMD),
         Expect(StudioAction.zoomReset, 29, CMD),
         Expect(StudioAction.exportWav, 14, CMD),
-        Expect(StudioAction.quit, 12, CMD)
+        Expect(StudioAction.quit, 12, CMD),
+        Expect(StudioAction.openAppearance, 43, CMD),
+        Expect(StudioAction.toggleContrast, 8, CMD | ALT)
     ];
 
     private immutable Expect[] APPKIT_MENU_TABLE = [
@@ -96,7 +98,9 @@ version (unittest) {
         Expect(StudioAction.zoomIn, 24, CMD),
         Expect(StudioAction.zoomOut, 27, CMD),
         Expect(StudioAction.zoomReset, 29, CMD),
-        Expect(StudioAction.quit, 12, CMD)
+        Expect(StudioAction.quit, 12, CMD),
+        Expect(StudioAction.openAppearance, 43, CMD),
+        Expect(StudioAction.toggleContrast, 8, CMD | ALT)
     ];
 
     private final class RecordingSink : StudioCommandSink {
@@ -141,7 +145,7 @@ version (unittest) {
             }
             assert(bound);
         }
-        assert(km.resolveAction(12, CMD) == StudioAction.max);
+        assert(km.resolveAction(8, CMD | ALT) == StudioAction.max && StudioAction.max == StudioAction.toggleContrast);
     }
 
     unittest {
@@ -202,7 +206,8 @@ version (unittest) {
             StudioAction.playToggle, StudioAction.stop, StudioAction.recordToggle, StudioAction.octaveUp,
             StudioAction.octaveDown, StudioAction.undo, StudioAction.redo, StudioAction.saveProject,
             StudioAction.saveProjectAs, StudioAction.openProject, StudioAction.newProject, StudioAction.panic,
-            StudioAction.playPattern, StudioAction.toggleLoop, StudioAction.exportWav, StudioAction.quit
+            StudioAction.playPattern, StudioAction.toggleLoop, StudioAction.exportWav, StudioAction.quit,
+            StudioAction.openAppearance, StudioAction.toggleContrast
         ];
         immutable StudioAction[] viewLevel = [
             StudioAction.noteOffEntry, StudioAction.deleteCell, StudioAction.cut, StudioAction.copy,
@@ -241,10 +246,10 @@ version (unittest) {
     unittest {
         Keymap km = Keymap.createDefault();
         immutable size_t before = km.bindingCount();
-        assert(km.bindAction(StudioAction.copy, 8, CMD | ALT));
+        assert(km.bindAction(StudioAction.copy, 8, CMD | KeyModifiers.control));
         assert(km.bindingCount() == before);
         assert(km.resolveAction(8, CMD) == StudioAction.none);
-        assert(km.resolveAction(8, CMD | ALT) == StudioAction.copy);
+        assert(km.resolveAction(8, CMD | KeyModifiers.control) == StudioAction.copy);
 
         assert(km.bindAction(StudioAction.playToggle, 49, CMD | ALT));
         assert(km.bindingCount() == before - 1);

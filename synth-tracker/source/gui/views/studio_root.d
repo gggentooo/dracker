@@ -1,7 +1,7 @@
 /**
  * File:         source/gui/views/studio_root.d
  * Module:       gui.views.studio_root
- * Phase:        Phase 8.6 — Studio Window Root: Docked Layout, Command Routing & Status Bar
+ * Phase:        Phase 8.6 — Studio Window Root: Docked Layout, Command Routing & Status Bar (Phase 8.5 appearance)
  *
  * Purpose:
  *   Assembles every studio view into one docked window layout: transport bar on top; a resizable split grid with
@@ -9,7 +9,9 @@
  *   a status bar. Routes keyboard shortcuts resolved through the session Keymap: document-level actions run here
  *   (transport, record, octave, undo/redo, panic, play-pattern, loop) or go to the app layer (new/open/save/
  *   export/quit); context-dependent actions go to the StudioCommandSink view that holds focus (or was used last);
- *   unhandled piano keys play live notes on the selected module.
+ *   unhandled piano keys play live notes on the selected module. Phase 8.5: openAppearance opens the Appearance
+ *   panel overlay, toggleContrast flips High/Low contrast, and every StudioContext appearance switch is pushed
+ *   into the UiContext (theme + relayout) through a theme listener.
  *
  * Real-Time & Safety Contract:
  *   UI thread only; never touches RT state except through StudioSession.
@@ -19,7 +21,8 @@
  *   External: None
  *
  * Planned API (Types, Functions & Hooks):
- *   - class StudioRoot : Widget (views, appCommandHandler, executeAction(), activeSink(), noteInteraction())
+ *   - class StudioRoot : Widget (views, appCommandHandler, executeAction(), activeSink(), noteInteraction(),
+ *     openAppearancePanel(), appearancePanel(), onAppearanceChanged)
  *
  * See_Also:
  *   architecture.md, dev_plan.md (Phase 8.6)
@@ -30,7 +33,8 @@ import app.keymap : forwardToSink, isDocumentLevel, StudioAction, StudioCommandS
 import foundation.types : ModuleId;
 import gui.layout : Axis, SplitPaneNode;
 import gui.renderer : FontId, IRenderer2D, Point2F, RectF;
-import gui.theme : StudioTheme;
+import gui.theme : ContrastMode, StudioTheme;
+import gui.views.appearance_panel : AppearancePanel;
 import gui.views.param_rack : ParamRackView;
 import gui.views.patchbay_view : PatchbayView;
 import gui.views.pattern_editor : PatternEditorView;
@@ -64,7 +68,14 @@ final class StudioRoot : Widget {
      */
     bool delegate(StudioAction) appCommandHandler;
 
+    /**
+     * Called after every appearance switch, once the UiContext has adopted the new theme (the app updates the
+     * native High Contrast menu checkmark here).
+     */
+    void delegate() onAppearanceChanged;
+
     private Widget lastSink_;
+    private AppearancePanel appearancePanel_;
     private bool[uint] heldPianoKeys_;
 
     /**
@@ -98,6 +109,56 @@ final class StudioRoot : Widget {
         grid.setPane("timeline", timeline);
         grid.setPane("sample", sampleEditor);
         lastSink_ = pattern;
+        ctx.onThemeChanged(&syncTheme);
+    }
+
+    /**
+     * Opens the Appearance panel centered in the window (no-op when it is already open or detached).
+     *
+     * Returns:
+     *   The open panel, or null when the root is not attached to a UiContext.
+     */
+    AppearancePanel openAppearancePanel() {
+        auto c = context;
+        if (c is null) {
+            return null;
+        }
+        if (appearancePanel_ !is null) {
+            return appearancePanel_;
+        }
+        AppearancePanel p = new AppearancePanel(ctx);
+        immutable RectF vp = c.viewport().isEmpty() ? bounds : c.viewport();
+        immutable float w = AppearancePanel.WIDTH < vp.w ? AppearancePanel.WIDTH : vp.w;
+        immutable float h = AppearancePanel.HEIGHT < vp.h ? AppearancePanel.HEIGHT : vp.h;
+        p.bounds = RectF(vp.x + (vp.w - w) * 0.5f, vp.y + (vp.h - h) * 0.5f, w, h);
+        p.onClosed = () { appearancePanel_ = null; invalidate(); };
+        p.forwardKey = (const ref KeyEvent e) => onKeyDown(e);
+        appearancePanel_ = p;
+        c.openOverlay(p);
+        return p;
+    }
+
+    /**
+     * Returns the open Appearance panel.
+     *
+     * Returns:
+     *   Panel, or null when closed.
+     */
+    AppearancePanel appearancePanel() {
+        return appearancePanel_;
+    }
+
+    private void syncTheme() {
+        if (auto c = context) {
+            c.setTheme(ctx.theme);
+        }
+        if (appearancePanel_ !is null) {
+            appearancePanel_.refresh();
+        }
+        invalidate();
+        if (onAppearanceChanged !is null) {
+            onAppearanceChanged();
+        }
     }
 
     override void layoutChildren() {
@@ -209,6 +270,12 @@ final class StudioRoot : Widget {
                 break;
             case StudioAction.toggleLoop:
                 toggleLoop();
+                break;
+            case StudioAction.openAppearance:
+                openAppearancePanel();
+                break;
+            case StudioAction.toggleContrast:
+                ctx.toggleContrast();
                 break;
             default:
                 return appCommandHandler !is null && appCommandHandler(action);

@@ -20,8 +20,8 @@
  *   External: core.time (MonoTime), std.format (format), std.math (log10, pow, round)
  *
  * Planned API (Types, Functions & Hooks):
- *   - enum TransportGlyph
- *   - class TransportButton : Button (lit state + drawn glyph)
+ *   - enum TransportGlyph / enum TransportLight (theme light token of a lit button)
+ *   - class TransportButton : Button (lit state + drawn glyph; lit buttons also get a 2 pt strong outline)
  *   - class GroupedDragBox : NumericDragBox (onDragBegin/onDragEnd gesture hooks)
  *   - class DeviceDropdown : Dropdown (onBeforeOpen refresh hook)
  *   - class TransportBarView : Widget, StudioCommandSink : this(StudioContext), refresh(), refreshDevices(),
@@ -59,13 +59,22 @@ enum TransportGlyph : ubyte {
 }
 
 /**
+ * Which theme light token a lit transport button uses.
+ */
+enum TransportLight : ubyte {
+    play = 0,
+    record = 1,
+    loop = 2
+}
+
+/**
  * Toolbar button with a "lit" (active) state and a vector glyph or text caption.
  */
 class TransportButton : Button {
     TransportGlyph glyph = TransportGlyph.text;
     bool lit = false;
     bool pausedGlyph = false;
-    ColorRGBA litColor;
+    TransportLight light = TransportLight.play;
 
     /**
      * Creates a button.
@@ -78,7 +87,26 @@ class TransportButton : Button {
     this(string caption, TransportGlyph g, void delegate() handler) {
         super(caption, handler);
         glyph = g;
-        litColor = ColorRGBA.fromHex(0x3D9BFFFF);
+    }
+
+    /**
+     * Returns the lit fill color for this button from the theme.
+     *
+     * Params:
+     *   theme = Theme.
+     *
+     * Returns:
+     *   transportPlayLit, transportRecordLit or transportLoopLit.
+     */
+    ColorRGBA litColor(const ref StudioTheme theme) const {
+        final switch (light) {
+        case TransportLight.play:
+            return theme.transportPlayLit;
+        case TransportLight.record:
+            return theme.transportRecordLit;
+        case TransportLight.loop:
+            return theme.transportLoopLit;
+        }
     }
 
     /**
@@ -93,16 +121,17 @@ class TransportButton : Button {
         ColorRGBA top = theme.panelRaised.brighten(0.04f);
         ColorRGBA bottom = theme.panelRaised;
         if (lit) {
-            top = litColor.brighten(0.05f);
-            bottom = litColor.brighten(-0.12f);
+            top = litColor(theme);
+            bottom = theme.emphasize(top, 0.08f);
         } else if (isPressed()) {
-            top = theme.panelRaised.brighten(-0.04f);
+            top = theme.emphasize(theme.panelRaised, 0.06f);
         } else if (isHovered() && on) {
-            top = top.brighten(0.06f);
-            bottom = bottom.brighten(0.06f);
+            top = theme.emphasize(top, 0.06f);
+            bottom = theme.emphasize(bottom, 0.06f);
         }
         r.fillRoundedRectGradient(bounds, theme.radiusMd, top, bottom);
-        r.strokeRoundedRect(bounds, theme.radiusMd, theme.borderWidth, isPressed() ? theme.accent : theme.border);
+        r.strokeRoundedRect(bounds, theme.radiusMd, lit ? 2.0f * theme.borderWidth : theme.borderWidth,
+            isPressed() || lit ? theme.borderStrong : theme.border);
         immutable ColorRGBA ink = !on ? theme.textDisabled : (lit ? theme.accentText : theme.text);
         immutable Point2F c = bounds.center();
         immutable float s = (bounds.h < bounds.w ? bounds.h : bounds.w) * 0.22f;
@@ -325,8 +354,8 @@ final class TransportBarView : Widget, StudioCommandSink {
         recordBtn_ = makeButton("transport.record", "Rec", TransportGlyph.record, &onRecord);
         followBtn_ = makeButton("transport.follow", "FOLLOW", TransportGlyph.text, &onFollow);
         loopBtn_ = makeButton("transport.loop", "LOOP", TransportGlyph.text, &onLoop);
-        recordBtn_.litColor = ColorRGBA.fromHex(0xE5484DFF);
-        loopBtn_.litColor = ColorRGBA.fromHex(0xF5A524FF);
+        recordBtn_.light = TransportLight.record;
+        loopBtn_.light = TransportLight.loop;
 
         bpmBox_ = add(new GroupedDragBox(ValueRange(20.0f, 999.0f, 125.0f, false, 0.1f), 1));
         bpmBox_.id = "transport.bpm";
@@ -771,7 +800,7 @@ final class TransportBarView : Widget, StudioCommandSink {
         r.fillRoundedRect(bar, 2.0f, theme.panelSunken);
         immutable float avg = clamp01(a.loadAvg);
         immutable float pk = clamp01(a.loadPeak);
-        immutable ColorRGBA c = avg > 0.85f ? theme.danger : (avg > 0.6f ? theme.warning : theme.success);
+        immutable ColorRGBA c = avg > 0.85f ? theme.meterHigh : (avg > 0.6f ? theme.meterMid : theme.meterLow);
         if (avg > 0.0f) {
             r.fillRect(RectF(bar.x, bar.y, bar.w * avg, bar.h), c);
         }
@@ -794,7 +823,7 @@ final class TransportBarView : Widget, StudioCommandSink {
         if (!clipRect_.isEmpty()) {
             immutable bool lit = clipLit();
             r.fillRoundedRect(clipRect_.inset(1.0f), 2.0f, lit ? theme.danger : theme.panelSunken);
-            r.strokeRoundedRect(clipRect_.inset(1.0f), 2.0f, theme.borderWidth, lit ? theme.danger.brighten(0.2f) : theme.border);
+            r.strokeRoundedRect(clipRect_.inset(1.0f), 2.0f, theme.borderWidth, lit ? theme.borderStrong : theme.border);
         }
     }
 
@@ -806,13 +835,15 @@ final class TransportBarView : Widget, StudioCommandSink {
         }
         immutable float greenEnd = ampToFraction(cast(float) pow(10.0, -12.0 / 20.0));
         immutable float yellowEnd = ampToFraction(cast(float) pow(10.0, -3.0 / 20.0));
-        fillSegment(r, bar, 0.0f, f < greenEnd ? f : greenEnd, theme.success);
+        fillSegment(r, bar, 0.0f, f < greenEnd ? f : greenEnd, theme.meterLow);
         if (f > greenEnd) {
-            fillSegment(r, bar, greenEnd, f < yellowEnd ? f : yellowEnd, theme.warning);
+            fillSegment(r, bar, greenEnd, f < yellowEnd ? f : yellowEnd, theme.meterMid);
         }
         if (f > yellowEnd) {
-            fillSegment(r, bar, yellowEnd, f, theme.danger);
+            fillSegment(r, bar, yellowEnd, f, theme.meterHigh);
         }
+        r.fillRect(RectF(bar.x + bar.w * greenEnd, bar.y, 1.0f, bar.h), theme.borderStrong);
+        r.fillRect(RectF(bar.x + bar.w * yellowEnd, bar.y, 1.0f, bar.h), theme.borderStrong);
     }
 
     private static void fillSegment(IRenderer2D r, RectF bar, float f0, float f1, ColorRGBA c) {

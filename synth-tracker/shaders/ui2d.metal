@@ -15,7 +15,7 @@
  *   Host:     source/platform/macos/metal_renderer.d (UIInstance mirrors gui.renderer.UIInstance, 96 bytes)
  *
  * Planned Shaders & Structs:
- *   - UIUniforms       : viewport size in pixels, backingScaleFactor, time
+ *   - UIUniforms       : viewport size in pixels, backingScaleFactor, time, glyph coverage gamma (Phase 8.5)
  *   - UIInstance       : rect, uv, colorA, colorB, colorBorder, cornerRadius, borderWidth, kind, flags
  *   - ui2d_vertex      : instanced quad expansion (axis-aligned for shapes/glyphs/images, oriented for lines)
  *   - ui2d_fragment    : SDF rounded rect + border + gradient, R8 glyph coverage, RGBA image, line AA
@@ -28,6 +28,8 @@ struct UIUniforms {
     float2 viewportPx;
     float  scaleFactor;
     float  timeSeconds;
+    float  textGamma;
+    float  reserved;
 };
 
 struct UIInstance {
@@ -118,6 +120,7 @@ static float segmentDistance(float2 p, float2 a, float2 b) {
 }
 
 fragment float4 ui2d_fragment(VertexOut in [[stage_in]],
+                              constant UIUniforms &u [[buffer(0)]],
                               texture2d<float> glyphAtlas [[texture(0)]],
                               texture2d<float> image [[texture(1)]]) {
     constexpr sampler atlasSampler(coord::pixel, filter::linear, address::clamp_to_edge);
@@ -125,6 +128,7 @@ fragment float4 ui2d_fragment(VertexOut in [[stage_in]],
 
     if (in.kind == KIND_GLYPH) {
         float cov = glyphAtlas.sample(atlasSampler, in.uv).r;
+        cov = pow(cov, clamp(u.textGamma, 0.25f, 4.0f));
         float a = in.colorA.a * cov;
         return float4(in.colorA.rgb * a, a);
     }

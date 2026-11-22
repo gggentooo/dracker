@@ -10,6 +10,10 @@
  *   Save As, Export WAV, Quit) through IFileDialog. Adapters expose AudioHost as IAudioControl and the window
  *   pasteboard as IStudioClipboard. runStudioApp() launches the whole studio with live CoreAudio/CoreMIDI;
  *   runStudioGuiSelfTest() performs the full musical workflow purely through synthetic window input.
+ *   Phase 8.5: ShellAppearanceBackend exposes CoreText font selection, the glyph cache flush, and the Metal
+ *   clear color / glyph gamma as IAppearanceBackend; the scene loads the persisted appearance
+ *   (~/Library/Application Support/SynthTracker/appearance.cfg) before the first frame and keeps the native
+ *   View ▸ High Contrast checkmark in sync; the GUI self-test also drives the Appearance menu and panel.
  *
  * Real-Time & Safety Contract:
  *   UI thread only; audio is reached exclusively through AudioHost and StudioSession.
@@ -21,6 +25,7 @@
  *
  * Planned API (Types, Functions & Hooks):
  *   - class HostAudioControl : IAudioControl / class WindowClipboard : IStudioClipboard
+ *   - class ShellAppearanceBackend : IAppearanceBackend
  *   - class StudioScene : IGuiScene (root(), context(), ui(), performAppCommand())
  *   - class ScriptedFileDialog : IFileDialog
  *   - int runStudioApp(string[] args) / int runStudioGuiSelfTest(string[] args)
@@ -40,7 +45,10 @@ import app.audio_host : AudioHost, AudioLoadTelemetry;
 import app.gui_shell : GuiShell, IGuiScene;
 import app.keymap : StudioAction;
 import app.session : ExportOptions, ExportState, StudioSession;
-import gui.renderer : IRenderer2D, RectF;
+import gui.appearance : defaultAppearancePath, FileAppearanceStore, FontResolution, IAppearanceBackend,
+    IAppearanceStore;
+import gui.renderer : ColorRGBA, IRenderer2D, RectF;
+import gui.theme : ContrastMode;
 import gui.views.studio_context : IAudioControl, IStudioClipboard, StudioContext;
 import gui.views.studio_root : StudioRoot;
 import gui.widgets : UiContext;
@@ -133,6 +141,45 @@ final class WindowClipboard : IStudioClipboard {
 }
 
 /**
+ * IAppearanceBackend over the GUI shell's CoreText rasterizer, glyph cache, and Metal renderer.
+ */
+final class ShellAppearanceBackend : IAppearanceBackend {
+    private GuiShell shell_;
+    private string[][2] families_;
+    private bool[2] listed_;
+
+    /**
+     * Wraps shell.
+     *
+     * Params:
+     *   shell = Created GUI shell.
+     */
+    this(GuiShell shell) {
+        shell_ = shell;
+    }
+
+    override string[] fontFamilies(bool monospaceOnly) {
+        immutable size_t k = monospaceOnly ? 1 : 0;
+        if (!listed_[k]) {
+            families_[k] = shell_.rasterizer.listFontFamilies(monospaceOnly);
+            listed_[k] = true;
+        }
+        return families_[k];
+    }
+
+    override FontResolution applyFonts(string uiFamily, string monoFamily) {
+        FontResolution res = shell_.rasterizer.setFonts(uiFamily, monoFamily);
+        shell_.glyphs.reset();
+        return res;
+    }
+
+    override void applyRendererAppearance(ColorRGBA clearColor, float textGamma) {
+        shell_.renderer.clearColor = clearColor;
+        shell_.renderer.textGamma = textGamma;
+    }
+}
+
+/**
  * Studio scene: StudioRoot inside a UiContext plus app-level commands.
  */
 final class StudioScene : IGuiScene {
@@ -140,6 +187,7 @@ final class StudioScene : IGuiScene {
     private StudioRoot root_;
     private UiContext ui_;
     private MacWindow window_;
+    private GuiShell shell_;
     private AudioHost host_;
     private float lastW_ = 0.0f;
     private float lastH_ = 0.0f;
@@ -163,16 +211,32 @@ final class StudioScene : IGuiScene {
      *   host = Audio host (may be null when audio is unavailable).
      *   window = Host window (title, clipboard).
      *   dialogs = File dialogs (null disables dialog commands).
+     *   shell = GUI shell providing fonts, glyph cache, renderer and menus (null: headless appearance).
+     *   store = Appearance preferences store (null: preferences are not persisted).
      */
-    this(StudioSession session, AudioHost host, MacWindow window, IFileDialog dialogs) {
+    this(StudioSession session, AudioHost host, MacWindow window, IFileDialog dialogs, GuiShell shell = null,
+            IAppearanceStore store = null) {
         host_ = host;
         window_ = window;
+        shell_ = shell;
         ctx_ = new StudioContext(session, host is null ? null : new HostAudioControl(host), dialogs,
             window is null ? null : new WindowClipboard(window));
         root_ = new StudioRoot(ctx_);
         root_.appCommandHandler = &performAppCommand;
+        root_.onAppearanceChanged = &syncMenus;
         ui_ = new UiContext(root_);
+        ctx_.appearanceStore = store;
+        if (shell !is null) {
+            ctx_.appearanceBackend = new ShellAppearanceBackend(shell);
+        }
+        ctx_.loadAppearance();
         lastPoll_ = MonoTime.currTime;
+    }
+
+    private void syncMenus() {
+        if (shell_ !is null) {
+            shell_.app.setMenuItemChecked("View", "High Contrast", ctx_.theme.contrast == ContrastMode.high);
+        }
     }
 
     /**
@@ -407,7 +471,9 @@ int runStudioApp(string[] args) {
     scope (exit) {
         if (host !is null) host.close();
     }
-    StudioScene scene = new StudioScene(session, host, shell.window, new MacFileDialog(shell.window));
+    immutable string prefsPath = defaultAppearancePath();
+    StudioScene scene = new StudioScene(session, host, shell.window, new MacFileDialog(shell.window), shell,
+        prefsPath.length > 0 ? new FileAppearanceStore(prefsPath) : null);
     if (!audioOk) {
         scene.context().setStatus("Audio unavailable: " ~ audioErr);
     }
@@ -463,7 +529,7 @@ int runStudioGuiSelfTest(string[] args) {
     import app.keymap : StudioAction;
     import graph.registry : ModuleRegistry;
     import gui.renderer : Point2F;
-    import gui.widgets : ContextMenu, Widget;
+    import gui.widgets : ContextMenu, Dropdown, Widget;
     import platform.interfaces : KeyModifiers;
     import platform.macos.appkit : postSyntheticKey, postSyntheticMouse, postSyntheticScroll;
 
@@ -509,7 +575,9 @@ int runStudioGuiSelfTest(string[] args) {
     dialogs.savePath = buildPath(dir, "workflow.msv");
     dialogs.openPath = dialogs.savePath;
     dialogs.exportPath = buildPath(dir, "workflow.wav");
-    StudioScene scene = new StudioScene(session, host, shell.window, dialogs);
+    immutable string prefsPath = buildPath(dir, "prefs", "appearance.cfg");
+    FileAppearanceStore prefs = new FileAppearanceStore(prefsPath);
+    StudioScene scene = new StudioScene(session, host, shell.window, dialogs, shell, prefs);
     shell.scene = scene;
     StudioRoot root = scene.root();
     auto ctx = scene.context();
@@ -597,6 +665,19 @@ int runStudioGuiSelfTest(string[] args) {
     check("studio window", shell.framesRendered > 0 && audioOk,
         audioOk ? format("%s frames, audio @%.0f Hz", shell.framesRendered, session.sampleRate())
             : "audio unavailable: " ~ audioErr);
+    {
+        import gui.appearance : DEFAULT_MONO_FONT, DEFAULT_UI_FONT;
+        import gui.theme : StudioTheme;
+
+        const f = ctx.fonts;
+        immutable bool lightHc = ctx.theme == StudioTheme.init && scene.ui().theme == StudioTheme.init
+            && shell.renderer.clearColor == StudioTheme.init.background && shell.renderer.textGamma == StudioTheme.init.textGamma;
+        immutable bool fontsOk = f.uiFound && f.monoFound && f.uiFamily == DEFAULT_UI_FONT && f.monoFamily == DEFAULT_MONO_FONT
+            && f.uiWeight == 400.0f && f.monoWeight == 400.0f;
+        check("first launch appearance", lightHc && fontsOk && shell.app.menuItemChecked("View", "High Contrast"),
+            format("%s; UI %s (%.0f, %s); mono %s (%.0f, %s)", ctx.theme.paletteName, f.uiFamily, f.uiWeight, f.uiSource,
+                f.monoFamily, f.monoWeight, f.monoSource));
+    }
 
     immutable uint gen = addModuleViaMenu("Add Synth", "synth.analog_gen");
     immutable uint fm = addModuleViaMenu("Add Synth", "synth.fm_synth");
@@ -835,6 +916,73 @@ int runStudioGuiSelfTest(string[] args) {
         check("export WAV (menu)", exported && getSize(dialogs.exportPath) > 44,
             exported ? format("%s bytes, %s frames", getSize(dialogs.exportPath), session.exportStatus().framesRendered)
                 : "export did not finish: " ~ session.exportStatus().error);
+    }
+
+    {
+        import std.algorithm : canFind;
+        import std.file : readText;
+        import gui.appearance : DEFAULT_MONO_FONT, DEFAULT_UI_FONT;
+        import gui.theme : ContrastMode, StudioTheme;
+        import gui.views.appearance_panel : AppearancePanel;
+
+        RectF[] rects() {
+            return [root.bounds, root.transport.bounds, root.patchbay.bounds, root.rack.bounds, root.scopeView.bounds,
+                root.pattern.bounds, root.timeline.bounds, root.sampleEditor.bounds];
+        }
+        bool pickItem(Dropdown d, size_t i) {
+            click(d.bounds.center());
+            pumpFor(0.05);
+            if (d.popup() is null) return false;
+            immutable RectF ir = d.popup().itemRect(i);
+            if (ir.isEmpty()) return false;
+            click(ir.center());
+            pumpFor(0.05);
+            return d.selectedIndex == i;
+        }
+        const RectF[] before = rects();
+        key(43, ",", KeyModifiers.command);
+        AppearancePanel p = root.appearancePanel();
+        string trace;
+        bool lowOk = false, darkOk = false, fontOk = false, layoutOk = false, reverted = false;
+        if (p !is null) {
+            lowOk = pickItem(p.contrast, 1) && ctx.theme.contrast == ContrastMode.low
+                && !shell.app.menuItemChecked("View", "High Contrast");
+            darkOk = pickItem(p.palette, 2) && !ctx.theme.isLight && shell.renderer.clearColor == ctx.theme.background
+                && scene.ui().theme == ctx.theme;
+            fontOk = pickItem(p.uiFont, 1) && ctx.appearance.uiFont != DEFAULT_UI_FONT && ctx.fonts.uiFound
+                && shell.rasterizer.resolution().uiFamily == ctx.appearance.uiFont;
+            trace = format("low=%s dark=%s font=%s(%s)", lowOk, darkOk, fontOk, ctx.appearance.uiFont);
+            pumpFor(0.2);
+            layoutOk = rects() == before;
+            click(p.revertBtn.bounds.center());
+            pumpFor(0.1);
+            reverted = root.appearancePanel() is null && ctx.theme == StudioTheme.init
+                && ctx.fonts.uiFamily == DEFAULT_UI_FONT && ctx.fonts.monoFamily == DEFAULT_MONO_FONT
+                && shell.app.menuItemChecked("View", "High Contrast") && rects() == before;
+        }
+        check("appearance panel (menu)", p !is null && lowOk && darkOk && fontOk && layoutOk && reverted,
+            format("%s layout=%s reverted=%s", trace, layoutOk, reverted));
+
+        key(8, "c", KeyModifiers.command | KeyModifiers.alt);
+        immutable bool toggledLow = ctx.theme.contrast == ContrastMode.low && !shell.app.menuItemChecked("View", "High Contrast");
+        string saved;
+        try {
+            saved = readText(prefsPath);
+        } catch (Exception) {
+        }
+        StudioContext reload = new StudioContext(session);
+        reload.appearanceStore = new FileAppearanceStore(prefsPath);
+        immutable bool reloaded = reload.loadAppearance() && reload.theme == ctx.theme;
+        key(8, "c", KeyModifiers.command | KeyModifiers.alt);
+        immutable bool toggledHigh = ctx.theme == StudioTheme.init && shell.app.menuItemChecked("View", "High Contrast");
+        string savedHigh;
+        try {
+            savedHigh = readText(prefsPath);
+        } catch (Exception) {
+        }
+        check("contrast toggle + persistence", toggledLow && toggledHigh && saved.canFind("contrast=low")
+            && savedHigh.canFind("contrast=high") && reloaded && rects() == before,
+            format("low=%s high=%s saved=%s reloaded=%s", toggledLow, toggledHigh, saved.canFind("contrast=low"), reloaded));
     }
 
     writefln("Studio GUI self-test: %s/%s checks passed", total - failed, total);

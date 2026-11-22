@@ -16,6 +16,8 @@
  *   Attack/Decay/Sustain/Release params (written with doSetParam inside one edit group). MetaModules list their
  *   child graph; drilling into a child module shows its params with breadcrumbs and a Back button, and child edits
  *   rebuild the child project through setMetaModuleChildProject (not undoable; the UI says so).
+ *   Phase 8.5 (Accessible Appearance): MIDI-learn rows and mapping badges use outlines instead of tints so text
+ *   always sits on a contrast-checked surface.
  *
  * Real-Time & Safety Contract:
  *   UI thread only. All document reads go through ctx.session.document() and are re-read on every sync; rows are
@@ -489,7 +491,8 @@ final class ParamRow : Widget {
 
     override void paint(IRenderer2D r, const ref StudioTheme theme) {
         if (learning) {
-            r.fillRect(bounds, theme.warning.withAlpha(0.18f));
+            r.fillRect(bounds, theme.hover);
+            r.strokeRoundedRect(bounds.inset(1.0f), 0.0f, 2.0f, theme.warning);
         } else if (odd) {
             r.fillRect(bounds, theme.hover);
         }
@@ -502,12 +505,13 @@ final class ParamRow : Widget {
         immutable string vt = learning ? "learning..." : valueText;
         immutable float tw = r.measureText(vt, FontId.mono, theme.fontSizeMono);
         r.drawText(Point2F(bounds.right() - 6.0f - tw, bounds.y + (bounds.h - r.lineHeight(FontId.mono, theme.fontSizeMono)) * 0.5f),
-            vt, FontId.mono, theme.fontSizeMono, learning ? theme.warning : theme.textDim);
+            vt, FontId.mono, theme.fontSizeMono, learning ? theme.text : theme.textDim);
         if (badgeText.length > 0) {
             immutable float bs = theme.fontSizeSmall;
             immutable float bw = r.measureText(badgeText, FontId.ui, bs) + 8.0f;
             immutable RectF br = RectF(bounds.right() - 86.0f - 4.0f - bw, bounds.y + 5.0f, bw, bounds.h - 10.0f);
-            r.fillRoundedRect(br, theme.radiusSm, theme.accent.withAlpha(0.35f));
+            r.fillRoundedRect(br, theme.radiusSm, theme.panelSunken);
+            r.strokeRoundedRect(br, theme.radiusSm, theme.borderWidth, theme.accent);
             r.drawText(Point2F(br.x + 4.0f, br.y + (br.h - r.lineHeight(FontId.ui, bs)) * 0.5f), badgeText, FontId.ui, bs,
                 theme.text);
         }

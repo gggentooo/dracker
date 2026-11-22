@@ -367,6 +367,16 @@ version (unittest) {
             }
             return false;
         }
+
+        bool hasOutlineAt(ColorRGBA c, float y) {
+            foreach (ref inst; r.lastDrawList().instances) {
+                if (inst.kind == InstanceKind.shape && inst.colorBorder == [c.r, c.g, c.b, c.a] && inst.borderWidth > 0.0f
+                    && fabs(inst.rect[1] - y) < 0.01f) {
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 
     unittest {
@@ -554,6 +564,7 @@ version (unittest) {
         assert(v.cursorTrack() == 3 && v.cursorLine() == 6);
         rig.frame();
         assert(rig.hasShapeAt(rig.ui.theme.selection, v.cellRect(1, 2).y));
+        assert(rig.hasOutlineAt(rig.ui.theme.accent, v.cellRect(1, 2).y));
 
         rig.mouse(PlatformEventKind.mouseDown, v.cellRect(3, 6).center());
         rig.mouse(PlatformEventKind.mouseMove, v.cellRect(0, 1).center());
@@ -1130,7 +1141,7 @@ version (unittest) {
         rig.click(v.cellRect(3, 22).center());
         assert(v.cursorTrack() == 3 && v.cursorLine() == 22);
         rig.frame();
-        assert(rig.hasShapeAt(rig.ui.theme.trackerCursor, v.cellRect(3, 22).y));
+        assert(rig.hasOutlineAt(rig.ui.theme.trackerCursor, v.cellRect(3, 22).y));
         assert(!rig.scroll(Point2F(5000.0f, 5000.0f), 0.0f, -100.0f));
     }
 }

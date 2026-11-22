@@ -10,7 +10,10 @@
  *   scissor/texture DrawCommand into the CAMetalLayer drawable, and paces CPU/GPU with a 3-slot
  *   dispatch_semaphore signalled from MTLCommandBuffer completion via objc_blocks_shim.m. Keeps the GlyphCache
  *   R8 atlas texture in sync (dirty-row uploads, recreation on growth) and manages RGBA textures. An offscreen
- *   path renders a DrawList into a texture and reads pixels back for GPU verification tests.
+ *   path renders a DrawList into a texture and reads pixels back for GPU verification tests. Phase 8.5: the
+ *   clear color defaults to white and is set from theme.background on every appearance switch; the DrawList
+ *   glyph coverage gamma (theme.textGamma) is passed to the fragment shader; atlas recreation after
+ *   GlyphCache.reset() or growth drains only the other in-flight frames (fixes a self-deadlock).
  *
  * Real-Time & Safety Contract:
  *   Main UI thread only; every frame (nextDrawable through commit) runs inside a ScopedAutoreleasePool, and all
@@ -22,8 +25,8 @@
  *   External: macOS Metal.framework, QuartzCore.framework (CAMetalLayer), libdispatch (dispatch_semaphore)
  *
  * Planned API (Types, Functions & Hooks):
- *   - class MetalRenderer : BatchRenderer2D (create(), attachLayer(), setVsync(), clearColor, framesSubmitted,
- *     renderOffscreen(), close())
+ *   - class MetalRenderer : BatchRenderer2D (create(), attachLayer(), setVsync(), clearColor, textGamma,
+ *     framesSubmitted, renderOffscreen(), close())
  *
  * See_Also:
  *   architecture.md, dev_plan.md (Phase 7.4)
@@ -96,7 +99,11 @@ private struct UIUniforms {
     float[2] viewportPx = 0.0f;
     float scaleFactor = 1.0f;
     float timeSeconds = 0.0f;
+    float textGamma = 1.0f;
+    float reserved = 0.0f;
 }
+
+static assert(UIUniforms.sizeof == 24, "UIUniforms must match the Metal struct layout");
 
 private immutable string EMBEDDED_SHADER_SOURCE = import("ui2d.metal");
 
@@ -130,7 +137,7 @@ final class MetalRenderer : BatchRenderer2D {
     /**
      * Color used to clear each frame.
      */
-    ColorRGBA clearColor = ColorRGBA(0.08f, 0.09f, 0.10f, 1.0f);
+    ColorRGBA clearColor = ColorRGBA(1.0f, 1.0f, 1.0f, 1.0f);
 
     /**
      * Number of frames presented to the layer.
@@ -267,13 +274,17 @@ final class MetalRenderer : BatchRenderer2D {
      * Blocks until all submitted frames have completed on the GPU.
      */
     void waitForIdle() {
+        drainInFlight(MAX_FRAMES_IN_FLIGHT);
+    }
+
+    private void drainInFlight(uint slots) {
         if (frameSemaphore_ is null) {
             return;
         }
-        foreach (_; 0 .. MAX_FRAMES_IN_FLIGHT) {
+        foreach (_; 0 .. slots) {
             dispatch_semaphore_wait(frameSemaphore_, DISPATCH_TIME_FOREVER);
         }
-        foreach (_; 0 .. MAX_FRAMES_IN_FLIGHT) {
+        foreach (_; 0 .. slots) {
             dispatch_semaphore_signal(frameSemaphore_);
         }
     }
@@ -494,6 +505,13 @@ final class MetalRenderer : BatchRenderer2D {
             cast(ulong) bytesPerRow);
     }
 
+    /**
+     * Uploads glyph atlas changes; recreating the texture (growth or GlyphCache.reset()) first drains the other
+     * in-flight frames, because the caller already holds the current frame's semaphore slot.
+     *
+     * Returns:
+     *   False when the atlas texture cannot be created.
+     */
     private bool syncAtlas() {
         if (glyphs_ is null) {
             if (atlasTexture_ is null) {
@@ -508,7 +526,7 @@ final class MetalRenderer : BatchRenderer2D {
         uint maxY = 0;
         immutable bool dirty = glyphs_.takeDirtyRows(minY, maxY);
         if (atlasTexture_ is null || atlasGeneration_ != glyphs_.generation() || atlasW_ != w || atlasH_ != h) {
-            waitForIdle();
+            drainInFlight(MAX_FRAMES_IN_FLIGHT - 1);
             release(atlasTexture_);
             atlasTexture_ = newTexture(MTLPixelFormatR8Unorm, w, h, MTLTextureUsageShaderRead);
             if (atlasTexture_ is null) {
@@ -568,8 +586,11 @@ final class MetalRenderer : BatchRenderer2D {
         UIUniforms uni;
         uni.viewportPx = [cast(float) list.framebufferWidth, cast(float) list.framebufferHeight];
         uni.scaleFactor = list.scaleFactor;
+        uni.textGamma = list.textGamma;
         send!void(enc, sel("setRenderPipelineState:"), pipeline_);
         send!void(enc, sel("setVertexBytes:length:atIndex:"), cast(const(void)*) &uni, cast(ulong) UIUniforms.sizeof,
+            cast(ulong) 0);
+        send!void(enc, sel("setFragmentBytes:length:atIndex:"), cast(const(void)*) &uni, cast(ulong) UIUniforms.sizeof,
             cast(ulong) 0);
         send!void(enc, sel("setFragmentTexture:atIndex:"), atlasTexture_, cast(ulong) 0);
         send!void(enc, sel("setFragmentTexture:atIndex:"), atlasTexture_, cast(ulong) 1);
@@ -682,4 +703,66 @@ unittest {
     assert(r.updateTextureRGBA(tex, checker));
     r.destroyTexture(tex);
     assert(!r.updateTextureRGBA(tex, checker));
+}
+
+unittest {
+    import gui.appearance : contrastRatio, DEFAULT_MONO_FONT, DEFAULT_UI_FONT;
+    import gui.theme : StudioTheme;
+
+    CoreTextRasterizer ct = new CoreTextRasterizer();
+    scope (exit) ct.close();
+    ct.setFonts(DEFAULT_UI_FONT, DEFAULT_MONO_FONT);
+    GlyphCache cache = new GlyphCache(ct);
+    string err;
+    MetalRenderer r = MetalRenderer.create(cache, err);
+    assert(r !is null, err);
+    scope (exit) r.close();
+    immutable StudioTheme theme = StudioTheme.init;
+    r.clearColor = theme.background;
+
+    float inkSum(float gamma, out ubyte[] px) {
+        r.textGamma = gamma;
+        r.beginFrame(240, 60, 2.0f);
+        r.drawText(Point2F(4, 4), "Hamburgefonstiv 0123", FontId.ui, theme.fontSizeBody, theme.text);
+        r.drawText(Point2F(4, 30), "C-4 40 01 0000", FontId.mono, theme.fontSizeMono, theme.trackerParam);
+        r.endFrame();
+        assert(r.lastDrawList().textGamma == gamma);
+        assert(r.renderOffscreen(*r.lastDrawList(), px));
+        float sum = 0.0f;
+        foreach (y; 0 .. 120) {
+            foreach (x; 0 .. 480) {
+                sum += 255.0f - pixelAt(px, 480, x, y)[1];
+            }
+        }
+        return sum;
+    }
+
+    ubyte[] thick;
+    ubyte[] plain;
+    immutable float inkThemed = inkSum(theme.textGamma, thick);
+    immutable uint gen0 = cache.generation();
+    cache.reset();
+    immutable float inkPlain = inkSum(1.0f, plain);
+    assert(cache.generation() == gen0 + 1 && cache.glyphCount() > 0);
+    assert(theme.textGamma < 1.0f && inkThemed > inkPlain * 1.03f);
+
+    immutable ubyte[4] corner = pixelAt(thick, 480, 470, 2);
+    assert(corner[0] == 255 && corner[1] == 255 && corner[2] == 255);
+    ColorRGBA darkest(uint y0, uint y1) {
+        ColorRGBA best = ColorRGBA(1, 1, 1, 1);
+        float lum = 4.0f;
+        foreach (y; y0 .. y1) {
+            foreach (x; 0 .. 480) {
+                immutable ubyte[4] p = pixelAt(thick, 480, x, y);
+                immutable float l = p[0] + p[1] + p[2];
+                if (l < lum * 255.0f) {
+                    lum = l / 255.0f;
+                    best = ColorRGBA(p[2] / 255.0f, p[1] / 255.0f, p[0] / 255.0f, 1.0f);
+                }
+            }
+        }
+        return best;
+    }
+    assert(contrastRatio(darkest(4, 56), theme.background) >= 7.0f);
+    assert(contrastRatio(darkest(58, 116), theme.background) >= 7.0f);
 }

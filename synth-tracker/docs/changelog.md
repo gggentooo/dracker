@@ -10,6 +10,83 @@ All major changes to `synth-tracker/` must be recorded in reverse-chronological 
 
 ---
 
+## [2026-11-22 16:56:04 KST]
+- **Author:** Claude Opus 5.5 (Claude Code)
+- **Reason / Summary:** Added the user and beta-tester manual, `docs/manual.md`. Documentation only; no code changed.
+  - Covers the studio window, every menu, shared control behavior, the transport, patchbay (adding, wiring and deleting modules), parameter rack (MIDI Learn, curve and envelope editors), pattern editor (cell fields, entry, selection, block operations, effect commands, recording), timeline (clips, clones, Supertracks, loop), sample editor, scope, live keyboard and MIDI, files (`.msv`, WAV export, sample and palette import), appearance and accessibility, undo, a tutorial, a shortcut reference, and a module reference.
+  - Written from a code survey.
+  - Appendix C lists 24 current limitations and quirks found during the survey, with suggested QA passes. Examples: no unsaved-changes prompt; "Cmd+J" menu label vs the real ⌘I; AIFF offered but not decodable; no pattern rename; DrumSynth notes 48/50 never reach the high-tom branch.
+- **Affected Files:**
+  - `synth-tracker/docs/manual.md` (new)
+  - `synth-tracker/docs/changelog.md`
+
+---
+
+## [2026-11-22 16:27:11 KST]
+- **Author:** Claude Opus 5.5 (Claude Code)
+- **Reason / Summary:** Implemented **Phase 8.5: Accessible Appearance**. No UI geometry or font size changed; only font families, colors and contrast did.
+  - **8.5.1 Appearance model.** `gui/theme.d` gained semantic tokens: transport lights, meters, scope traces, module categories, 8 clip colors, `clipText`, `mutedHatch`. It also gained `isLight`, `contrast`, `paletteName`, `textGamma`, `emphasize()`, `wireDash()`, `categoryColor()`, `clipColor()` and token-enumeration tables. `StudioTheme.init` is now "Light · High Contrast · Okabe–Ito"; `StudioTheme.dark()` was removed.
+    - New `gui/appearance.d` provides:
+      - the built-in palettes: Light · Okabe–Ito, Light · Tol Bright, Dark · Okabe–Ito, each with High or Low contrast
+      - custom palettes, and `makeTheme()`, which keeps all metrics
+      - the deterministic Low-contrast derivation
+      - WCAG contrast, the drawn-pair inventory, Machado CVD simulation and CIEDE2000
+      - categorical sets, palette-editor token groups and the contrast readout
+      - strict versioned codecs for `appearance.cfg` and `.stpalette`
+      - an atomic `FileAppearanceStore`
+  - **8.5.2 Hard-coded colors and non-color cues.**
+    - Hard-coded colors removed from: transport lit colors and meters, the timeline HSV hash, the gallery, and the Metal clear color.
+    - `brighten()` hover/pressed effects replaced with `emphasize()`.
+    - Wires carry dash styles: audio solid, sidechain doubled, event dashed, CV dotted.
+    - Port glyph shapes: circle, double circle, square, diamond.
+    - Clips show a letter A–H and a stripe pattern that match their color slot; muted nodes and clips are hatched.
+    - Scope R trace is dashed, with an L/R legend.
+    - The pattern grid uses a single tint per row, plus cursor and selection outlines.
+    - Lit buttons and toggles get strong outlines.
+  - **8.5.3 Fonts.**
+    - `CoreTextRasterizer.setFonts()` resolves families with wght pinned to 400 and reports the source file.
+    - `registerBundledFonts()` registers fonts at process scope; bundled copies win over installed ones.
+    - `listFontFamilies(monospaceOnly)` and `isFixedPitchFamily()` added; missing families fall back to the system font with a status message.
+    - `GlyphCache.reset()` added.
+    - A glyph coverage gamma uniform was added to `ui2d.metal`.
+    - `GuiShell` registers `resources/fonts/` (new, with a README) and selects Atkinson Hyperlegible Next and Fira Code before the first frame.
+  - **8.5.4 Runtime switching.** `StudioContext.applyAppearance()` is the single apply path: theme, renderer clear color and gamma, fonts with cache flush, `themeRevision`, listeners, and persistence. It also adds `loadAppearance()` (defaults plus a status message on corrupt input), `saveAppearance()` and `toggleContrast()`. New `UiContext.setTheme()` relayouts, and `StudioRoot` syncs the UiContext through a theme listener.
+  - **8.5.5 Menus and panel.**
+    - New `StudioAction.openAppearance` (Cmd+,) and `StudioAction.toggleContrast` (Cmd+Option+C).
+    - Menu items: SynthTracker ▸ Settings…, View ▸ Appearance…, and View ▸ High Contrast with a live checkmark (`MacApplication.setMenuItemChecked()`).
+    - New `gui/views/appearance_panel.d`:
+      - font, contrast and palette dropdowns
+      - a custom palette editor (token groups, swatches, R/G/B/A boxes, live contrast readout with OK/BELOW text)
+      - Duplicate, Rename, Delete, Reset, Import…, Export…, Revert and OK buttons
+    - Preferences live in `~/Library/Application Support/SynthTracker/appearance.cfg`.
+  - **Bug fix (pre-existing).** `MetalRenderer.syncAtlas()` deadlocked whenever the atlas texture had to be recreated, because the current frame already held a semaphore slot. It now drains only the other in-flight frames. The first studio self-test run hung on this after the font switch.
+  - **8.5.6 Verification.**
+    - `dub test --config=headless`: 24 modules passed, zero warnings. New tests:
+      - `tests/unit/appearance_test.d`: contrast gate for all 6 appearances, ΔE ≥ 10 under 3 CVD simulations, metric invariance, math reference values, codec strictness, custom editing, store.
+      - `tests/fuzz/appearance_fuzz.d`: 12,000 mutated inputs.
+      - Studio-root integration: identical pane rectangles across switches, every view redrawn in new colors, Cmd+, / Cmd+Option+C, panel preview, OK, Revert and dismiss, reload, corrupt-preference fallback, missing-font status.
+    - `dub test --config=app`: 4 modules passed. New tests:
+      - Both default fonts resolve at wght 400 (Fira Code's file default is 331).
+      - No ligatures: uniform mono advances for `---`, `===`, `->`.
+      - Fallback, monospace-only listing, and bundled-before-installed.
+      - Offscreen Metal render in the default theme: white background, text pixels ≥ 7:1, gamma effect.
+      - Atlas recreation after `reset()`.
+    - Self-tests:
+      - `caffeinate -dims ./build/synth-tracker --studio-gui-selftest` passed 13/13, full and `--quick`. New checks: "first launch appearance", "appearance panel (menu)" (Low contrast → Dark palette → another UI font → Revert, layout unchanged), and "contrast toggle + persistence".
+      - Regressions: `--gui-selftest --quick` 13/13 and `--studio-selftest --quick` 5/5.
+- **Affected Files:**
+  - Created: `synth-tracker/source/gui/appearance.d`, `synth-tracker/source/gui/views/appearance_panel.d`, `synth-tracker/tests/unit/appearance_test.d`, `synth-tracker/tests/fuzz/appearance_fuzz.d`, `synth-tracker/resources/fonts/README.md`
+  - Modified:
+    - `synth-tracker/shaders/ui2d.metal`
+    - `synth-tracker/source/app/{gui_gallery,gui_shell,keymap,studio_app}.d`
+    - `synth-tracker/source/gui/{renderer,theme,widgets}.d`
+    - `synth-tracker/source/gui/views/{param_rack,patchbay_view,pattern_editor,scope_view,studio_context,studio_root,timeline_view,transport_bar}.d`
+    - `synth-tracker/source/platform/macos/{appkit,coretext,metal_renderer}.d`
+    - `synth-tracker/tests/unit/{gui_test,keymap_test,views_pattern_editor_test,views_studio_root_test}.d`
+    - `synth-tracker/agents.md`, `dev_plan.md`, `synth-tracker/docs/changelog.md`
+
+---
+
 ## [2026-11-22 14:30:15 KST]
 - **Author:** Claude Opus 5.5 (Claude Code)
 - **Reason / Summary:** Owner revision: the monospace font is **Fira Code** (installed) instead of Fira Mono (not installed). Documentation only; no code changed.

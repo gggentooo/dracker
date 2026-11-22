@@ -11,6 +11,9 @@
  *   mute/solo/bypass badges, ModuleRegistry add-module and per-node context menus (mute, solo, bypass, duplicate,
  *   delete), signal pulses animated along wires whose source module reports a nonzero telemetry peak, and inline
  *   mini-scopes for up to four recently selected modules.
+ *   Phase 8.5 (Accessible Appearance): colors come only from theme tokens; wire kinds are also encoded by line
+ *   style (audio solid, sidechain doubled, event dashed, CV dotted) and port glyph shape (circle, double circle,
+ *   square, diamond); muted/bypassed nodes are hatched instead of washed out; selection adds an outer outline.
  *
  * Real-Time & Safety Contract:
  *   UI thread only. Every mutation goes through StudioSession (undoable, compiled off-RT by GraphCompiler). The
@@ -44,8 +47,8 @@ import app.keymap : StudioAction, StudioCommandSink;
 import graph.module_api : ModuleCategory, ModuleDescriptor;
 import graph.port : arePortsCompatible, PortDirection, PortKind;
 import graph.registry : ModuleRegistry;
-import gui.renderer : ColorRGBA, FontId, IRenderer2D, Point2F, RectF;
-import gui.theme : StudioTheme;
+import gui.renderer : ColorRGBA, drawDashedPolyline, FontId, IRenderer2D, Point2F, RectF, sampleBezier;
+import gui.theme : StudioTheme, WireDash, WireKind, wireKindOf;
 import gui.views.studio_context : StudioContext;
 import gui.widgets : fillCircle, hasModifier, KeyCode, KeyEvent, MenuItem, MouseButton, MouseEvent, ScrollEvent,
     UiContext, Widget;
@@ -1477,16 +1480,7 @@ final class PatchbayView : Widget, StudioCommandSink {
     }
 
     private ColorRGBA categoryColor(const ref StudioTheme theme, ModuleCategory c) const {
-        final switch (c) {
-        case ModuleCategory.core:
-            return theme.warning;
-        case ModuleCategory.synth:
-            return theme.accent;
-        case ModuleCategory.effect:
-            return theme.wireSidechain;
-        case ModuleCategory.control:
-            return theme.wireCv;
-        }
+        return theme.categoryColor(c);
     }
 
     private static string categoryLabel(ModuleCategory c) {
@@ -1543,13 +1537,13 @@ final class PatchbayView : Widget, StudioCommandSink {
             immutable float peak = modulePeak(w.src);
             if (peak > PATCHBAY_PULSE_THRESHOLD) {
                 immutable float glow = peak > 1.0f ? 1.0f : peak;
-                r.drawBezier(p0, c0, c1, p1, width + 5.0f, col.withAlpha(0.15f + 0.35f * glow));
+                r.drawBezier(p0, c0, c1, p1, width + 5.0f, col.withAlpha(0.10f + 0.25f * glow));
             }
-            r.drawBezier(p0, c0, c1, p1, width, col);
+            drawStyledWire(r, p0, c0, c1, p1, width, col, StudioTheme.wireDash(wireKindOf(w.kind)));
             if (peak > PATCHBAY_PULSE_THRESHOLD) {
                 float t = phase + cast(float)(i % 7) * 0.13f;
                 t -= floor(t);
-                fillCircle(r, patchbayBezierPoint(p0, c0, c1, p1, t), width + 1.5f, col.brighten(0.35f));
+                fillCircle(r, patchbayBezierPoint(p0, c0, c1, p1, t), width + 1.5f, theme.emphasize(col, 0.35f));
             }
         }
     }
@@ -1576,7 +1570,8 @@ final class PatchbayView : Widget, StudioCommandSink {
         immutable Point2F p0 = worldToView(a);
         Point2F c0, c1;
         curveControls(p0, wireCursor_, c0, c1);
-        r.drawBezier(p0, c0, c1, wireCursor_, theme.wireWidth * 1.5f, theme.portColor(k).withAlpha(0.85f));
+        drawStyledWire(r, p0, c0, c1, wireCursor_, theme.wireWidth * 1.5f, theme.portColor(k),
+            StudioTheme.wireDash(wireKindOf(k)));
     }
 
     private void drawNode(IRenderer2D r, const ref StudioTheme theme, const ref NodeCache n) {
@@ -1590,17 +1585,22 @@ final class PatchbayView : Widget, StudioCommandSink {
         immutable ColorRGBA cat = categoryColor(theme, n.category);
         r.fillRoundedRect(v.translate(0.0f, 2.0f * zoom_), rad, theme.shadow);
         if (n.isOutput) {
-            r.fillRoundedRectGradient(v, rad, theme.panelRaised.brighten(0.08f), theme.panel);
+            r.fillRoundedRectGradient(v, rad, theme.emphasize(theme.panelRaised, 0.04f), theme.panelRaised);
         } else {
             r.fillRoundedRect(v, rad, theme.panelRaised);
         }
         immutable RectF header = RectF(v.x, v.y, v.w, PATCHBAY_HEADER_HEIGHT * zoom_);
-        r.fillRoundedRect(header, rad, cat.withAlpha(n.isOutput ? 0.55f : 0.3f));
+        r.fillRoundedRect(header, rad, cat.withAlpha(theme.categoryTint(n.isOutput)));
         r.fillRect(RectF(v.x, v.y + rad, 3.0f * zoom_, v.h - 2.0f * rad), cat);
+        if (n.muted || n.bypassed) {
+            drawHatch(r, RectF(v.x, header.bottom(), v.w, v.h - header.h), theme.mutedHatch,
+                (n.muted ? 6.0f : 11.0f) * zoom_);
+        }
         if (selected) {
             r.strokeRoundedRect(v, rad, 2.0f, theme.accentHot);
+            r.strokeRoundedRect(v.inset(-3.0f), rad + 3.0f, 1.0f, theme.accentHot);
         } else if (n.isOutput) {
-            r.strokeRoundedRect(v, rad, 2.0f, theme.warning);
+            r.strokeRoundedRect(v, rad, 2.0f, theme.categoryCore);
         } else {
             r.strokeRoundedRect(v, rad, theme.borderWidth, theme.border);
         }
@@ -1626,8 +1626,100 @@ final class PatchbayView : Widget, StudioCommandSink {
             drawBadges(r, theme, n);
         }
         drawPorts(r, theme, n);
-        if (n.muted || n.bypassed) {
-            r.fillRoundedRect(v, rad, theme.background.withAlpha(n.muted ? 0.45f : 0.3f));
+    }
+
+    private static void drawHatch(IRenderer2D r, RectF area, ColorRGBA color, float spacing) {
+        if (area.isEmpty() || !(spacing > 1.0f)) {
+            return;
+        }
+        r.pushClip(area);
+        for (float d = -area.h; d < area.w; d += spacing) {
+            r.drawLine(Point2F(area.x + d, area.bottom()), Point2F(area.x + d + area.h, area.y), 1.0f, color);
+        }
+        r.popClip();
+    }
+
+    private Point2F[] wireScratch_;
+
+    private void drawStyledWire(IRenderer2D r, Point2F p0, Point2F c0, Point2F c1, Point2F p1, float width,
+            ColorRGBA col, WireDash dash) {
+        final switch (dash) {
+        case WireDash.solid:
+            r.drawBezier(p0, c0, c1, p1, width, col);
+            break;
+        case WireDash.dashed:
+            sampleBezier(p0, c0, c1, p1, 2.0f, wireScratch_);
+            drawDashedPolyline(r, wireScratch_, width, col, 9.0f * zoom_, 5.0f * zoom_);
+            break;
+        case WireDash.dotted:
+            sampleBezier(p0, c0, c1, p1, 2.0f, wireScratch_);
+            drawDashedPolyline(r, wireScratch_, width * 1.25f, col, 0.01f, 4.5f * zoom_ + width);
+            break;
+        case WireDash.doubled:
+            sampleBezier(p0, c0, c1, p1, 2.0f, wireScratch_);
+            drawOffsetPair(r, wireScratch_, width, col);
+            break;
+        }
+    }
+
+    private static void drawOffsetPair(IRenderer2D r, const(Point2F)[] pts, float width, ColorRGBA col) {
+        if (pts.length < 2) {
+            return;
+        }
+        immutable float off = width * 0.9f;
+        immutable float lw = width * 0.65f;
+        foreach (i; 1 .. pts.length) {
+            immutable Point2F d = pts[i] - pts[i - 1];
+            immutable float len = d.length();
+            if (!(len > 0.0f)) {
+                continue;
+            }
+            immutable Point2F nrm = Point2F(-d.y / len * off, d.x / len * off);
+            r.drawLine(pts[i - 1] + nrm, pts[i] + nrm, lw, col);
+            r.drawLine(pts[i - 1] - nrm, pts[i] - nrm, lw, col);
+        }
+    }
+
+    private static void drawPortGlyph(IRenderer2D r, const ref StudioTheme theme, Point2F q, float pr, PortKind kind,
+            bool input) {
+        immutable ColorRGBA c = theme.portColor(kind);
+        final switch (wireKindOf(kind)) {
+        case WireKind.audio:
+            fillCircle(r, q, pr, c);
+            if (input) {
+                fillCircle(r, q, pr * 0.45f, theme.panelSunken);
+            }
+            break;
+        case WireKind.sidechain:
+            fillCircle(r, q, pr, c);
+            fillCircle(r, q, pr * 0.72f, theme.panelSunken);
+            fillCircle(r, q, pr * 0.48f, c);
+            if (input) {
+                fillCircle(r, q, pr * 0.2f, theme.panelSunken);
+            }
+            break;
+        case WireKind.event:
+            immutable float h = pr * 0.9f;
+            r.fillRoundedRect(RectF(q.x - h, q.y - h, 2.0f * h, 2.0f * h), pr * 0.15f, c);
+            if (input) {
+                immutable float k = h * 0.45f;
+                r.fillRect(RectF(q.x - k, q.y - k, 2.0f * k, 2.0f * k), theme.panelSunken);
+            }
+            break;
+        case WireKind.cv:
+            immutable float d = pr * 1.15f;
+            immutable int strips = 9;
+            foreach (s; 0 .. strips) {
+                immutable float y0 = q.y - d + 2.0f * d * s / strips;
+                immutable float yc = y0 + d / strips;
+                immutable float half = d - abs(yc - q.y);
+                r.fillRect(RectF(q.x - half, y0, 2.0f * half, 2.0f * d / strips + 0.25f), c);
+            }
+            if (input) {
+                immutable float k = d * 0.32f;
+                r.fillRect(RectF(q.x - k, q.y - k, 2.0f * k, 2.0f * k), theme.panelSunken);
+            }
+            break;
         }
     }
 
@@ -1677,8 +1769,7 @@ final class PatchbayView : Widget, StudioCommandSink {
                 immutable bool hot = (wireCursor_ - q).length() <= portHitRadius();
                 fillCircle(r, q, pr + (hot ? 5.0f : 3.0f), (hot ? theme.accentHot : theme.success).withAlpha(0.6f));
             }
-            fillCircle(r, q, pr, theme.portColor(p.kind));
-            fillCircle(r, q, pr * 0.45f, theme.panelSunken);
+            drawPortGlyph(r, theme, q, pr, p.kind, true);
         }
         foreach (ref p; n.outputs) {
             Point2F w;
@@ -1687,7 +1778,7 @@ final class PatchbayView : Widget, StudioCommandSink {
             if (wiring && n.id == dragModule_ && p.index == wirePort_) {
                 fillCircle(r, q, pr + 3.0f, theme.accentHot.withAlpha(0.6f));
             }
-            fillCircle(r, q, pr, theme.portColor(p.kind));
+            drawPortGlyph(r, theme, q, pr, p.kind, false);
         }
     }
 

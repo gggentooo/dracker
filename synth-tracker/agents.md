@@ -209,20 +209,20 @@ Each phase below tracks status with `[ ]` / `[x]`. Do not mark any item `[x]` un
   - `[x]` `8.6` Full `app/session.d` + `app/keymap.d` integration & 60+ fps stress pass
 - **Exit Criteria:** View/controller unit & integration tests pass; full end-to-end musical workflow succeeds purely via GUI at 60+ fps with zero audio glitches under heavy polyphonic playback.
 
-### `[ ]` Phase 8.5 — Accessible Appearance: Atkinson Hyperlegible Next, Light High-Contrast, Colorblind-Safe Palettes & Appearance Menu *(Deps: Phase 8)*
+### `[x]` Phase 8.5 — Accessible Appearance: Atkinson Hyperlegible Next, Light High-Contrast, Colorblind-Safe Palettes & Appearance Menu *(Deps: Phase 8)*
 > Inserted 2026-11-22 at the owner's request (visual impairment; dark mode is hard to read). Full design: [`dev_plan.md` Phase 8.5](../dev_plan.md). Subtask IDs are `8.5.x`. **Hard constraint:** no UI geometry or font **size** changes; only font family, colors, and contrast change.
 > **Owner decisions:** the UI font is Atkinson Hyperlegible Next and the monospace font is Fira Code, both SIL OFL 1.1 and shipped inside the app in Phase 9.1. The Low-contrast floor is confirmed at 4.5:1 for text.
 - **Subtasks:**
-  - `[ ]` `8.5.1` Appearance model (`gui/theme.d` semantic tokens + new `gui/appearance.d`): built-in palettes (default **Light / High Contrast / Okabe–Ito**, plus Light Low-Contrast and Dark High/Low variants), custom palettes, WCAG contrast and color-vision-deficiency validators
-  - `[ ]` `8.5.2` Remove dark-mode assumptions and hard-coded colors across `gui/widgets.d`, all views, gallery, and `MetalRenderer.clearColor`; add non-color redundancy cues (port shapes, wire dash patterns, clip labels/stripes, status glyphs)
-  - `[ ]` `8.5.3` Font family selection in `platform/macos/coretext.d`:
+  - `[x]` `8.5.1` Appearance model (`gui/theme.d` semantic tokens + new `gui/appearance.d`): built-in palettes (default **Light / High Contrast / Okabe–Ito**, plus Light Low-Contrast and Dark High/Low variants), custom palettes, WCAG contrast and color-vision-deficiency validators
+  - `[x]` `8.5.2` Remove dark-mode assumptions and hard-coded colors across `gui/widgets.d`, all views, gallery, and `MetalRenderer.clearColor`; add non-color redundancy cues (port shapes, wire dash patterns, clip labels/stripes, status glyphs)
+  - `[x]` `8.5.3` Font family selection in `platform/macos/coretext.d`:
     - defaults: Atkinson Hyperlegible Next for the UI and **Fira Code** for monospace, both requested at Regular 400 (Fira Code's variable default is Light)
     - process-scope registration of bundled fonts (`resources/fonts/` in dev builds, `Contents/Resources/Fonts` in the app), resolved before installed fonts
     - monospace selection restricted to fixed-pitch families, installed-family enumeration, verified fallback
     - glyph-cache/atlas flush and dark-on-light text coverage gamma
-  - `[ ]` `8.5.4` Runtime theme switching: `StudioContext.themeRevision`, one apply path (context + `UiContext` + renderer clear color + rasterizer fonts + relayout), revision-keyed cache invalidation in every view
-  - `[ ]` `8.5.5` Appearance menu & panel: native **View ▸ Appearance…** and **View ▸ High Contrast** items, new `StudioAction`s + keymap bindings, in-app Appearance panel (UI font, monospace font, High/Low contrast, palette presets, custom palette editor with live contrast readout, palette import/export), persistent preferences file
-  - `[ ]` `8.5.6` Verification: unit tests and GUI self-test checks for contrast, CVD separation, size invariance, font loading, live switching, persistence
+  - `[x]` `8.5.4` Runtime theme switching: `StudioContext.themeRevision`, one apply path (context + `UiContext` + renderer clear color + rasterizer fonts + relayout), revision-keyed cache invalidation in every view
+  - `[x]` `8.5.5` Appearance menu & panel: native **View ▸ Appearance…** and **View ▸ High Contrast** items, new `StudioAction`s + keymap bindings, in-app Appearance panel (UI font, monospace font, High/Low contrast, palette presets, custom palette editor with live contrast readout, palette import/export), persistent preferences file
+  - `[x]` `8.5.6` Verification: unit tests and GUI self-test checks for contrast, CVD separation, size invariance, font loading, live switching, persistence
 - **Exit Criteria:**
   - On first launch the studio renders in light high-contrast mode, with Atkinson Hyperlegible Next as the UI font and Fira Code as the monospace (pattern grid) font.
   - Every text/background token pair used by the UI meets WCAG AAA (≥ 7:1) in High contrast and ≥ 4.5:1 in Low contrast, for every built-in palette. Non-text UI graphics (wires, borders, focus rings, meters) meet ≥ 4.5:1 (High) / ≥ 3:1 (Low). These ratios are measured both from tokens and from offscreen-rendered pixels.
@@ -230,6 +230,7 @@ Each phase below tracks status with `[ ]` / `[x]`. Do not mark any item `[x]` un
   - All theme size metrics and the root/pane layout rectangles are unchanged from Phase 8.
   - Font, contrast, and palette changes from the menu apply live without restart, persist across launches, and survive corrupted preference files (defaults + status message).
   - The preferences parser passes 10k+ fuzzed inputs. All prior unit tests and the `--gui-selftest` / `--studio-selftest` / `--studio-gui-selftest` runs still pass.
+- **Completion note (2026-11-22):** All exit criteria are verified by tests (see `docs/changelog.md`). Starting palette values were adjusted by the contrast and CVD gates; the final values and other deviations from the plan text are listed under "Implementation notes" in [`dev_plan.md` Phase 8.5](../dev_plan.md).
 
 ### `[ ]` Phase 9 — macOS `.app` Packaging, Universal Binary, Profiling & Hardening *(Deps: Phase 8, 8.5)*
 - **Subtasks:**

@@ -29,7 +29,7 @@
  *       onFocusGained/Lost, onCaptureLost, onDismissed, isAnimating(), contextMenuProvider
  *   - final class UiContext : handleEvent(PlatformEvent), layout(RectF, ITextMeasurer), draw(IRenderer2D[, theme]),
  *       renderFrame(IRenderer2D, scale), needsRedraw, isAnimating(), setFocus/focusNext/focusPrevious, capture/releaseCapture,
- *       openOverlay/closeOverlay/closeAllOverlays, hitTest(Point2F)
+ *       openOverlay/closeOverlay/closeAllOverlays, hitTest(Point2F), setTheme(StudioTheme)
  *   - struct ValueRange; abstract class ValueWidget; class Panel / Label / Button / Toggle / Slider / RotaryKnob /
  *       NumericDragBox / Dropdown / DropdownList / ContextMenu (struct MenuItem) / ScrollView (struct ScrollBarModel) /
  *       SplitView / CurveEditor / EnvelopeEditor
@@ -919,6 +919,21 @@ final class UiContext {
     }
 
     /**
+     * Adopts a new theme between frames, re-measuring and re-arranging the tree and overlays over the last
+     * viewport (font family changes alter text advances; theme metrics themselves are unchanged by palettes).
+     *
+     * Params:
+     *   t = Theme.
+     */
+    void setTheme(const ref StudioTheme t) {
+        theme = t;
+        if (!viewport_.isEmpty()) {
+            layout(viewport_);
+        }
+        needsRedraw_ = true;
+    }
+
+    /**
      * Draws the tree then overlays, and clears needsRedraw. Does not begin or end the frame.
      *
      * Params:
@@ -1787,10 +1802,10 @@ class Button : Widget {
         ColorRGBA bottom = theme.panelRaised;
         if (pressed_) {
             top = theme.accent;
-            bottom = theme.accent.brighten(-0.15f);
+            bottom = theme.emphasize(theme.accent, 0.08f);
         } else if (isHovered() && on) {
-            top = top.brighten(0.06f);
-            bottom = bottom.brighten(0.06f);
+            top = theme.emphasize(top, 0.06f);
+            bottom = theme.emphasize(bottom, 0.06f);
         }
         r.fillRoundedRectGradient(bounds, theme.radiusMd, top, bottom);
         r.strokeRoundedRect(bounds, theme.radiusMd, theme.borderWidth, theme.border);
@@ -2432,7 +2447,7 @@ class RotaryKnob : ValueWidget {
             drawArc(r, c, rad, 0.0f, n, on ? theme.accent : theme.textDisabled);
         }
         immutable float bodyR = rad * 0.72f;
-        fillCircle(r, c, bodyR, isHovered() || isDragging() ? theme.panelRaised.brighten(0.06f) : theme.panelRaised);
+        fillCircle(r, c, bodyR, isHovered() || isDragging() ? theme.emphasize(theme.panelRaised, 0.06f) : theme.panelRaised);
         immutable float a = angleFor(n);
         immutable Point2F tip = Point2F(c.x + cos(a) * bodyR, c.y + sin(a) * bodyR);
         r.drawLine(Point2F(c.x + cos(a) * bodyR * 0.35f, c.y + sin(a) * bodyR * 0.35f), tip, 2.0f, on ? theme.text : theme.textDim);
@@ -2659,7 +2674,7 @@ class NumericDragBox : ValueWidget {
 
     override void paint(IRenderer2D r, const ref StudioTheme theme) {
         immutable bool on = isEffectivelyEnabled();
-        r.fillRoundedRect(bounds, theme.radiusSm, editing_ ? theme.panelSunken.brighten(0.04f) : theme.panelSunken);
+        r.fillRoundedRect(bounds, theme.radiusSm, editing_ ? theme.emphasize(theme.panelSunken, 0.04f) : theme.panelSunken);
         r.strokeRoundedRect(bounds, theme.radiusSm, theme.borderWidth, isDragging() ? theme.accent : theme.border);
         immutable string txt = displayText();
         immutable float size = theme.fontSizeMono;
@@ -3046,7 +3061,7 @@ class Dropdown : Widget {
 
     override void paint(IRenderer2D r, const ref StudioTheme theme) {
         immutable bool on = isEffectivelyEnabled();
-        r.fillRoundedRectGradient(bounds, theme.radiusMd, theme.panelRaised.brighten(isHovered() ? 0.08f : 0.04f), theme.panelRaised);
+        r.fillRoundedRectGradient(bounds, theme.radiusMd, isHovered() ? theme.emphasize(theme.panelRaised.brighten(0.04f), 0.06f) : theme.panelRaised.brighten(0.04f), theme.panelRaised);
         r.strokeRoundedRect(bounds, theme.radiusMd, theme.borderWidth, isOpen() ? theme.accent : theme.border);
         immutable float size = theme.fontSizeBody;
         immutable float lh = r.lineHeight(FontId.ui, size);

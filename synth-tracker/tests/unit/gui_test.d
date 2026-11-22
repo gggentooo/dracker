@@ -34,6 +34,7 @@ version (unittest) {
     import gui.layout;
     import gui.renderer;
     import gui.theme;
+    import gui.appearance : builtinPalettes, makeTheme;
     import gui.widgets;
     import platform.interfaces : KeyModifiers, PlatformEvent, PlatformEventKind;
 
@@ -786,8 +787,8 @@ version (unittest) {
     }
 
     unittest {
-        immutable StudioTheme t = StudioTheme.dark();
-        assert(t == StudioTheme.init);
+        immutable StudioTheme t = StudioTheme.light();
+        assert(t == StudioTheme.init && t.isLight && t.contrast == ContrastMode.high);
         assert(t.wireColor(WireKind.audio) == t.wireAudio);
         assert(t.wireColor(WireKind.sidechain) == t.wireSidechain);
         assert(t.wireColor(WireKind.event) == t.wireEvent);
@@ -808,7 +809,7 @@ version (unittest) {
         assert(near(big.scrollbarThickness, t.scrollbarThickness * 2.0f) && near(big.radiusLg, t.radiusLg * 2.0f));
         assert(big.accent == t.accent && big.wireCv == t.wireCv);
         assert(t.scaled(-1.0f) == t && t.scaled(float.nan) == t && t.scaled(float.infinity) == t);
-        assert(t.text.a == 1.0f && t.background.r < t.text.r);
+        assert(t.text.a == 1.0f && t.background.r > t.text.r);
     }
 
     unittest {
@@ -2217,7 +2218,7 @@ version (unittest) {
         auto h = new Harness(split, RectF(0, 0, 404, 500));
         h.ctx.setFocus(btn);
         h.renderer.beginFrame(404, 500, 2.0f);
-        StudioTheme darkTheme = StudioTheme.dark();
+        StudioTheme darkTheme = makeTheme(builtinPalettes()[2], ContrastMode.high);
         h.ctx.draw(h.renderer, darkTheme);
         h.renderer.endFrame();
         assert(!h.ctx.needsRedraw);

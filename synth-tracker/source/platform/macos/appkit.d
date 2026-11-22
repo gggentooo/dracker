@@ -25,7 +25,7 @@
  *             CoreGraphics.framework (CGEventCreateScrollWheelEvent2), libproc (proc_pid_rusage)
  *
  * Planned API (Types, Functions & Hooks):
- *   - struct MacApplication : initialize(), mainMenu(), menuKeyEquivalent()
+ *   - struct MacApplication : initialize(), mainMenu(), menuKeyEquivalent(), setMenuItemChecked(), menuItemChecked()
  *   - class MacWindow : IPlatformWindow (+ waitEvents(), wake(), setContentSize(), usePrivatePasteboard(), isVisibleOnScreen(), setFloating(), markedText(), windowNumber(), liveResizeHandler)
  *   - class MacFileDialog : IFileDialog (+ selfTestAutoDismissSeconds, lastSheetWasAttached)
  *   - uint translateModifierFlags(ulong) / postSyntheticKey() / postSyntheticFlags() / postSyntheticMouse()
@@ -159,6 +159,7 @@ private enum uint QUIT_KEYCODE = uint.max;
 
 private immutable MenuSpec[][] MENU_ITEMS = [
     [
+        MenuSpec("Settings…", ",", KeyModifiers.command, 43, null),
         MenuSpec("Hide SynthTracker", "h", KeyModifiers.command, 0, "hide:"),
         MenuSpec("Quit SynthTracker", "q", KeyModifiers.command, QUIT_KEYCODE, null)
     ],
@@ -184,7 +185,9 @@ private immutable MenuSpec[][] MENU_ITEMS = [
     [
         MenuSpec("Zoom In", "=", KeyModifiers.command, 24, null),
         MenuSpec("Zoom Out", "-", KeyModifiers.command, 27, null),
-        MenuSpec("Actual Size", "0", KeyModifiers.command, 29, null)
+        MenuSpec("Actual Size", "0", KeyModifiers.command, 29, null),
+        MenuSpec("Appearance…", "", KeyModifiers.command, 43, null),
+        MenuSpec("High Contrast", "c", KeyModifiers.command | KeyModifiers.alt, 8, null)
     ],
     [
         MenuSpec("Minimize", "m", KeyModifiers.command, 0, "performMiniaturize:"),
@@ -271,6 +274,47 @@ struct MacApplication {
         keyEquivalent = fromNSString(send(item, sel("keyEquivalent")));
         modifiers = translateModifierFlags(send!ulong(item, sel("keyEquivalentModifierMask")));
         return true;
+    }
+
+    /**
+     * Sets or clears the checkmark of a menu item (e.g. View ▸ High Contrast).
+     *
+     * Params:
+     *   menuTitle = Top-level menu title.
+     *   itemTitle = Item title.
+     *   checked = New state.
+     *
+     * Returns:
+     *   False when the item does not exist.
+     */
+    bool setMenuItemChecked(string menuTitle, string itemTitle, bool checked) {
+        auto pool = ScopedAutoreleasePool.enter();
+        id top = send(mainMenu(), sel("itemWithTitle:"), nsString(menuTitle));
+        id sub = top is null ? null : send(top, sel("submenu"));
+        id item = sub is null ? null : send(sub, sel("itemWithTitle:"), nsString(itemTitle));
+        if (item is null) {
+            return false;
+        }
+        send!void(item, sel("setState:"), cast(long)(checked ? 1 : 0));
+        return true;
+    }
+
+    /**
+     * Reads the checkmark state of a menu item.
+     *
+     * Params:
+     *   menuTitle = Top-level menu title.
+     *   itemTitle = Item title.
+     *
+     * Returns:
+     *   True when the item exists and is checked.
+     */
+    bool menuItemChecked(string menuTitle, string itemTitle) {
+        auto pool = ScopedAutoreleasePool.enter();
+        id top = send(mainMenu(), sel("itemWithTitle:"), nsString(menuTitle));
+        id sub = top is null ? null : send(top, sel("submenu"));
+        id item = sub is null ? null : send(sub, sel("itemWithTitle:"), nsString(itemTitle));
+        return item !is null && send!long(item, sel("state")) == 1;
     }
 
     private void buildMenuBar() {

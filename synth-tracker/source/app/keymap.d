@@ -72,7 +72,9 @@ enum StudioAction : ubyte {
     zoomOut = 35,
     zoomReset = 36,
     exportWav = 37,
-    quit = 38
+    quit = 38,
+    openAppearance = 39,
+    toggleContrast = 40
 }
 
 /**
@@ -95,7 +97,8 @@ interface StudioCommandSink {
  * Classifies a StudioAction as document-level (executed by the session regardless of focus).
  *
  * Document-level: playToggle, stop, recordToggle, octaveUp/Down, undo, redo, saveProject, saveProjectAs,
- * openProject, newProject, panic, playPattern, toggleLoop, exportWav, quit. Every other action except
+ * openProject, newProject, panic, playPattern, toggleLoop, exportWav, quit, openAppearance, toggleContrast.
+ * Every other action except
  * none (selection, cell/block editing, transpose, interpolate, navigation, follow, edit step, zoom) is
  * view-level and must be forwarded to the focused StudioCommandSink.
  *
@@ -123,6 +126,8 @@ bool isDocumentLevel(StudioAction action) @nogc nothrow pure @safe {
         case StudioAction.toggleLoop:
         case StudioAction.exportWav:
         case StudioAction.quit:
+        case StudioAction.openAppearance:
+        case StudioAction.toggleContrast:
             return true;
         default:
             return false;
@@ -253,6 +258,8 @@ struct Keymap {
         km.bindAction(StudioAction.zoomReset, 29, KeyModifiers.command);
         km.bindAction(StudioAction.exportWav, 14, KeyModifiers.command);
         km.bindAction(StudioAction.quit, 12, KeyModifiers.command);
+        km.bindAction(StudioAction.openAppearance, 43, KeyModifiers.command);
+        km.bindAction(StudioAction.toggleContrast, 8, KeyModifiers.command | KeyModifiers.alt);
         return km;
     }
 

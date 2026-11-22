@@ -24,9 +24,11 @@
  *   - enum FontId / enum InstanceKind / struct UIInstance / struct DrawCommand / struct DrawList
  *   - interface ITextMeasurer / interface IRenderer2D
  *   - struct RasterizedGlyph / interface IGlyphRasterizer / struct AtlasGlyph / struct ShelfAtlasPacker / class GlyphCache
- *   - abstract class BatchRenderer2D : IRenderer2D (submitFrame(), createTexture hooks)
+ *     (lookup(), reset() after a font family change)
+ *   - abstract class BatchRenderer2D : IRenderer2D (submitFrame(), createTexture hooks, textGamma)
  *   - class HeadlessRenderer : BatchRenderer2D
  *   - size_t decodeUtf8(const(char)[] s, ref size_t index, out dchar cp)
+ *   - drawDashedPolyline(), sampleBezier() (non-color wire-kind line styles)
  *
  * See_Also:
  *   architecture.md, dev_plan.md
@@ -347,6 +349,7 @@ struct DrawList {
     uint framebufferWidth = 0;
     uint framebufferHeight = 0;
     float scaleFactor = 1.0f;
+    float textGamma = 1.0f;
 
     /**
      * Clears recorded work while retaining allocated capacity.
@@ -910,6 +913,19 @@ class GlyphCache {
     }
 
     /**
+     * Drops every cached glyph and clears the atlas (after a font family change); bumps the generation so
+     * backends recreate their atlas texture, and marks the whole atlas dirty.
+     */
+    void reset() {
+        glyphs_ = null;
+        missing_ = null;
+        packer_.reset(ATLAS_WIDTH, INITIAL_HEIGHT);
+        pixels_ = new ubyte[cast(size_t) ATLAS_WIDTH * INITIAL_HEIGHT];
+        generation_++;
+        markDirty(0, INITIAL_HEIGHT);
+    }
+
+    /**
      * Returns line metrics for a physical pixel size.
      *
      * Params:
@@ -960,6 +976,11 @@ class GlyphCache {
  * Backend-agnostic batching renderer: converts IRenderer2D calls into a DrawList and hands it to submitFrame().
  */
 abstract class BatchRenderer2D : IRenderer2D {
+    /**
+     * Glyph coverage exponent recorded into each DrawList (< 1 thickens text; set from the theme).
+     */
+    float textGamma = 1.0f;
+
     protected DrawList list_;
     protected GlyphCache glyphs_;
     private RectF[] clipStack_;
@@ -1022,6 +1043,7 @@ abstract class BatchRenderer2D : IRenderer2D {
         logicalH_ = logicalHeight > 0.0f ? logicalHeight : 0.0f;
         list_.clear();
         list_.scaleFactor = scale_;
+        list_.textGamma = isFinite(textGamma) && textGamma > 0.25f && textGamma < 4.0f ? textGamma : 1.0f;
         list_.framebufferWidth = cast(uint) ceil(logicalW_ * scale_);
         list_.framebufferHeight = cast(uint) ceil(logicalH_ * scale_);
         if (clipStack_.length < 16) {
@@ -1338,6 +1360,81 @@ Point2F evalCubic(Point2F p0, Point2F c0, Point2F c1, Point2F p1, float t) @safe
         b0 * p0.x + b1 * c0.x + b2 * c1.x + b3 * p1.x,
         b0 * p0.y + b1 * c0.y + b2 * c1.y + b3 * p1.y
     );
+}
+
+/**
+ * Draws an open polyline as dashes (dashLength on, gapLength off, measured along the path in logical points).
+ *
+ * Params:
+ *   r = Renderer.
+ *   points = Vertices.
+ *   width = Thickness in logical points.
+ *   color = Line color.
+ *   dashLength = Visible dash length (> 0).
+ *   gapLength = Gap length (>= 0; 0 draws a solid line).
+ *
+ * Returns:
+ *   Number of dash segments drawn.
+ */
+size_t drawDashedPolyline(IRenderer2D r, const(Point2F)[] points, float width, ColorRGBA color, float dashLength,
+        float gapLength) {
+    if (points.length < 2 || !(dashLength > 0.0f)) {
+        return 0;
+    }
+    if (!(gapLength > 0.0f)) {
+        r.drawPolyline(points, width, color);
+        return points.length - 1;
+    }
+    immutable float period = dashLength + gapLength;
+    float phase = 0.0f;
+    size_t drawn = 0;
+    foreach (i; 1 .. points.length) {
+        immutable Point2F a = points[i - 1];
+        immutable Point2F b = points[i];
+        immutable float len = (b - a).length();
+        if (!(len > 0.0f) || !isFinite(len)) {
+            continue;
+        }
+        float s = 0.0f;
+        while (s < len) {
+            immutable float inPeriod = phase;
+            immutable bool on = inPeriod < dashLength;
+            immutable float remain = on ? dashLength - inPeriod : period - inPeriod;
+            immutable float step = remain < len - s ? remain : len - s;
+            if (on && step > 0.0f) {
+                immutable float t0 = s / len;
+                immutable float t1 = (s + step) / len;
+                r.drawLine(Point2F(a.x + (b.x - a.x) * t0, a.y + (b.y - a.y) * t0),
+                    Point2F(a.x + (b.x - a.x) * t1, a.y + (b.y - a.y) * t1), width, color);
+                drawn++;
+            }
+            s += step;
+            phase += step;
+            if (phase >= period - 1e-4f) {
+                phase = 0.0f;
+            }
+        }
+    }
+    return drawn;
+}
+
+/**
+ * Samples a cubic Bezier into a polyline using the renderer tessellation density.
+ *
+ * Params:
+ *   p0 = Start point.
+ *   c0 = First control point.
+ *   c1 = Second control point.
+ *   p1 = End point.
+ *   scale = Pixels per point.
+ *   outPoints = Receives the vertices (resized).
+ */
+void sampleBezier(Point2F p0, Point2F c0, Point2F c1, Point2F p1, float scale, ref Point2F[] outPoints) {
+    immutable size_t segments = bezierSegmentCount(p0, c0, c1, p1, scale);
+    outPoints.length = segments + 1;
+    foreach (i; 0 .. segments + 1) {
+        outPoints[i] = evalCubic(p0, c0, c1, p1, cast(float) i / cast(float) segments);
+    }
 }
 
 /**

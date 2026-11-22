@@ -11,19 +11,22 @@
  *   Phase 7 exit criteria on the real window: menu key equivalents, raw keyDown/keyUp/modifier/repeat and IME
  *   text, menu shortcut routing (Cmd+Z/Cmd+Shift+Z/Cmd+Q), flipped mouse coordinates, trackpad scroll,
  *   clipboard round-trip, native open/save sheets, Retina drawable sizing and live resize, vsync frame rate,
- *   idle CPU, and zero autorelease/malloc and GC heap growth across 100,000 presented Metal frames.
+ *   idle CPU, and zero autorelease/malloc and GC heap growth across 100,000 presented Metal frames. Phase 8.5:
+ *   create() registers bundled fonts at process scope (bundledFontDirectories()) and selects the default
+ *   Atkinson Hyperlegible Next / Fira Code families before the first frame.
  *
  * Real-Time & Safety Contract:
  *   Main UI thread only; never touches the audio thread. All Objective-C work is delegated to
  *   platform.macos.* which wraps it in autorelease pools.
  *
  * Dependencies:
- *   Internal: gui.renderer, platform.interfaces, platform.macos.{appkit,coretext,metal_renderer}
+ *   Internal: gui.{appearance,renderer}, platform.interfaces, platform.macos.{appkit,coretext,metal_renderer}
  *   External: core.time, std.stdio, std.format
  *
  * Planned API (Types, Functions & Hooks):
  *   - interface IGuiScene : handleEvent(), draw(), needsRedraw(), isAnimating()
  *   - class GuiShell : create(), runLoop(), renderFrame(), shutdown()
+ *   - string[] bundledFontDirectories()
  *   - int runStudioGui(string[] args) / int runGuiSelfTest(string[] args)
  *
  * See_Also:
@@ -41,6 +44,7 @@ import gui.renderer : GlyphCache, IRenderer2D, Point2F, RectF;
 import platform.interfaces : KeyModifiers, PlatformEvent, PlatformEventKind, WindowDesc;
 import platform.macos.appkit : MacApplication, MacFileDialog, MacWindow, postSyntheticFlags, postSyntheticKey,
     postSyntheticMouse, postSyntheticScroll, processCpuSeconds, processFootprintBytes, mallocBytesInUse;
+import gui.appearance : DEFAULT_MONO_FONT, DEFAULT_UI_FONT, FontResolution;
 import platform.macos.coretext : CoreTextRasterizer;
 import platform.macos.metal_renderer : MetalRenderer;
 
@@ -85,6 +89,31 @@ interface IGuiScene {
 }
 
 /**
+ * Returns the directories searched for bundled fonts: Contents/Resources/Fonts inside an app bundle, and
+ * resources/fonts next to the build directory in development builds.
+ *
+ * Returns:
+ *   Existing directories, bundle first.
+ */
+string[] bundledFontDirectories() {
+    import std.file : exists, isDir, thisExePath;
+    import std.path : buildNormalizedPath, dirName;
+
+    string[] dirs;
+    try {
+        immutable string exeDir = dirName(thisExePath());
+        foreach (candidate; [buildNormalizedPath(exeDir, "..", "Resources", "Fonts"),
+                buildNormalizedPath(exeDir, "..", "resources", "fonts")]) {
+            if (exists(candidate) && isDir(candidate)) {
+                dirs ~= candidate;
+            }
+        }
+    } catch (Exception) {
+    }
+    return dirs;
+}
+
+/**
  * Native window + renderer + scene main loop.
  */
 final class GuiShell {
@@ -98,6 +127,16 @@ final class GuiShell {
     bool forceRedraw = true;
     ulong framesRendered = 0;
     ulong occludedTicks = 0;
+    /**
+     * Number of bundled font files registered at process scope during create().
+     */
+    size_t bundledFontFiles = 0;
+
+    /**
+     * Fonts resolved for the default appearance during create().
+     */
+    FontResolution fontResolution;
+
     private MonoTime start_;
     private PlatformEvent[256] events_;
     private void delegate(const ref PlatformEvent) eventObserver_;
@@ -124,6 +163,10 @@ final class GuiShell {
         }
         app.setCommandTarget(window);
         rasterizer = new CoreTextRasterizer();
+        foreach (dir; bundledFontDirectories()) {
+            bundledFontFiles += rasterizer.registerBundledFonts(dir);
+        }
+        fontResolution = rasterizer.setFonts(DEFAULT_UI_FONT, DEFAULT_MONO_FONT);
         glyphs = new GlyphCache(rasterizer);
         renderer = MetalRenderer.create(glyphs, err);
         if (renderer is null) {

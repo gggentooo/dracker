@@ -8,6 +8,8 @@
  *   zero-crossing trigger), a log-frequency FFT spectrum (20 Hz .. Nyquist, -90..0 dBFS grid, attack/release
  *   smoothing and decaying peak hold) or a goniometer (mid/side vectorscope). A mode button and a source dropdown
  *   ("Master" / "Selected module") sit in a header strip; choosing the selected module requests a scope tap.
+ *   Phase 8.5 (Accessible Appearance): traces use the scopeTraceL/R tokens; the right channel (and spectrum
+ *   peak hold) is dashed and an L/R legend is drawn, so channels are not distinguished by color alone.
  *
  * Real-Time & Safety Contract:
  *   UI thread only; zero locking against the RT thread. Samples come from StudioContext.scopes (ScopeHistory,
@@ -33,7 +35,7 @@ module gui.views.scope_view;
 import core.time : MonoTime;
 import std.math : floor, log10, pow, SQRT1_2;
 
-import gui.renderer : ColorRGBA, FontId, IRenderer2D, ITextMeasurer, Point2F, RectF;
+import gui.renderer : ColorRGBA, drawDashedPolyline, FontId, IRenderer2D, ITextMeasurer, Point2F, RectF;
 import gui.theme : StudioTheme;
 import gui.widgets : Button, Dropdown, Widget;
 import gui.views.studio_context : StudioContext;
@@ -411,13 +413,15 @@ final class ScopeView : Widget {
             }
         }
         immutable float halfH = plot_.h * 0.5f - 1.0f;
-        drawnPoints_ = traceChannel(r, left_[startIdx .. startIdx + count], ptsL_, midY, halfH, theme.wireAudio);
-        drawnPoints_ += traceChannel(r, right_[startIdx .. startIdx + count], ptsR_, midY, halfH,
-            theme.wireSidechain.withAlpha(0.8f));
+        drawnPoints_ = traceChannel(r, left_[startIdx .. startIdx + count], ptsL_, midY, halfH, theme.scopeTraceL,
+            false);
+        drawnPoints_ += traceChannel(r, right_[startIdx .. startIdx + count], ptsR_, midY, halfH, theme.scopeTraceR,
+            true);
+        drawTraceLegend(r, theme);
     }
 
     private size_t traceChannel(IRenderer2D r, const(float)[] samples, ref Point2F[] pts, float midY, float halfH,
-            ColorRGBA color) {
+            ColorRGBA color, bool dashed) {
         immutable size_t cols = plot_.w >= 2.0f ? cast(size_t) plot_.w : 2;
         immutable size_t count = samples.length;
         size_t k = 0;
@@ -450,9 +454,25 @@ final class ScopeView : Widget {
             }
         }
         if (k >= 2) {
-            r.drawPolyline(pts[0 .. k], 1.25f, color);
+            if (dashed) {
+                drawDashedPolyline(r, pts[0 .. k], 1.25f, color, 4.0f, 2.0f);
+            } else {
+                r.drawPolyline(pts[0 .. k], 1.25f, color);
+            }
         }
         return k;
+    }
+
+    private void drawTraceLegend(IRenderer2D r, const ref StudioTheme theme) {
+        immutable float size = theme.fontSizeSmall;
+        immutable float lh = r.lineHeight(FontId.ui, size);
+        immutable float x = plot_.right() - 46.0f;
+        immutable float y = plot_.y + 4.0f;
+        r.drawText(Point2F(x, y), "L", FontId.ui, size, theme.textDim);
+        r.drawLine(Point2F(x + 10.0f, y + lh * 0.5f), Point2F(x + 20.0f, y + lh * 0.5f), 1.5f, theme.scopeTraceL);
+        r.drawText(Point2F(x + 24.0f, y), "R", FontId.ui, size, theme.textDim);
+        immutable Point2F[2] seg = [Point2F(x + 34.0f, y + lh * 0.5f), Point2F(x + 44.0f, y + lh * 0.5f)];
+        drawDashedPolyline(r, seg[], 1.5f, theme.scopeTraceR, 4.0f, 2.0f);
     }
 
     private float nyquist() const {
@@ -561,8 +581,8 @@ final class ScopeView : Widget {
             ptsL_[c] = Point2F(x, yOfDb(smooth_[c]));
             ptsR_[c] = Point2F(x, yOfDb(peak_[c]));
         }
-        r.drawPolyline(ptsR_[0 .. cols], 1.0f, theme.textDim.withAlpha(0.7f));
-        r.drawPolyline(ptsL_[0 .. cols], 1.5f, theme.wireAudio);
+        drawDashedPolyline(r, ptsR_[0 .. cols], 1.0f, theme.textDim, 3.0f, 2.0f);
+        r.drawPolyline(ptsL_[0 .. cols], 1.5f, theme.scopeTraceL);
         drawnPoints_ = 2 * cols;
     }
 
@@ -587,7 +607,7 @@ final class ScopeView : Widget {
             immutable float mid = left_[i] + right_[i];
             ptsL_[i] = Point2F(c.x + side * k, c.y - mid * k);
         }
-        r.drawPolyline(ptsL_[0 .. n], 1.0f, theme.wireCv.withAlpha(0.75f));
+        r.drawPolyline(ptsL_[0 .. n], 1.0f, theme.scopeTraceL);
         drawnPoints_ = n;
     }
 }

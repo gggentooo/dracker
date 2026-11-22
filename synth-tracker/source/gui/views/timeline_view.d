@@ -17,6 +17,9 @@
  *   horizontal scroll pans, vertical scroll moves lanes, Cmd+scroll / pinch / zoom actions zoom around a point.
  *   Snapping: no modifier snaps to beats (4 lines), Shift snaps to single lines, Cmd snaps to bars (16 lines).
  *   Resizing is right-edge only because no session API changes a clip's patternOffset.
+ *   Phase 8.5 (Accessible Appearance): clip fills use the eight categorical theme clip colors; each pattern's
+ *   color slot also selects its letter label (A-H) and bottom stripe pattern; dimmed clips are hatched; all clip
+ *   text uses clipText. (The "Phase 8.5" above is the Phase 8 subtask ID, not the appearance phase.)
  *
  * Real-Time & Safety Contract:
  *   UI thread only; every edit goes through StudioSession (CoW TimelineSnapshots). The document is re-read every
@@ -36,6 +39,7 @@
  *     loopStripRect(), contentRect(), headerRect(), laneMuteRect(uint), laneSoloRect(uint),
  *     laneSupertrackRect(uint), hitClip(Point2F, out bool), selectedClip(), selectClip(uint); child ids "timeline.ruler", "timeline.loop"
  *   - enum TimelineDragMode; final class TimelineStrip : Widget (ruler / loop strip children)
+ *   - static patternSlot(uint), static patternColor(StudioTheme, uint) (categorical clip color slot)
  *
  * See_Also:
  *   architecture_proposal.md, dev_plan_proposal.md
@@ -46,7 +50,7 @@ import std.format : sformat;
 import std.math : ceil, exp, floor, round;
 
 import app.keymap : StudioAction, StudioCommandSink;
-import gui.renderer : ColorRGBA, FontId, IRenderer2D, Point2F, RectF;
+import gui.renderer : ColorRGBA, drawDashedPolyline, FontId, IRenderer2D, Point2F, RectF;
 import gui.theme : StudioTheme;
 import gui.views.studio_context : StudioContext;
 import gui.widgets : KeyCode, KeyEvent, MenuItem, MouseButton, MouseEvent, ScrollEvent, Widget, hasModifier;
@@ -1755,7 +1759,8 @@ final class TimelineView : Widget, StudioCommandSink {
         immutable bool dimmed = c.mute || (anySolo_ && !c.solo);
         immutable bool dragging = isClipDrag() && dragMoved_ && c.clipId == dragClip_
             && drag_ != TimelineDragMode.clone;
-        ColorRGBA fill = patternColor(c.patternId);
+        immutable size_t slot = patternSlot(c.patternId);
+        ColorRGBA fill = theme.clipColor(slot);
         if (dimmed) {
             fill = fill.lerp(theme.panelSunken, 0.65f);
         }
@@ -1764,6 +1769,13 @@ final class TimelineView : Widget, StudioCommandSink {
         }
         immutable float radius = cr.w < 8.0f ? 1.0f : theme.radiusMd;
         r.fillRoundedRect(cr, radius, fill);
+        if (dimmed) {
+            drawClipHatch(r, cr.intersect(content), theme.mutedHatch);
+        }
+        if (cr.w >= 14.0f && cr.h >= 10.0f) {
+            drawClipStripe(r, vis, cr, slot, theme.clipText);
+        }
+        r.strokeRoundedRect(cr, radius, theme.borderWidth, theme.borderStrong);
         if (c.solo) {
             r.strokeRoundedRect(cr, radius, 2.0f, theme.success);
         }
@@ -1775,17 +1787,21 @@ final class TimelineView : Widget, StudioCommandSink {
         }
         if (isSelected) {
             r.strokeRoundedRect(cr, radius, 2.0f, theme.text);
+            r.strokeRoundedRect(cr.inset(-2.0f), radius + 2.0f, 1.0f, theme.accentHot);
         }
         if (cr.w >= 14.0f) {
-            immutable ColorRGBA tc = dimmed ? theme.textDim : theme.text;
+            immutable ColorRGBA tc = theme.clipText;
             r.pushClip(vis.inset(1.0f));
             float tx = (cr.x > content.x ? cr.x : content.x) + 4.0f;
+            immutable char[1] letter = [cast(char)('A' + slot)];
+            r.drawText(Point2F(tx, cr.y + 2.0f), letter[], FontId.ui, theme.fontSizeSmall, tc);
+            tx += r.measureText("W ", FontId.ui, theme.fontSizeSmall);
             if (c.cloneSourceId != 0) {
-                r.drawText(Point2F(tx, cr.y + 2.0f), "⧉", FontId.ui, theme.fontSizeSmall, theme.warning);
+                r.drawText(Point2F(tx, cr.y + 2.0f), "⧉", FontId.ui, theme.fontSizeSmall, tc);
                 tx += r.measureText("⧉ ", FontId.ui, theme.fontSizeSmall);
             }
             if (c.isSupertrack) {
-                r.drawText(Point2F(tx, cr.y + 2.0f), "ST", FontId.ui, theme.fontSizeSmall, theme.wireEvent);
+                r.drawText(Point2F(tx, cr.y + 2.0f), "ST", FontId.ui, theme.fontSizeSmall, tc);
                 tx += r.measureText("ST ", FontId.ui, theme.fontSizeSmall);
             }
             const(SavedPattern)* sp = findPattern(c.patternId);
@@ -1826,7 +1842,7 @@ final class TimelineView : Widget, StudioCommandSink {
         immutable float th = h / mp.tracks;
         immutable float mh = th > 1.5f ? th - 0.5f : 1.0f;
         immutable float mw = ppl_ > 2.0f ? ppl_ - 1.0f : 1.0f;
-        immutable ColorRGBA mc = (dimmed ? theme.textDim : theme.trackerNote).withAlpha(0.75f);
+        immutable ColorRGBA mc = theme.clipText.withAlpha(dimmed ? 0.55f : 0.75f);
         long k0 = cast(long) floor(lineAtF(vis.x)) - c.startLine;
         long k1 = cast(long) ceil(lineAtF(vis.right())) - c.startLine;
         k0 = k0 < 0 ? 0 : k0;
@@ -1899,11 +1915,11 @@ final class TimelineView : Widget, StudioCommandSink {
             r.drawText(Point2F(hr.x + theme.spacingMd, y + 4.0f), s, FontId.mono, theme.fontSizeSmall, theme.text);
             immutable bool used = l < laneCount_ && laneClipCount_[l] > 0;
             if (used && laneAnySuper_[l]) {
-                r.fillRoundedRect(RectF(hr.x + 4.0f, y + laneHeight - 8.0f, 24.0f, 4.0f), 2.0f, theme.wireEvent);
+                r.fillRoundedRect(RectF(hr.x + 4.0f, y + laneHeight - 8.0f, 24.0f, 4.0f), 2.0f, theme.accent);
             }
             paintHeaderButton(r, theme, headerButton(l, 0), "M", used && laneMuted_[l] != 0, theme.warning, used);
             paintHeaderButton(r, theme, headerButton(l, 1), "S", used && laneSolo_[l] != 0, theme.success, used);
-            paintHeaderButton(r, theme, headerButton(l, 2), "ST", used && laneSuper_[l] != 0, theme.wireEvent,
+            paintHeaderButton(r, theme, headerButton(l, 2), "ST", used && laneSuper_[l] != 0, theme.accent,
                 used);
         }
         r.popClip();
@@ -1924,45 +1940,70 @@ final class TimelineView : Widget, StudioCommandSink {
     private static void paintHeaderButton(IRenderer2D r, const ref StudioTheme theme, RectF b, string label, bool on,
             ColorRGBA onColor, bool enabledState) {
         r.fillRoundedRect(b, theme.radiusSm, on ? onColor : theme.panelRaised);
-        r.strokeRoundedRect(b, theme.radiusSm, 1.0f, theme.border);
+        r.strokeRoundedRect(b, theme.radiusSm, on ? 2.0f : 1.0f, on ? theme.borderStrong : theme.border);
         immutable ColorRGBA tc = on ? theme.accentText : (enabledState ? theme.text : theme.textDisabled);
         r.drawText(Point2F(b.x + 4.0f, b.y + 1.0f), label, FontId.ui, theme.fontSizeSmall, tc);
     }
 
     /**
-     * Returns the stable display color of a pattern (hashed hue).
+     * Returns the categorical color slot (0-7) of a pattern; the slot selects the theme clip color, the letter
+     * label (A-H) and the stripe pattern, so the three cues always agree.
      *
      * Params:
      *   patternId = Pattern id.
      *
      * Returns:
-     *   Color.
+     *   Slot index.
      */
-    static ColorRGBA patternColor(uint patternId) @safe nothrow pure @nogc {
-        uint h = patternId * 2_654_435_761u;
-        h ^= h >> 15;
-        immutable float hue = (h % 360u) / 60.0f;
-        immutable float s = 0.55f;
-        immutable float v = 0.62f;
-        immutable int sector = cast(int) hue;
-        immutable float f = hue - sector;
-        immutable float p = v * (1.0f - s);
-        immutable float q = v * (1.0f - s * f);
-        immutable float t = v * (1.0f - s * (1.0f - f));
-        switch (sector) {
-        case 0:
-            return ColorRGBA(v, t, p, 1.0f);
-        case 1:
-            return ColorRGBA(q, v, p, 1.0f);
-        case 2:
-            return ColorRGBA(p, v, t, 1.0f);
-        case 3:
-            return ColorRGBA(p, q, v, 1.0f);
-        case 4:
-            return ColorRGBA(t, p, v, 1.0f);
-        default:
-            return ColorRGBA(v, p, q, 1.0f);
+    static size_t patternSlot(uint patternId) @safe nothrow pure @nogc {
+        return patternId == 0 ? 0 : (patternId - 1) % 8;
+    }
+
+    /**
+     * Returns the display color of a pattern in a theme.
+     *
+     * Params:
+     *   theme = Theme.
+     *   patternId = Pattern id.
+     *
+     * Returns:
+     *   Clip fill color.
+     */
+    static ColorRGBA patternColor(const ref StudioTheme theme, uint patternId) @safe nothrow pure @nogc {
+        return theme.clipColor(patternSlot(patternId));
+    }
+
+    private static void drawClipHatch(IRenderer2D r, RectF area, ColorRGBA color) {
+        if (area.isEmpty()) {
+            return;
         }
+        r.pushClip(area);
+        for (float d = -area.h; d < area.w; d += 7.0f) {
+            r.drawLine(Point2F(area.x + d, area.bottom()), Point2F(area.x + d + area.h, area.y), 1.0f, color);
+        }
+        r.popClip();
+    }
+
+    private static void drawClipStripe(IRenderer2D r, RectF vis, RectF cr, size_t slot, ColorRGBA color) {
+        static immutable float[2][8] patterns = [[1000.0f, 0.0f], [10.0f, 4.0f], [4.0f, 3.0f], [0.01f, 4.0f],
+            [8.0f, 3.0f], [1000.0f, 0.0f], [16.0f, 8.0f], [0.01f, 8.0f]];
+        immutable float y = cr.bottom() - 3.0f;
+        immutable float x0 = (vis.x > cr.x ? vis.x : cr.x) + 3.0f;
+        immutable float x1 = (vis.right() < cr.right() ? vis.right() : cr.right()) - 3.0f;
+        if (x1 <= x0) {
+            return;
+        }
+        r.pushClip(vis);
+        if (slot == 5) {
+            immutable Point2F[2] a = [Point2F(x0, y - 1.5f), Point2F(x1, y - 1.5f)];
+            immutable Point2F[2] b = [Point2F(x0, y + 0.5f), Point2F(x1, y + 0.5f)];
+            r.drawPolyline(a[], 1.0f, color);
+            r.drawPolyline(b[], 1.0f, color);
+        } else {
+            immutable Point2F[2] seg = [Point2F(x0, y), Point2F(x1, y)];
+            drawDashedPolyline(r, seg[], 2.0f, color, patterns[slot][0], patterns[slot][1]);
+        }
+        r.popClip();
     }
 
     /**

@@ -1,26 +1,31 @@
 /**
  * File:         source/gui/views/studio_context.d
  * Module:       gui.views.studio_context
- * Phase:        Phase 8 — Shared Studio View Context
+ * Phase:        Phase 8 — Shared Studio View Context (Phase 8.5 appearance apply path)
  *
  * Purpose:
  *   The single object every studio view is constructed with. It exposes the StudioSession (all document edits go
  *   through it), the theme, shared selection state (selected module, current pattern, recording, follow-playhead,
  *   edit step, edit octave), per-frame telemetry (StudioTelemetry + ScopeHistory), scope-tap allocation, live MIDI
  *   note events for recording, a status line, and platform services behind small interfaces (audio/MIDI control,
- *   file dialogs, clipboard) so every view stays headless-testable with fakes.
+ *   file dialogs, clipboard, appearance backend and preferences store) so every view stays headless-testable with
+ *   fakes. Phase 8.5: applyAppearance() is the one place an appearance switch happens (theme build, renderer
+ *   clear color and glyph gamma, font families and glyph-cache flush, themeRevision bump, listener notification
+ *   for UiContext relayout, persistence); loadAppearance() restores preferences before the first frame and falls
+ *   back to defaults with a status message when they are missing or corrupt.
  *
  * Real-Time & Safety Contract:
  *   UI thread only. tick() is called once per frame by the studio scene before input dispatch and drawing.
  *
  * Dependencies:
- *   Internal: app.{audio_host,session,telemetry}, foundation.types, gui.theme, platform.interfaces
+ *   Internal: app.{audio_host,session,telemetry}, foundation.types, gui.{appearance,theme}, platform.interfaces
  *   External: None
  *
  * Planned API (Types, Functions & Hooks):
  *   - interface IAudioControl / interface IStudioClipboard
  *   - class StudioContext : tick(), selectModule(), selectPattern(), requestScopeTaps(), takeMidiNotes(),
- *     setStatus(), revision counters
+ *     setStatus(), revision counters, applyAppearance(), loadAppearance(), saveAppearance(), toggleContrast(),
+ *     themeRevision(), onThemeChanged()
  *
  * See_Also:
  *   architecture.md, dev_plan.md (Phase 8)
@@ -30,7 +35,9 @@ module gui.views.studio_context;
 import app.audio_host : AudioLoadTelemetry;
 import app.session : MidiNoteEvent, StudioSession;
 import app.telemetry : makeStudioTelemetry, ScopeHistory, StudioTelemetry;
-import gui.theme : StudioTheme;
+import gui.appearance : AppearanceSettings, decodeAppearance, encodeAppearance, FontResolution, IAppearanceBackend,
+    IAppearanceStore, themeFor;
+import gui.theme : ContrastMode, StudioTheme;
 import platform.interfaces : AudioDeviceInfo, IFileDialog, MidiDeviceInfo, MidiPacket;
 
 /**
@@ -144,6 +151,10 @@ final class StudioContext {
     IAudioControl audio;
     IFileDialog dialogs;
     IStudioClipboard clipboard;
+    IAppearanceBackend appearanceBackend;
+    IAppearanceStore appearanceStore;
+    AppearanceSettings appearance;
+    FontResolution fonts;
     ScopeHistory scopes;
     StudioTelemetry telemetry;
 
@@ -162,6 +173,8 @@ final class StudioContext {
     private MidiNoteEvent[] midiNotes_;
     private MidiPacket[256] midiScratch_;
     private ulong frame_ = 0;
+    private ulong themeRevision_ = 1;
+    private void delegate()[] themeListeners_;
 
     /**
      * Creates a context over session.
@@ -178,7 +191,7 @@ final class StudioContext {
         this.audio = audio;
         this.dialogs = dialogs;
         this.clipboard = clipboard;
-        this.theme = StudioTheme.dark();
+        this.theme = StudioTheme.light();
         this.scopes = new ScopeHistory(8192);
         const doc = session.document();
         if (doc.patterns.length > 0) {
@@ -374,6 +387,113 @@ final class StudioContext {
      */
     ulong statusRevision() const {
         return statusRevision_;
+    }
+
+    /**
+     * Applies an appearance everywhere in one step: builds the theme, updates the renderer clear color and glyph
+     * gamma, switches font families (flushing the glyph cache), bumps themeRevision, notifies listeners (the
+     * studio root relayouts its UiContext), and optionally persists the settings.
+     *
+     * Params:
+     *   s = Appearance settings.
+     *   persist = True to write the settings through appearanceStore.
+     */
+    void applyAppearance(AppearanceSettings s, bool persist = true) {
+        appearance = s;
+        theme = themeFor(s);
+        if (appearanceBackend !is null) {
+            fonts = appearanceBackend.applyFonts(s.uiFont, s.monoFont);
+            appearanceBackend.applyRendererAppearance(theme.background, theme.textGamma);
+            if (!fonts.uiFound || !fonts.monoFound) {
+                string msg = "Font not found:";
+                if (!fonts.uiFound) msg ~= " \"" ~ s.uiFont ~ "\" (using " ~ fonts.uiFamily ~ ")";
+                if (!fonts.monoFound) msg ~= " \"" ~ s.monoFont ~ "\" (using " ~ fonts.monoFamily ~ ")";
+                setStatus(msg);
+            }
+        }
+        themeRevision_++;
+        foreach (l; themeListeners_) {
+            l();
+        }
+        if (persist) {
+            string err;
+            if (appearanceStore !is null && !saveAppearance(err)) {
+                setStatus("Could not save appearance: " ~ err);
+            }
+        }
+    }
+
+    /**
+     * Loads and applies the stored appearance; missing settings apply the defaults silently, corrupt settings
+     * apply the defaults and set a status message.
+     *
+     * Returns:
+     *   True if stored settings were loaded.
+     */
+    bool loadAppearance() {
+        string text;
+        if (appearanceStore is null || !appearanceStore.load(text)) {
+            applyAppearance(AppearanceSettings.init, false);
+            return false;
+        }
+        AppearanceSettings s;
+        string err;
+        if (!decodeAppearance(text, s, err)) {
+            applyAppearance(AppearanceSettings.init, false);
+            setStatus("Appearance settings ignored (" ~ err ~ "); using defaults");
+            return false;
+        }
+        applyAppearance(s, false);
+        return true;
+    }
+
+    /**
+     * Writes the current appearance through appearanceStore.
+     *
+     * Params:
+     *   err = Receives a diagnostic on failure.
+     *
+     * Returns:
+     *   True on success (false when there is no store).
+     */
+    bool saveAppearance(out string err) {
+        if (appearanceStore is null) {
+            err = "no preferences store";
+            return false;
+        }
+        return appearanceStore.save(encodeAppearance(appearance), err);
+    }
+
+    /**
+     * Switches between High and Low contrast, keeping font and palette.
+     */
+    void toggleContrast() {
+        AppearanceSettings s = appearance;
+        s.contrast = s.contrast == ContrastMode.high ? ContrastMode.low : ContrastMode.high;
+        applyAppearance(s);
+        setStatus(s.contrast == ContrastMode.high ? "High contrast" : "Low contrast");
+    }
+
+    /**
+     * Returns a counter bumped by every applyAppearance() (theme-keyed caches compare against it).
+     *
+     * Returns:
+     *   Theme revision.
+     */
+    ulong themeRevision() const {
+        return themeRevision_;
+    }
+
+    /**
+     * Registers a callback run after every appearance switch.
+     *
+     * Params:
+     *   listener = Callback.
+     */
+    void onThemeChanged(void delegate() listener) {
+        if (listener !is null) {
+            themeListeners_ ~= listener;
+        }
     }
 
     private bool moduleExists(uint id) const {

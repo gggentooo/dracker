@@ -1,24 +1,32 @@
 /**
  * File:         source/platform/macos/coretext.d
  * Module:       platform.macos.coretext
- * Phase:        Phase 7.3 — CoreText Retina Glyph Atlas Rasterizer
+ * Phase:        Phase 7.3 — CoreText Retina Glyph Atlas Rasterizer (Phase 8.5 font family selection)
  *
  * Purpose:
- *   Implements gui.renderer.IGlyphRasterizer with CoreText + CoreGraphics: rasterizes the system UI sans-serif
- *   and the user fixed-pitch (tracker) font at exact physical pixel sizes into 8-bit grayscale coverage
- *   bitmaps that GlyphCache packs into the dynamically grown R8 Metal atlas. Missing glyphs fall back to
- *   CTFontCreateForString cascade fonts; surrogate pairs are supported.
+ *   Implements gui.renderer.IGlyphRasterizer with CoreText + CoreGraphics: rasterizes the UI font and the
+ *   fixed-pitch (tracker) font at exact physical pixel sizes into 8-bit grayscale coverage bitmaps that
+ *   GlyphCache packs into the dynamically grown R8 Metal atlas. Missing glyphs fall back to CTFontCreateForString
+ *   cascade fonts; surrogate pairs are supported. Phase 8.5: setFonts() selects families by name at Regular
+ *   weight (variable fonts are pinned to wght 400 through kCTFontVariationAttribute, because e.g. Fira Code's
+ *   default instance is Light), resolving bundled fonts registered at process scope by registerBundledFonts()
+ *   before installed copies, and falling back to the system UI / fixed-pitch font when a family is missing or a
+ *   monospace request is not fixed-pitch. listFontFamilies() enumerates installed families (optionally only
+ *   fixed-pitch ones). Glyphs are rasterized per code point without shaping, so programming ligatures (Fira
+ *   Code "->", "===") never apply and tracker strings keep uniform advances.
  *
  * Real-Time & Safety Contract:
  *   Main UI thread only; every CoreFoundation/CoreGraphics object is released deterministically (per-size
- *   CTFont cache released by close()/destructor, per-glyph contexts released immediately).
+ *   CTFont cache and font descriptors released by setFonts()/close()/destructor, per-glyph contexts released
+ *   immediately). Font registration is process-scoped: nothing is installed system-wide.
  *
  * Dependencies:
  *   Internal: gui.renderer, platform.macos.corefoundation
  *   External: macOS CoreText.framework, CoreGraphics.framework
  *
  * Planned API (Types, Functions & Hooks):
- *   - class CoreTextRasterizer : IGlyphRasterizer (rasterize(), lineMetrics(), close())
+ *   - class CoreTextRasterizer : IGlyphRasterizer (rasterize(), lineMetrics(), close(), setFonts(), resolution(),
+ *     registerBundledFonts(), listFontFamilies(), isFixedPitchFamily())
  *
  * See_Also:
  *   architecture.md, dev_plan.md (Phase 7.3)
@@ -27,16 +35,23 @@ module platform.macos.coretext;
 
 version (OSX):
 
-import std.math : ceil, floor, isFinite;
+import std.math : ceil, fabs, floor, isFinite;
 
+import gui.appearance : FontResolution;
 import gui.renderer : FontId, IGlyphRasterizer, RasterizedGlyph;
-import platform.macos.corefoundation : CFIndex, CFRange, CFRelease, CFStringRef, CFTypeRef, createCFString;
+import platform.macos.corefoundation : CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef, CFIndex, CFRange,
+    CFRelease, CFRetain, CFStringRef, CFTypeRef, cfStringToDString, createCFString;
 
 private alias CTFontRef = const(void)*;
 private alias CGContextRef = void*;
 private alias CGColorSpaceRef = void*;
 private alias CGGlyph = ushort;
 private alias UniChar = ushort;
+private alias CTFontDescriptorRef = const(void)*;
+private alias CFDictionaryRef = const(void)*;
+private alias CFNumberRef = const(void)*;
+private alias CFURLRef = const(void)*;
+private alias CFErrorRef = void*;
 
 private struct CGPointD {
     double x = 0.0;
@@ -57,6 +72,12 @@ private enum int kCTFontUIFontUserFixedPitch = 1;
 private enum int kCTFontUIFontSystem = 2;
 private enum uint kCGImageAlphaNone = 0;
 private enum int kCTFontOrientationDefault = 0;
+private enum uint kCTFontTraitMonoSpace = 1u << 10;
+private enum uint kCTFontManagerScopeProcess = 1;
+private enum int kCFNumberSInt32Type = 3;
+private enum int kCFNumberDoubleType = 13;
+private enum int WGHT_AXIS_TAG = 0x77676874;
+private enum CFIndex kCTFontManagerErrorAlreadyRegistered = 105;
 
 private extern (C) @nogc nothrow {
     CTFontRef CTFontCreateUIFontForLanguage(int uiType, double size, CFStringRef language);
@@ -82,6 +103,106 @@ private extern (C) @nogc nothrow {
     void CGContextSetShouldSmoothFonts(CGContextRef c, bool shouldSmoothFonts);
     void CGContextSetAllowsFontSubpixelPositioning(CGContextRef c, bool allows);
     void CGContextSetShouldSubpixelPositionFonts(CGContextRef c, bool should);
+
+    CTFontDescriptorRef CTFontDescriptorCreateWithAttributes(CFDictionaryRef attributes);
+    CTFontDescriptorRef CTFontDescriptorCreateCopyWithAttributes(CTFontDescriptorRef original, CFDictionaryRef attributes);
+    CTFontRef CTFontCreateWithFontDescriptor(CTFontDescriptorRef descriptor, double size, const(void)* matrix);
+    CFStringRef CTFontCopyFamilyName(CTFontRef font);
+    CFTypeRef CTFontCopyAttribute(CTFontRef font, CFStringRef attribute);
+    CFDictionaryRef CTFontCopyVariation(CTFontRef font);
+    CFDictionaryRef CTFontCopyTraits(CTFontRef font);
+    uint CTFontGetSymbolicTraits(CTFontRef font);
+    bool CTFontManagerRegisterFontsForURL(CFURLRef fontURL, uint scope_, CFErrorRef* error);
+    CFArrayRef CTFontManagerCopyAvailableFontFamilyNames();
+    CFArrayRef CTFontManagerCreateFontDescriptorsFromURL(CFURLRef fileURL);
+    CFTypeRef CTFontDescriptorCopyAttribute(CTFontDescriptorRef descriptor, CFStringRef attribute);
+
+    CFDictionaryRef CFDictionaryCreate(const(void)* allocator, const(void)** keys, const(void)** values,
+        CFIndex numValues, const(void)* keyCallBacks, const(void)* valueCallBacks);
+    const(void)* CFDictionaryGetValue(CFDictionaryRef dict, const(void)* key);
+    CFNumberRef CFNumberCreate(const(void)* allocator, int theType, const(void)* valuePtr);
+    bool CFNumberGetValue(CFNumberRef number, int theType, void* valuePtr);
+    CFURLRef CFURLCreateFromFileSystemRepresentation(const(void)* allocator, const(char)* buffer, CFIndex bufLen,
+        bool isDirectory);
+    bool CFURLGetFileSystemRepresentation(CFURLRef url, bool resolveAgainstBase, char* buffer, CFIndex maxBufLen);
+    CFIndex CFErrorGetCode(CFErrorRef err);
+
+    extern __gshared const CFStringRef kCTFontFamilyNameAttribute;
+    extern __gshared const CFStringRef kCTFontVariationAttribute;
+    extern __gshared const CFStringRef kCTFontURLAttribute;
+    extern __gshared const CFStringRef kCTFontTraitsAttribute;
+    extern __gshared const CFStringRef kCTFontWeightTrait;
+    extern __gshared const void* kCFTypeDictionaryKeyCallBacks;
+    extern __gshared const void* kCFTypeDictionaryValueCallBacks;
+}
+
+private CFDictionaryRef makeDict(const(void)*[] keys, const(void)*[] values) {
+    return CFDictionaryCreate(null, keys.ptr, values.ptr, cast(CFIndex) keys.length, &kCFTypeDictionaryKeyCallBacks,
+        &kCFTypeDictionaryValueCallBacks);
+}
+
+private string urlPath(CFURLRef url) {
+    if (url is null) {
+        return null;
+    }
+    char[4096] buf;
+    if (!CFURLGetFileSystemRepresentation(url, true, buf.ptr, cast(CFIndex) buf.length)) {
+        return null;
+    }
+    size_t n = 0;
+    while (n < buf.length && buf[n] != 0) {
+        n++;
+    }
+    return buf[0 .. n].idup;
+}
+
+private string familyOf(CTFontRef f) {
+    if (f is null) {
+        return null;
+    }
+    CFStringRef s = CTFontCopyFamilyName(f);
+    if (s is null) {
+        return null;
+    }
+    scope (exit) CFRelease(cast(CFTypeRef) s);
+    return cfStringToDString(s);
+}
+
+private string fontFilePath(CTFontRef f) {
+    CFTypeRef u = CTFontCopyAttribute(f, kCTFontURLAttribute);
+    if (u is null) {
+        return null;
+    }
+    scope (exit) CFRelease(u);
+    return urlPath(cast(CFURLRef) u);
+}
+
+private float fontWeight(CTFontRef f) {
+    CFDictionaryRef v = CTFontCopyVariation(f);
+    if (v !is null) {
+        scope (exit) CFRelease(cast(CFTypeRef) v);
+        int tag = WGHT_AXIS_TAG;
+        CFNumberRef key = CFNumberCreate(null, kCFNumberSInt32Type, &tag);
+        scope (exit) CFRelease(cast(CFTypeRef) key);
+        CFNumberRef val = cast(CFNumberRef) CFDictionaryGetValue(v, key);
+        double w = 0.0;
+        if (val !is null && CFNumberGetValue(val, kCFNumberDoubleType, &w)) {
+            return cast(float) w;
+        }
+    }
+    CFDictionaryRef traits = CTFontCopyTraits(f);
+    if (traits is null) {
+        return 0.0f;
+    }
+    scope (exit) CFRelease(cast(CFTypeRef) traits);
+    CFNumberRef wt = cast(CFNumberRef) CFDictionaryGetValue(traits, kCTFontWeightTrait);
+    double t = 0.0;
+    if (wt is null || !CFNumberGetValue(wt, kCFNumberDoubleType, &t)) {
+        return 0.0f;
+    }
+    if (fabs(t) < 0.05) return 400.0f;
+    if (t < 0.0) return cast(float)(400.0 + t * 300.0);
+    return cast(float)(400.0 + t * 500.0);
 }
 
 /**
@@ -91,6 +212,11 @@ final class CoreTextRasterizer : IGlyphRasterizer {
     private CTFontRef[ulong] fonts_;
     private CGColorSpaceRef gray_ = null;
     private bool closed_ = false;
+    private CTFontDescriptorRef[2] descriptors_;
+    private FontResolution resolution_;
+    private CTFontDescriptorRef[string] bundled_;
+    private string[string] bundledPaths_;
+    private bool[string] monoCache_;
 
     /**
      * Creates the rasterizer and its grayscale color space.
@@ -107,12 +233,17 @@ final class CoreTextRasterizer : IGlyphRasterizer {
             return;
         }
         closed_ = true;
-        foreach (f; fonts_.byValue()) {
-            if (f !is null) {
-                CFRelease(cast(CFTypeRef) f);
+        releaseFonts();
+        foreach (ref d; descriptors_) {
+            if (d !is null) {
+                CFRelease(cast(CFTypeRef) d);
+                d = null;
             }
         }
-        fonts_ = null;
+        foreach (d; bundled_.byValue()) {
+            CFRelease(cast(CFTypeRef) d);
+        }
+        bundled_ = null;
         if (gray_ !is null) {
             CGColorSpaceRelease(gray_);
             gray_ = null;
@@ -134,6 +265,291 @@ final class CoreTextRasterizer : IGlyphRasterizer {
      */
     size_t cachedFontCount() const {
         return fonts_.length;
+    }
+
+    /**
+     * Registers every .ttf/.otf/.ttc file in a directory with CoreText at process scope (nothing is installed
+     * system-wide) and remembers their families so setFonts() resolves them before installed copies.
+     *
+     * Params:
+     *   dir = Font directory (Contents/Resources/Fonts in the app bundle, resources/fonts in development).
+     *
+     * Returns:
+     *   Number of font files registered (already-registered files count as registered).
+     */
+    size_t registerBundledFonts(string dir) {
+        import std.algorithm : endsWith;
+        import std.file : dirEntries, exists, isDir, SpanMode;
+        import std.uni : toLower;
+
+        size_t count = 0;
+        try {
+            if (closed_ || dir.length == 0 || !exists(dir) || !isDir(dir)) {
+                return 0;
+            }
+            foreach (e; dirEntries(dir, SpanMode.shallow)) {
+                immutable string lower = toLower(e.name);
+                if (!e.isFile || !(lower.endsWith(".ttf") || lower.endsWith(".otf") || lower.endsWith(".ttc"))) {
+                    continue;
+                }
+                CFURLRef url = CFURLCreateFromFileSystemRepresentation(null, e.name.ptr, cast(CFIndex) e.name.length,
+                    false);
+                if (url is null) {
+                    continue;
+                }
+                scope (exit) CFRelease(cast(CFTypeRef) url);
+                CFErrorRef error = null;
+                bool ok = CTFontManagerRegisterFontsForURL(url, kCTFontManagerScopeProcess, &error);
+                if (!ok && error !is null) {
+                    ok = CFErrorGetCode(error) == kCTFontManagerErrorAlreadyRegistered;
+                    CFRelease(cast(CFTypeRef) error);
+                }
+                if (!ok) {
+                    continue;
+                }
+                count++;
+                CFArrayRef descs = CTFontManagerCreateFontDescriptorsFromURL(url);
+                if (descs is null) {
+                    continue;
+                }
+                scope (exit) CFRelease(cast(CFTypeRef) descs);
+                foreach (i; 0 .. CFArrayGetCount(descs)) {
+                    CTFontDescriptorRef d = cast(CTFontDescriptorRef) CFArrayGetValueAtIndex(descs, i);
+                    CFTypeRef fam = CTFontDescriptorCopyAttribute(d, kCTFontFamilyNameAttribute);
+                    if (fam is null) {
+                        continue;
+                    }
+                    immutable string family = cfStringToDString(cast(CFStringRef) fam);
+                    CFRelease(fam);
+                    if (family.length == 0 || (family in bundled_) !is null) {
+                        continue;
+                    }
+                    CFRetain(cast(CFTypeRef) d);
+                    bundled_[family] = d;
+                    bundledPaths_[family] = e.name;
+                }
+            }
+        } catch (Exception) {
+        }
+        return count;
+    }
+
+    /**
+     * Returns the families registered by registerBundledFonts().
+     *
+     * Returns:
+     *   Family names.
+     */
+    string[] bundledFamilies() const {
+        return bundled_.keys;
+    }
+
+    /**
+     * Selects the UI and monospace families at Regular (400) weight, flushing the per-size font cache.
+     *
+     * Families are resolved from bundled registrations first, then installed fonts; a family that cannot be
+     * found (or a monospace family that is not fixed-pitch) falls back to the system UI / fixed-pitch font.
+     *
+     * Params:
+     *   uiFamily = UI font family name.
+     *   monoFamily = Monospace font family name.
+     *
+     * Returns:
+     *   Resolution report (also available through resolution()).
+     */
+    FontResolution setFonts(string uiFamily, string monoFamily) {
+        FontResolution res;
+        res.requestedUi = uiFamily;
+        res.requestedMono = monoFamily;
+        if (closed_) {
+            return res;
+        }
+        releaseFonts();
+        foreach (ref d; descriptors_) {
+            if (d !is null) {
+                CFRelease(cast(CFTypeRef) d);
+                d = null;
+            }
+        }
+        resolveSlot(FontId.ui, uiFamily, res.uiFamily, res.uiFound, res.uiSource, res.uiWeight);
+        resolveSlot(FontId.mono, monoFamily, res.monoFamily, res.monoFound, res.monoSource, res.monoWeight);
+        resolution_ = res;
+        return res;
+    }
+
+    /**
+     * Returns the last setFonts() report (default system fonts before the first call).
+     *
+     * Returns:
+     *   Resolution.
+     */
+    FontResolution resolution() const {
+        return resolution_;
+    }
+
+    /**
+     * Lists available font families (installed plus process-registered).
+     *
+     * Params:
+     *   monospaceOnly = True to keep only fixed-pitch families.
+     *
+     * Returns:
+     *   Sorted, de-duplicated family names (hidden "." families excluded).
+     */
+    string[] listFontFamilies(bool monospaceOnly) {
+        import std.algorithm : sort, uniq;
+        import std.array : array;
+
+        string[] names;
+        CFArrayRef arr = CTFontManagerCopyAvailableFontFamilyNames();
+        if (arr !is null) {
+            scope (exit) CFRelease(cast(CFTypeRef) arr);
+            foreach (i; 0 .. CFArrayGetCount(arr)) {
+                immutable string n = cfStringToDString(cast(CFStringRef) CFArrayGetValueAtIndex(arr, i));
+                if (n.length > 0 && n[0] != '.') {
+                    names ~= n;
+                }
+            }
+        }
+        names ~= bundled_.keys;
+        sort(names);
+        names = names.uniq.array;
+        if (!monospaceOnly) {
+            return names;
+        }
+        string[] mono;
+        foreach (n; names) {
+            if (isFixedPitchFamily(n)) {
+                mono ~= n;
+            }
+        }
+        return mono;
+    }
+
+    /**
+     * Reports whether a family is fixed-pitch (monospace trait, or identical advances for "i", "W", "m", ".").
+     *
+     * Params:
+     *   family = Family name.
+     *
+     * Returns:
+     *   True for monospace families; false for proportional or unknown families.
+     */
+    bool isFixedPitchFamily(string family) {
+        if (auto hit = family in monoCache_) {
+            return *hit;
+        }
+        bool mono = false;
+        CTFontDescriptorRef d = makeDescriptor(family);
+        if (d !is null) {
+            scope (exit) CFRelease(cast(CFTypeRef) d);
+            CTFontRef f = CTFontCreateWithFontDescriptor(d, 16.0, null);
+            if (f !is null) {
+                scope (exit) CFRelease(cast(CFTypeRef) f);
+                if (familyOf(f) == family) {
+                    mono = (CTFontGetSymbolicTraits(f) & kCTFontTraitMonoSpace) != 0 || equalAdvances(f);
+                }
+            }
+        }
+        monoCache_[family] = mono;
+        return mono;
+    }
+
+    private static bool equalAdvances(CTFontRef f) {
+        immutable UniChar[4] chars = ['i', 'W', 'm', '.'];
+        CGGlyph[4] glyphs;
+        if (!CTFontGetGlyphsForCharacters(f, chars.ptr, glyphs.ptr, 4)) {
+            return false;
+        }
+        CGSizeD[4] adv;
+        CTFontGetAdvancesForGlyphs(f, kCTFontOrientationDefault, glyphs.ptr, adv.ptr, 4);
+        foreach (i; 1 .. 4) {
+            if (fabs(adv[i].width - adv[0].width) > 0.01) return false;
+        }
+        return adv[0].width > 0.0;
+    }
+
+    private CTFontDescriptorRef makeDescriptor(string family) {
+        CFStringRef name = createCFString(family);
+        if (name is null) {
+            return null;
+        }
+        scope (exit) CFRelease(cast(CFTypeRef) name);
+        int tag = WGHT_AXIS_TAG;
+        double regular = 400.0;
+        CFNumberRef tagNum = CFNumberCreate(null, kCFNumberSInt32Type, &tag);
+        CFNumberRef wghtNum = CFNumberCreate(null, kCFNumberDoubleType, &regular);
+        scope (exit) {
+            CFRelease(cast(CFTypeRef) tagNum);
+            CFRelease(cast(CFTypeRef) wghtNum);
+        }
+        const(void)*[1] vk = [tagNum];
+        const(void)*[1] vv = [wghtNum];
+        CFDictionaryRef variation = makeDict(vk[], vv[]);
+        scope (exit) CFRelease(cast(CFTypeRef) variation);
+        double zero = 0.0;
+        CFNumberRef zeroNum = CFNumberCreate(null, kCFNumberDoubleType, &zero);
+        scope (exit) CFRelease(cast(CFTypeRef) zeroNum);
+        const(void)*[1] tk = [kCTFontWeightTrait];
+        const(void)*[1] tv = [zeroNum];
+        CFDictionaryRef traits = makeDict(tk[], tv[]);
+        scope (exit) CFRelease(cast(CFTypeRef) traits);
+        if (auto b = family in bundled_) {
+            const(void)*[2] k2 = [kCTFontVariationAttribute, kCTFontTraitsAttribute];
+            const(void)*[2] v2 = [variation, traits];
+            CFDictionaryRef attrs = makeDict(k2[], v2[]);
+            scope (exit) CFRelease(cast(CFTypeRef) attrs);
+            return CTFontDescriptorCreateCopyWithAttributes(*b, attrs);
+        }
+        const(void)*[3] k3 = [kCTFontFamilyNameAttribute, kCTFontVariationAttribute, kCTFontTraitsAttribute];
+        const(void)*[3] v3 = [name, variation, traits];
+        CFDictionaryRef attrs = makeDict(k3[], v3[]);
+        scope (exit) CFRelease(cast(CFTypeRef) attrs);
+        return CTFontDescriptorCreateWithAttributes(attrs);
+    }
+
+    private void resolveSlot(FontId slot, string family, out string resolved, out bool found, out string source,
+            out float weight) {
+        CTFontDescriptorRef d = family.length > 0 ? makeDescriptor(family) : null;
+        if (d !is null) {
+            CTFontRef probe = CTFontCreateWithFontDescriptor(d, 16.0, null);
+            bool ok = probe !is null && familyOf(probe) == family;
+            if (ok && slot == FontId.mono) {
+                ok = isFixedPitchFamily(family);
+            }
+            if (ok) {
+                descriptors_[slot] = d;
+                resolved = family;
+                found = true;
+                weight = fontWeight(probe);
+                immutable string path = fontFilePath(probe);
+                source = (family in bundled_) !is null ? "bundled: " ~ path : "installed: " ~ path;
+                CFRelease(cast(CFTypeRef) probe);
+                return;
+            }
+            if (probe !is null) {
+                CFRelease(cast(CFTypeRef) probe);
+            }
+            CFRelease(cast(CFTypeRef) d);
+        }
+        found = false;
+        CTFontRef sys = CTFontCreateUIFontForLanguage(slot == FontId.mono ? kCTFontUIFontUserFixedPitch
+            : kCTFontUIFontSystem, 16.0, null);
+        if (sys !is null) {
+            resolved = familyOf(sys);
+            weight = fontWeight(sys);
+            CFRelease(cast(CFTypeRef) sys);
+        }
+        source = "system fallback";
+    }
+
+    private void releaseFonts() {
+        foreach (f; fonts_.byValue()) {
+            if (f !is null) {
+                CFRelease(cast(CFTypeRef) f);
+            }
+        }
+        fonts_ = null;
     }
 
     override bool rasterize(FontId font, float pixelSize, dchar cp, out RasterizedGlyph outGlyph) {
@@ -230,8 +646,15 @@ final class CoreTextRasterizer : IGlyphRasterizer {
         if (auto hit = key in fonts_) {
             return *hit;
         }
-        immutable int uiType = font == FontId.mono ? kCTFontUIFontUserFixedPitch : kCTFontUIFontSystem;
-        CTFontRef f = CTFontCreateUIFontForLanguage(uiType, pixelSize, null);
+        CTFontRef f = null;
+        immutable size_t slot = font == FontId.mono ? 1 : 0;
+        if (descriptors_[slot] !is null) {
+            f = CTFontCreateWithFontDescriptor(descriptors_[slot], pixelSize, null);
+        }
+        if (f is null) {
+            immutable int uiType = font == FontId.mono ? kCTFontUIFontUserFixedPitch : kCTFontUIFontSystem;
+            f = CTFontCreateUIFontForLanguage(uiType, pixelSize, null);
+        }
         fonts_[key] = f;
         return f;
     }
@@ -351,4 +774,93 @@ unittest {
     uint maxY = 0;
     assert(cache.takeDirtyRows(minY, maxY) && maxY > minY);
     assert(!cache.takeDirtyRows(minY, maxY));
+}
+
+unittest {
+    import std.algorithm : canFind, startsWith;
+    import std.file : copy, exists, mkdirRecurse, rmdirRecurse, tempDir;
+    import std.path : baseName, buildPath;
+    import std.stdio : writeln;
+
+    import gui.appearance : DEFAULT_MONO_FONT, DEFAULT_UI_FONT;
+    import gui.renderer : GlyphCache, HeadlessRenderer;
+
+    CoreTextRasterizer r = new CoreTextRasterizer();
+    scope (exit) r.close();
+
+    FontResolution bad = r.setFonts("No Such Family 8.5", "Helvetica");
+    assert(!bad.uiFound && !bad.monoFound && bad.uiSource == "system fallback" && bad.uiFamily.length > 0);
+    RasterizedGlyph g;
+    assert(r.rasterize(FontId.ui, 24.0f, 'A', g) && g.width > 0);
+    RasterizedGlyph mi;
+    RasterizedGlyph mw;
+    assert(r.rasterize(FontId.mono, 24.0f, 'i', mi) && r.rasterize(FontId.mono, 24.0f, 'W', mw));
+    assert(mi.advance == mw.advance);
+
+    string[] mono = r.listFontFamilies(true);
+    string[] all = r.listFontFamilies(false);
+    assert(mono.length > 0 && all.length > mono.length);
+    assert(!mono.canFind("Helvetica") && mono.canFind("Menlo"));
+    foreach (m; mono) {
+        assert(all.canFind(m));
+    }
+
+    if (!all.canFind(DEFAULT_UI_FONT) || !all.canFind(DEFAULT_MONO_FONT)) {
+        writeln("SKIP coretext default-font checks: ", DEFAULT_UI_FONT, " / ", DEFAULT_MONO_FONT, " not available");
+        return;
+    }
+    assert(mono.canFind(DEFAULT_MONO_FONT) && !mono.canFind(DEFAULT_UI_FONT));
+    FontResolution res = r.setFonts(DEFAULT_UI_FONT, DEFAULT_MONO_FONT);
+    assert(res.uiFound && res.monoFound, res.uiSource ~ " / " ~ res.monoSource);
+    assert(res.uiFamily == DEFAULT_UI_FONT && res.monoFamily == DEFAULT_MONO_FONT);
+    assert(fabs(res.uiWeight - 400.0f) < 1.0f && fabs(res.monoWeight - 400.0f) < 1.0f);
+    assert(res.uiSource.startsWith("installed: ") && res.monoSource.startsWith("installed: "));
+    assert(r.resolution().monoFamily == DEFAULT_MONO_FONT);
+
+    float fileDefaultWeight = 0.0f;
+    {
+        immutable string path = res.monoSource["installed: ".length .. $];
+        CFURLRef url = CFURLCreateFromFileSystemRepresentation(null, path.ptr, cast(CFIndex) path.length, false);
+        CFArrayRef descs = CTFontManagerCreateFontDescriptorsFromURL(url);
+        assert(descs !is null && CFArrayGetCount(descs) > 0);
+        CTFontRef f = CTFontCreateWithFontDescriptor(cast(CTFontDescriptorRef) CFArrayGetValueAtIndex(descs, 0), 16.0,
+            null);
+        fileDefaultWeight = fontWeight(f);
+        CFRelease(cast(CFTypeRef) f);
+        CFRelease(cast(CFTypeRef) descs);
+        CFRelease(cast(CFTypeRef) url);
+    }
+    assert(fileDefaultWeight < 390.0f, "the variable font's default instance is lighter than Regular");
+
+    GlyphCache cache = new GlyphCache(r);
+    HeadlessRenderer hr = new HeadlessRenderer(cache);
+    hr.beginFrame(100, 100, 2.0f);
+    immutable float one = hr.measureText("-", FontId.mono, 12.0f);
+    assert(one > 0.0f);
+    foreach (s; ["---", "===", "->", "<=", "!=", "www", "C-4", ".."]) {
+        assert(fabs(hr.measureText(s, FontId.mono, 12.0f) - one * s.length) < 1e-3f, s);
+    }
+    hr.endFrame();
+    immutable size_t before = cache.glyphCount();
+    immutable uint gen = cache.generation();
+    cache.reset();
+    assert(cache.glyphCount() == 0 && before > 0 && cache.generation() == gen + 1);
+
+    immutable string dir = buildPath(tempDir(), "synthtracker_bundled_fonts_test");
+    if (exists(dir)) {
+        rmdirRecurse(dir);
+    }
+    mkdirRecurse(dir);
+    scope (exit) rmdirRecurse(dir);
+    immutable string installed = res.monoSource["installed: ".length .. $];
+    immutable string copyPath = buildPath(dir, baseName(installed));
+    copy(installed, copyPath);
+    CoreTextRasterizer rb = new CoreTextRasterizer();
+    scope (exit) rb.close();
+    assert(rb.registerBundledFonts(dir) == 1);
+    assert(rb.bundledFamilies().canFind(DEFAULT_MONO_FONT));
+    FontResolution br = rb.setFonts(DEFAULT_UI_FONT, DEFAULT_MONO_FONT);
+    assert(br.monoFound && br.monoSource.startsWith("bundled: ") && br.monoSource.canFind(dir), br.monoSource);
+    assert(fabs(br.monoWeight - 400.0f) < 1.0f && br.uiSource.startsWith("installed: "));
+    assert(rb.registerBundledFonts(buildPath(dir, "missing")) == 0);
 }

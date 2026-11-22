@@ -81,8 +81,8 @@ final class PrimitivesCanvas : Widget {
     override void paint(IRenderer2D r, const ref StudioTheme theme) {
         immutable double t = animating ? timeSeconds : 0.0;
         immutable RectF canvas = bounds.inset(8);
-        r.fillRoundedRect(canvas, 8, ColorRGBA.fromHex(0x1D2024FF));
-        r.strokeRoundedRect(canvas, 8, 1, ColorRGBA.fromHex(0x3A3F46FF));
+        r.fillRoundedRect(canvas, 8, theme.panelSunken);
+        r.strokeRoundedRect(canvas, 8, 1, theme.border);
         r.pushClip(canvas.inset(1));
 
         RectF node(float x, float y) {
@@ -93,10 +93,10 @@ final class PrimitivesCanvas : Widget {
         immutable RectF c = node(330, 10);
         immutable RectF[3] nodes = [a, b, c];
         foreach (i, n; nodes) {
-            r.fillRoundedRectGradient(n, 7, ColorRGBA.fromHex(0x3B4350FF), ColorRGBA.fromHex(0x2C323BFF));
-            r.strokeRoundedRect(n, 7, 1.5f, ColorRGBA.fromHex(0x5E9CFFFF).withAlpha(i == 0 ? 1.0f : 0.5f));
-            r.drawText(Point2F(n.x + 10, n.y + 8), NODE_TITLES[i], FontId.ui, 13, ColorRGBA.fromHex(0xF2F3F5FF));
-            r.drawText(Point2F(n.x + 10, n.y + 34), NODE_VALUES[i], FontId.mono, 12, ColorRGBA.fromHex(0x9AA4B2FF));
+            r.fillRoundedRectGradient(n, 7, theme.emphasize(theme.panelRaised, 0.04f), theme.panelRaised);
+            r.strokeRoundedRect(n, 7, i == 0 ? 2.0f : 1.0f, i == 0 ? theme.accentHot : theme.border);
+            r.drawText(Point2F(n.x + 10, n.y + 8), NODE_TITLES[i], FontId.ui, 13, theme.text);
+            r.drawText(Point2F(n.x + 10, n.y + 34), NODE_VALUES[i], FontId.mono, 12, theme.textDim);
         }
         immutable Point2F outA = Point2F(a.right(), a.y + 32);
         immutable Point2F inB = Point2F(b.x, b.y + 32);
@@ -105,14 +105,14 @@ final class PrimitivesCanvas : Widget {
         r.drawBezier(outA, Point2F(outA.x + 90, outA.y), Point2F(inC.x - 90, inC.y), inC, 2.0f, theme.wireCv);
 
         immutable RectF scopeRect = RectF(canvas.x + 30, canvas.y + 210, 450, 110);
-        r.fillRoundedRect(scopeRect, 6, ColorRGBA.fromHex(0x101214FF));
+        r.fillRoundedRect(scopeRect, 6, theme.trackerBackground);
         r.pushClip(scopeRect);
         foreach (i, ref p; scopePoints_) {
             immutable double ph = cast(double) i / (scopePoints_.length - 1);
             p = Point2F(scopeRect.x + cast(float)(ph * scopeRect.w),
                 scopeRect.y + scopeRect.h * 0.5f - cast(float)(sin(ph * 6.0 * PI + t * 5.0) * 0.38 * scopeRect.h));
         }
-        r.drawPolyline(scopePoints_, 1.6f, ColorRGBA.fromHex(0x5EE2FFFF));
+        r.drawPolyline(scopePoints_, 1.6f, theme.scopeTraceL);
         r.popClip();
 
         if (gradientTexture_ != 0) {

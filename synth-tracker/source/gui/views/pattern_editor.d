@@ -21,6 +21,9 @@
  *     EE   = effect code (".." when 0).
  *     XXYY = XX is the paramId high byte (extended controller page, normally 00) and YY is effectVal; the pair is
  *            "...." when paramId, effect and effectVal are all 0.
+ *   Phase 8.5 (Accessible Appearance): each row gets exactly one tint (playhead > cursor row > bar > beat) so
+ *   tracker text keeps its contrast target; the cursor field and selection carry their state with 2 pt outlines,
+ *   bar rows add a 1 pt rule and the playhead row a left edge marker.
  *
  * Real-Time & Safety Contract:
  *   UI thread only. Reads the document through ctx.session.document() on every call (never retains pointers or
@@ -1906,16 +1909,17 @@ final class PatternEditorView : Widget, StudioCommandSink {
         foreach (l; firstLine .. lastLine) {
             immutable float y = g.y + (l - firstLine) * rowH_;
             immutable RectF row = RectF(g.x, y, rowRight - g.x, rowH_);
-            if (barLines > 0 && l % barLines == 0) {
-                r.fillRect(row, theme.trackerRowBar);
-            } else if (beatLines > 0 && l % beatLines == 0) {
-                r.fillRect(row, theme.trackerRowBeat);
-            }
             if (l == play) {
                 r.fillRect(row, theme.trackerPlayhead);
-            }
-            if (l == cursorLine_) {
+                r.fillRect(RectF(row.x, row.y, 3.0f, row.h), theme.danger);
+            } else if (l == cursorLine_) {
+                r.fillRect(row, theme.trackerBackground);
                 r.fillRect(row, theme.hover);
+            } else if (barLines > 0 && l % barLines == 0) {
+                r.fillRect(row, theme.trackerRowBar);
+                r.fillRect(RectF(row.x, row.y, row.w, 1.0f), theme.border);
+            } else if (beatLines > 0 && l % beatLines == 0) {
+                r.fillRect(row, theme.trackerRowBeat);
             }
             char[4] num;
             const(char)[] txt;
@@ -1939,13 +1943,15 @@ final class PatternEditorView : Widget, StudioCommandSink {
             immutable uint sl1 = s[3] + 1 < lastLine ? s[3] + 1 : lastLine;
             if (st1 > st0 && sl1 > sl0) {
                 immutable RectF a = cellRect(st0, sl0);
-                r.fillRect(RectF(a.x, a.y, (st1 - st0) * cellW_, (sl1 - sl0) * rowH_), theme.selection);
+                immutable RectF selRect = RectF(a.x, a.y, (st1 - st0) * cellW_, (sl1 - sl0) * rowH_);
+                r.fillRect(selRect, theme.selection);
+                r.strokeRoundedRect(selRect, 0.0f, 2.0f, theme.accent);
             }
         }
 
         if (cursorTrack_ >= firstTrack && cursorTrack_ < lastTrack && cursorLine_ >= firstLine
             && cursorLine_ < lastLine) {
-            r.fillRect(fieldRect(cursorTrack_, cursorLine_, cursorField_), theme.trackerCursor);
+            r.strokeRoundedRect(fieldRect(cursorTrack_, cursorLine_, cursorField_), 0.0f, 2.0f, theme.trackerCursor);
         }
 
         foreach (l; firstLine .. lastLine) {
