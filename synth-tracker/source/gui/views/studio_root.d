@@ -1,0 +1,283 @@
+/**
+ * File:         source/gui/views/studio_root.d
+ * Module:       gui.views.studio_root
+ * Phase:        Phase 8.6 — Studio Window Root: Docked Layout, Command Routing & Status Bar
+ *
+ * Purpose:
+ *   Assembles every studio view into one docked window layout: transport bar on top; a resizable split grid with
+ *   the patchbay and parameter rack + scope above, and the pattern editor and timeline + sample editor below; and
+ *   a status bar. Routes keyboard shortcuts resolved through the session Keymap: document-level actions run here
+ *   (transport, record, octave, undo/redo, panic, play-pattern, loop) or go to the app layer (new/open/save/
+ *   export/quit); context-dependent actions go to the StudioCommandSink view that holds focus (or was used last);
+ *   unhandled piano keys play live notes on the selected module.
+ *
+ * Real-Time & Safety Contract:
+ *   UI thread only; never touches RT state except through StudioSession.
+ *
+ * Dependencies:
+ *   Internal: app.keymap, foundation.types, gui.{layout,renderer,theme,widgets}, gui.views.*, platform.interfaces
+ *   External: None
+ *
+ * Planned API (Types, Functions & Hooks):
+ *   - class StudioRoot : Widget (views, appCommandHandler, executeAction(), activeSink(), noteInteraction())
+ *
+ * See_Also:
+ *   architecture.md, dev_plan.md (Phase 8.6)
+ */
+module gui.views.studio_root;
+
+import app.keymap : forwardToSink, isDocumentLevel, StudioAction, StudioCommandSink;
+import foundation.types : ModuleId;
+import gui.layout : Axis, SplitPaneNode;
+import gui.renderer : FontId, IRenderer2D, Point2F, RectF;
+import gui.theme : StudioTheme;
+import gui.views.param_rack : ParamRackView;
+import gui.views.patchbay_view : PatchbayView;
+import gui.views.pattern_editor : PatternEditorView;
+import gui.views.sample_editor : SampleEditorView;
+import gui.views.scope_view : ScopeView;
+import gui.views.studio_context : StudioContext;
+import gui.views.timeline_view : TimelineView;
+import gui.views.transport_bar : TransportBarView;
+import gui.widgets : KeyEvent, SplitView, Widget;
+import platform.interfaces : PlatformEvent, PlatformEventKind;
+
+/**
+ * Root widget of the studio window.
+ */
+final class StudioRoot : Widget {
+    enum float TRANSPORT_HEIGHT = 44.0f;
+    enum float STATUS_HEIGHT = 22.0f;
+
+    StudioContext ctx;
+    TransportBarView transport;
+    PatchbayView patchbay;
+    ParamRackView rack;
+    ScopeView scopeView;
+    PatternEditorView pattern;
+    TimelineView timeline;
+    SampleEditorView sampleEditor;
+    SplitView grid;
+
+    /**
+     * Receives document-level actions that need the platform (new, open, save, save as, export, quit).
+     */
+    bool delegate(StudioAction) appCommandHandler;
+
+    private Widget lastSink_;
+    private bool[uint] heldPianoKeys_;
+
+    /**
+     * Builds every view over ctx.
+     *
+     * Params:
+     *   ctx = Shared studio context.
+     */
+    this(StudioContext ctx) {
+        this.ctx = ctx;
+        id = "studio.root";
+        transport = add(new TransportBarView(ctx));
+        patchbay = new PatchbayView(ctx);
+        rack = new ParamRackView(ctx);
+        scopeView = new ScopeView(ctx);
+        pattern = new PatternEditorView(ctx);
+        timeline = new TimelineView(ctx);
+        sampleEditor = new SampleEditorView(ctx);
+
+        SplitPaneNode top = SplitPaneNode.split(Axis.horizontal, SplitPaneNode.leaf("patchbay"),
+            SplitPaneNode.split(Axis.vertical, SplitPaneNode.leaf("rack"), SplitPaneNode.leaf("scope"), 0.62f,
+                120.0f, 90.0f), 0.62f, 320.0f, 240.0f);
+        SplitPaneNode bottom = SplitPaneNode.split(Axis.horizontal, SplitPaneNode.leaf("pattern"),
+            SplitPaneNode.split(Axis.vertical, SplitPaneNode.leaf("timeline"), SplitPaneNode.leaf("sample"), 0.55f,
+                100.0f, 100.0f), 0.58f, 320.0f, 240.0f);
+        grid = add(new SplitView(SplitPaneNode.split(Axis.vertical, top, bottom, 0.5f, 180.0f, 180.0f)));
+        grid.setPane("patchbay", patchbay);
+        grid.setPane("rack", rack);
+        grid.setPane("scope", scopeView);
+        grid.setPane("pattern", pattern);
+        grid.setPane("timeline", timeline);
+        grid.setPane("sample", sampleEditor);
+        lastSink_ = pattern;
+    }
+
+    override void layoutChildren() {
+        immutable RectF b = bounds;
+        transport.arrange(RectF(b.x, b.y, b.w, TRANSPORT_HEIGHT));
+        immutable float gridH = b.h - TRANSPORT_HEIGHT - STATUS_HEIGHT;
+        grid.arrange(RectF(b.x, b.y + TRANSPORT_HEIGHT, b.w, gridH > 0.0f ? gridH : 0.0f));
+    }
+
+    override void paint(IRenderer2D r, const ref StudioTheme theme) {
+        r.fillRect(bounds, theme.background);
+        immutable RectF bar = RectF(bounds.x, bounds.bottom() - STATUS_HEIGHT, bounds.w, STATUS_HEIGHT);
+        r.fillRect(bar, theme.panelSunken);
+        r.fillRect(RectF(bar.x, bar.y, bar.w, 1.0f), theme.border);
+        string left = ctx.status.length > 0 ? ctx.status : "Ready";
+        r.drawText(Point2F(bar.x + 8.0f, bar.y + 4.0f), left, FontId.ui, theme.fontSizeSmall, theme.textDim);
+        immutable string right = ctx.session.isDirty() ? "Modified" : "Saved";
+        immutable float w = r.measureText(right, FontId.ui, theme.fontSizeSmall);
+        r.drawText(Point2F(bar.right() - w - 8.0f, bar.y + 4.0f), right, FontId.ui, theme.fontSizeSmall, theme.textDim);
+    }
+
+    override bool isAnimating() {
+        return false;
+    }
+
+    /**
+     * Records which view the pointer went down in (called by the scene before every mouseDown dispatch, since
+     * views consume the click before it could bubble here).
+     *
+     * Params:
+     *   p = Pointer position in window coordinates.
+     */
+    void noteInteraction(Point2F p) {
+        noteSinkUnder(p);
+    }
+
+    /**
+     * Returns the view that receives context-dependent actions: the focused StudioCommandSink, else the last one
+     * the user interacted with.
+     *
+     * Returns:
+     *   Sink widget, or null.
+     */
+    StudioCommandSink activeSink() {
+        if (auto c = context) {
+            for (Widget w = c.focused; w !is null; w = w.parent) {
+                if (auto s = cast(StudioCommandSink) w) {
+                    lastSink_ = w;
+                    return s;
+                }
+            }
+        }
+        return lastSink_ is null ? null : cast(StudioCommandSink) lastSink_;
+    }
+
+    /**
+     * Executes an action as if its shortcut was pressed.
+     *
+     * Params:
+     *   action = Action.
+     *
+     * Returns:
+     *   True if handled.
+     */
+    bool executeAction(StudioAction action) {
+        if (action == StudioAction.none) {
+            return false;
+        }
+        if (!isDocumentLevel(action)) {
+            return forwardToSink(activeSink(), action);
+        }
+        auto s = ctx.session;
+        switch (action) {
+            case StudioAction.playToggle:
+                s.togglePlay();
+                break;
+            case StudioAction.stop:
+                s.stop();
+                s.seekLine(0);
+                break;
+            case StudioAction.recordToggle:
+                ctx.recording = !ctx.recording;
+                ctx.setStatus(ctx.recording ? "Record on" : "Record off");
+                break;
+            case StudioAction.octaveUp:
+                if (ctx.editOctave < 9) ctx.editOctave++;
+                ctx.setStatus("Octave " ~ octaveText());
+                break;
+            case StudioAction.octaveDown:
+                if (ctx.editOctave > -1) ctx.editOctave--;
+                ctx.setStatus("Octave " ~ octaveText());
+                break;
+            case StudioAction.undo:
+                ctx.setStatus(s.undo() ? "Undo" : "Nothing to undo");
+                break;
+            case StudioAction.redo:
+                ctx.setStatus(s.redo() ? "Redo" : "Nothing to redo");
+                break;
+            case StudioAction.panic:
+                s.stop();
+                ctx.setStatus("All notes off");
+                break;
+            case StudioAction.playPattern:
+                if (s.isAuditioningPattern()) {
+                    s.stop();
+                } else {
+                    s.playPattern(ctx.currentPattern());
+                }
+                break;
+            case StudioAction.toggleLoop:
+                toggleLoop();
+                break;
+            default:
+                return appCommandHandler !is null && appCommandHandler(action);
+        }
+        invalidate();
+        return true;
+    }
+
+    override bool onKeyDown(const ref KeyEvent e) {
+        immutable StudioAction act = ctx.session.keymap().resolveAction(e.keyCode, e.modifiers);
+        if (act != StudioAction.none) {
+            return executeAction(act);
+        }
+        if (e.modifiers == 0 && !e.isRepeat && livePiano(e, true)) {
+            return true;
+        }
+        return false;
+    }
+
+    override bool onKeyUp(const ref KeyEvent e) {
+        return livePiano(e, false);
+    }
+
+    private bool livePiano(const ref KeyEvent e, bool down) {
+        ubyte midi;
+        if (ctx.selectedModule() == 0 || !ctx.session.keymap().resolveNote(e.keyCode, ctx.editOctave, midi)) {
+            return false;
+        }
+        if (down) {
+            heldPianoKeys_[e.keyCode] = true;
+        } else if ((e.keyCode in heldPianoKeys_) is null) {
+            return false;
+        } else {
+            heldPianoKeys_.remove(e.keyCode);
+        }
+        PlatformEvent ev;
+        ev.kind = down ? PlatformEventKind.keyDown : PlatformEventKind.keyUp;
+        ev.keyCode = e.keyCode;
+        ev.modifiers = e.modifiers;
+        return ctx.session.handleKeyEvent(ev, ModuleId(ctx.selectedModule()));
+    }
+
+    private void toggleLoop() {
+        const doc = ctx.session.document();
+        if (doc.loopEndLine != 0) {
+            ctx.session.doSetLoop(0, 0);
+            ctx.setStatus("Loop off");
+            return;
+        }
+        long end = 0;
+        foreach (ref c; doc.clips) {
+            if (c.startLine + c.lengthLines > end) end = c.startLine + c.lengthLines;
+        }
+        if (end > 0 && ctx.session.doSetLoop(0, end)) {
+            ctx.setStatus("Loop song");
+        }
+    }
+
+    private string octaveText() const {
+        import std.conv : to;
+
+        return to!string(ctx.editOctave);
+    }
+
+    private void noteSinkUnder(Point2F p) {
+        foreach (Widget w; [cast(Widget) patchbay, rack, scopeView, pattern, timeline, sampleEditor]) {
+            if (w.visible && w.bounds.contains(p) && cast(StudioCommandSink) w !is null) {
+                lastSink_ = w;
+            }
+        }
+    }
+}

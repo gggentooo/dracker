@@ -10,6 +10,74 @@ All major changes to `synth-tracker/` must be recorded in reverse-chronological 
 
 ---
 
+## [2026-11-22 14:12:26 KST]
+- **Author:** Claude Opus 5.5 (Claude Code), with five Claude subagents implementing the views in parallel (8.1 transport/scope, 8.2 patchbay, 8.3 parameter rack/sample editor, 8.4 pattern editor, 8.5 timeline)
+- **Reason / Summary:** Implemented Phase 8 (Modular Synth Tracker Studio GUI).
+  - **Shared contract** `gui/views/studio_context.d`. `StudioContext` holds:
+    - the session, theme and selection state (selected module, current pattern, record, follow, step, octave)
+    - per-frame telemetry and `ScopeHistory`, scope-tap requests and the live MIDI note queue
+    - the status line, plus `IAudioControl` and `IStudioClipboard` interfaces so every view is headless-testable
+  - **Session.** `StudioSession.documentRevision()` lets views cache by revision, and `setCurrentOctave()` keeps the live-piano octave synced with the editor octave.
+  - **8.1** `TransportBarView`:
+    - transport, record, follow and loop buttons
+    - BPM/TPL drag boxes (one undo step per drag), octave and step boxes, the position readout and a dirty dot
+    - DSP load, xruns, master meters with clip hold, and the device/MIDI pickers
+  - **8.1** `ScopeView`: oscilloscope with trigger, log-frequency spectrum with peak hold, goniometer, and master or selected-module source.
+  - **8.2** `PatchbayView`:
+    - zoom/pan node graph with typed, colored ports and Bezier wires, signal pulses, mute/solo/bypass badges
+    - registry add-module menus, node and wire context menus, port-drag wiring with compatibility checks, wire/module delete
+    - inline mini-scopes
+  - **8.3** `ParamRackView`:
+    - controls generated from @Param (slider, log slider, toggle, dropdown) with one undo step per gesture
+    - MIDI learn and unmapping, curve editors for WaveShaper/MultiSynth/MultiCtl, an ADSR envelope editor
+    - MetaModule drill-down (child edits are not undoable)
+  - **8.3** `SampleEditorView`: slots, waveform, zoom, loop markers, loop mode, note range, an amplitude envelope, and import through the file dialog.
+  - **8.4** `PatternEditorView`:
+    - the `NN VV MM CCEE XXYY` grid, drawing only what is visible
+    - cursor fields, block selection, QWERTY entry and audition, hex nibble editing
+    - live and step MIDI recording
+    - cut/copy/paste through the `SynthTracker-Block-v1` clipboard, plus transpose and interpolate, each one undo step
+    - follow playhead, and pattern add/duplicate/delete/resize/switch
+  - **8.5** `TimelineView`:
+    - lanes, ruler and playhead, clip move/resize/Alt-clone with one undo step each
+    - clip menus (mute, solo, Supertrack, make unique, loop to clip, delete) and lane header toggles
+    - loop strip, ruler seek, zoom/pan, follow, and drawing that skips off-screen clips
+  - **8.6** Integration:
+    - `gui/views/studio_root.d` docks every view in a resizable split layout with a status bar. Keymap shortcuts go to the session or root (document level), to the app handler (new, open, save, export, quit), or to the focused or last-used view. Piano keys with no handler play live notes.
+    - `app/studio_app.d` covers the scene, the `AudioHost`/clipboard adapters, dialog-driven commands, window-title sync and background polling of MIDI and devices.
+    - The app now launches the studio by default (`--gallery` keeps the Phase 7 gallery).
+    - `--studio-gui-selftest` runs the whole workflow purely through synthetic window input.
+  - **Build.** `dub.json` headless now builds and tests `gui/views/`. `appkit.d`: synthetic mouse events take modifiers, and synthetic scroll can target a point.
+  - **Known gaps:**
+    - The timeline can't trim from the left edge or point a clip at another pattern (no session API); Make Unique re-creates the clip.
+    - The patchbay has no rename (no text field widget), and Duplicate doesn't copy a module's extra data.
+    - Logarithmic params with min <= 0 floor at max/1000.
+    - MetaModule drill-down goes one level deep and its edits aren't undoable.
+    - `ScopeHistory.snapshot` allocates a little per visible scope each frame.
+    - The device list refreshes when its popup opens, not on hot-plug events.
+    - Tab defaults to note-off (Shift+Tab and Alt+arrows move between tracks).
+    - The end-to-end test uses scripted file dialogs; the native sheets were verified in Phase 7.
+- **Verification Results:**
+  - `dub test --config=headless`: 22 modules passed, including 74 new view/integration unittest blocks across 8 view test files.
+  - `DFLAGS="-unittest -O3 -w"`: headless 23 modules and app 5 modules passed, zero warnings.
+  - x86_64 cross-compiles (`HeadlessCore` and `StudioGUI`) pass, and the comment audit is clean.
+  - `caffeinate -dims ./build/synth-tracker --studio-gui-selftest` (full, Apple M5 Pro, 120 Hz Retina, live CoreAudio) passed 10/10:
+    - added AnalogGen, FM synth and Echo through the patchbay menus; wired three cables by port drags
+    - cutoff drag in the rack; 64 notes recorded by QWERTY across 4 tracks
+    - Alt-drag clone plus Supertrack through the timeline menu
+    - Unison 4 and an 8 s Release set through the rack
+    - 10 s playback stress with node drags, scrolling and live 6-note chords: 118.9 fps, 0 xruns, DSP peak 27.4 %, level 0.598
+    - Cmd+S, Cmd+N, Cmd+O restored 4 modules, 3 wires and 2 clips; Cmd+E exported a 764,928-frame WAV
+  - Regression runs: `--studio-selftest --quick` 5/5 and `--gui-selftest --quick` 13/13.
+- **Affected Files:**
+  - `synth-tracker/source/gui/views/{studio_context,studio_root}.d` and `synth-tracker/source/app/studio_app.d` (created)
+  - `synth-tracker/source/gui/views/{transport_bar,scope_view,patchbay_view,param_rack,sample_editor,pattern_editor,timeline_view}.d`
+  - `synth-tracker/tests/unit/views_{transport,patchbay,param_rack,sample_editor,pattern_editor,timeline,studio_root}_test.d` (created)
+  - `synth-tracker/source/app/session.d`, `synth-tracker/source/main.d`, `synth-tracker/source/platform/macos/appkit.d`, `synth-tracker/dub.json`
+  - `synth-tracker/agents.md`, `synth-tracker/docs/changelog.md`
+
+---
+
 ## [2026-11-22 13:17:47 KST]
 - **Author:** Claude Opus 5.5 (Claude Code), with a Claude subagent implementing `app/pattern_ops.d`, the block clipboard codec/fuzzer, and the keymap expansion
 - **Reason / Summary:** Implemented Phase 7.5 (Studio Backend Integration) per the owner-approved design in `dev_plan.md`.

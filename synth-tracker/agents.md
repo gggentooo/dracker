@@ -96,8 +96,8 @@ For any changes or decisions that may have significant impact on the codebase, t
 | `source/modules/` | `output.d`, `synths/` (8), `effects/` (19), `control/` (11) | `@nogc nothrow` RT; zero syscalls |
 | `source/sequencer/` | `note.d`, `pattern.d`, `timeline.d`, `clock.d`, `track_effects.d`, `stream_worker.d`, `engine.d` | RT step `@nogc nothrow`; `stream_worker.d` off-RT worker |
 | `source/io/` | `binary_stream.d`, `project_format.d`, `audio_io.d`, `importers/` (`.mid`, `.xm`, `.sunvox`) | `@safe` off-RT I/O & `audio-formats` (`boost`) |
-| `source/app/` | `session.d`, `history.d`, `keymap.d`, `pattern_ops.d`, `telemetry.d`, `audio_host.d` + `studio_selftest.d` (macOS), `gui_shell.d` + `gui_gallery.d` (`StudioGUI` only) | Main/UI thread orchestration, undo/redo, native GUI main loop & `--gui-selftest` |
-| `source/gui/` | `renderer.d`, `theme.d`, `layout.d`, `widgets.d`, `views/` (7 studio views) | Main/UI thread only; pure-D toolkit is built and unit-tested in `headless`, `views/` is excluded there |
+| `source/app/` | `session.d`, `history.d`, `keymap.d`, `pattern_ops.d`, `telemetry.d`, `audio_host.d` + `studio_selftest.d` (macOS), `gui_shell.d` + `gui_gallery.d` + `studio_app.d` (`StudioGUI` only) | Main/UI thread orchestration, undo/redo, native GUI main loop & `--gui-selftest` |
+| `source/gui/` | `renderer.d`, `theme.d`, `layout.d`, `widgets.d`, `views/` (`studio_context.d`, `studio_root.d` + 7 studio views) | Main/UI thread only; toolkit and all views are built and unit-tested in `headless` |
 | `source/platform/` | `interfaces.d` + `macos/` (`corefoundation.d`, `coreaudio.d`, `coremidi.d`, `objc_runtime.d`, `objc_blocks_shim.m`, `appkit.d`, `coretext.d`, `metal_renderer.d`) | Only OS FFI boundary in the project |
 | `shaders/` | `ui2d.metal` (Metal 2D instanced UI, Beziers, R8 glyphs) | Compiled to `build/ui2d.metallib` |
 | `packaging/macos/`, `ci/` | `Info.plist`, `entitlements.plist`, `bundle_macos.sh`, `macos.yml` | Release bundling & CI automation |
@@ -199,14 +199,14 @@ Each phase below tracks status with `[ ]` / `[x]`. Do not mark any item `[x]` un
   - `[x]` `7.5.7` Verification suite: headless unit/fuzz tests, `rt_malloc_trap` on every new RT path, `--studio-selftest` hardware run
 - **Exit Criteria:** Unit tests pass for every new API, including grouped-undo failure rollback, block ops, clipboard-codec fuzzing (10k+ inputs), keymap conflicts, `.msv` `MIDI` chunk round-trip and forward compatibility, and fuzzing of the new chunk. The render bridge, MIDI drain, scope push, and map application compile `@nogc nothrow` and pass `rt_malloc_trap`. No GC pointer is reachable from the audio callback (static asserts + unmanaged ownership). `--studio-selftest` plays a session project through CoreAudio for 30 s at 64 and 128 frames with zero xruns while the UI thread edits concurrently, measures MIDI-in to audio latency under 10 ms, recovers from a device sample-rate change, and exports a WAV bit-identical to an offline render of the same document.
 
-### `[ ]` Phase 8 — Modular Synth Tracker Studio GUI *(Deps: Phases 5, 6, 7, 7.5)*
+### `[x]` Phase 8 — Modular Synth Tracker Studio GUI *(Deps: Phases 5, 6, 7, 7.5)*
 - **Subtasks:**
-  - `[ ]` `8.1` `views/transport_bar.d` & `views/scope_view.d`
-  - `[ ]` `8.2` `views/patchbay_view.d` (typed ports, pulses, `ModuleRegistry` add menu, inline scopes)
-  - `[ ]` `8.3` `views/param_rack.d` (UDA rack + MIDI learn + `MetaModule` drill-down) & `views/sample_editor.d`
-  - `[ ]` `8.4` `views/pattern_editor.d` (`NN VV MM CCEE XXYY`, selection, transpose/interpolate, follow-playhead)
-  - `[ ]` `8.5` `views/timeline_view.d` (clips, clones, Supertracks, loop, seek)
-  - `[ ]` `8.6` Full `app/session.d` + `app/keymap.d` integration & 60+ fps stress pass
+  - `[x]` `8.1` `views/transport_bar.d` & `views/scope_view.d`
+  - `[x]` `8.2` `views/patchbay_view.d` (typed ports, pulses, `ModuleRegistry` add menu, inline scopes)
+  - `[x]` `8.3` `views/param_rack.d` (UDA rack + MIDI learn + `MetaModule` drill-down) & `views/sample_editor.d`
+  - `[x]` `8.4` `views/pattern_editor.d` (`NN VV MM CCEE XXYY`, selection, transpose/interpolate, follow-playhead)
+  - `[x]` `8.5` `views/timeline_view.d` (clips, clones, Supertracks, loop, seek)
+  - `[x]` `8.6` Full `app/session.d` + `app/keymap.d` integration & 60+ fps stress pass
 - **Exit Criteria:** View/controller unit & integration tests pass; full end-to-end musical workflow succeeds purely via GUI at 60+ fps with zero audio glitches under heavy polyphonic playback.
 
 ### `[ ]` Phase 9 — macOS `.app` Packaging, Universal Binary, Profiling & Hardening *(Deps: Phase 8)*
@@ -240,6 +240,7 @@ dub test --compiler=ldc2 --config=app      # Objective-C runtime, CoreText, Meta
 
 # Unattended Phase 7 GUI verification on real hardware (keeps its window floating; ~15 min, --quick ~4 min)
 caffeinate -dims ./build/synth-tracker --gui-selftest [--quick]
+caffeinate -dims ./build/synth-tracker --studio-gui-selftest [--quick]   # Phase 8 end-to-end workflow purely via GUI (plays quiet audio)
 
 # Standalone compiler / shim / config checks
 ldc2 -o- -w -Isource source/**/*.d

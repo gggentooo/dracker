@@ -1211,30 +1211,33 @@ void postSyntheticFlags(MacWindow window, ushort keyCode, uint modifiers) {
  *   eventType = NSEventType (1 down, 2 up, 6 dragged, 3/4 right down/up).
  *   x = X in logical points from the view's left edge.
  *   y = Y in logical points from the view's top edge.
+ *   modifiers = KeyModifiers held during the event.
  */
-void postSyntheticMouse(MacWindow window, ulong eventType, float x, float y) {
+void postSyntheticMouse(MacWindow window, ulong eventType, float x, float y, uint modifiers = 0) {
     auto pool = ScopedAutoreleasePool.enter();
     id view = send(cast(id) window.nativeWindowHandle(), sel("contentView"));
     immutable CGPoint inWindow = send!CGPoint(view, sel("convertPoint:toView:"), CGPoint(x, y), cast(id) null);
     id ev = send(cast(id) cls("NSEvent"),
         sel("mouseEventWithType:location:modifierFlags:timestamp:windowNumber:context:eventNumber:clickCount:pressure:"),
-        eventType, inWindow, cast(ulong) 0, 0.0, window.windowNumber(), cast(id) null, cast(long) 0, cast(long) 1,
+        eventType, inWindow, toNSModifierFlags(modifiers), 0.0, window.windowNumber(), cast(id) null, cast(long) 0, cast(long) 1,
         cast(float) 1.0f);
     send!void(nsApp(), sel("postEvent:atStart:"), ev, false);
 }
 
 /**
- * Posts a synthetic pixel-precise scroll event over the window centre (diagnostics / self-test).
+ * Posts a synthetic pixel-precise scroll event over the window centre or a given view point (diagnostics / self-test).
  *
  * Params:
  *   window = Target window.
  *   deltaX = Horizontal pixel delta.
  *   deltaY = Vertical pixel delta.
+ *   atX = Optional X in top-left view coordinates (NaN = window centre).
+ *   atY = Optional Y in top-left view coordinates.
  *
  * Returns:
  *   True if the CoreGraphics event could be created.
  */
-bool postSyntheticScroll(MacWindow window, int deltaX, int deltaY) {
+bool postSyntheticScroll(MacWindow window, int deltaX, int deltaY, float atX = float.nan, float atY = float.nan) {
     auto pool = ScopedAutoreleasePool.enter();
     void* cg = CGEventCreateScrollWheelEvent2(null, 0, 2, deltaY, deltaX, 0);
     if (cg is null) {
@@ -1245,8 +1248,15 @@ bool postSyntheticScroll(MacWindow window, int deltaX, int deltaY) {
     immutable CGRect frame = send!CGRect(nsWin, sel("frame"));
     id screens = send(cast(id) cls("NSScreen"), sel("screens"));
     immutable CGRect primary = send!CGRect(send(screens, sel("objectAtIndex:"), cast(ulong) 0), sel("frame"));
-    CGEventSetLocation(cg, CGPoint(frame.origin.x + frame.size.width * 0.5,
-        primary.size.height - (frame.origin.y + frame.size.height * 0.5)));
+    CGPoint target = CGPoint(frame.origin.x + frame.size.width * 0.5,
+        primary.size.height - (frame.origin.y + frame.size.height * 0.5));
+    if (atX == atX && atY == atY) {
+        id view = send(nsWin, sel("contentView"));
+        immutable CGPoint inWindow = send!CGPoint(view, sel("convertPoint:toView:"), CGPoint(atX, atY), cast(id) null);
+        immutable CGPoint onScreen = send!CGPoint(nsWin, sel("convertPointToScreen:"), inWindow);
+        target = CGPoint(onScreen.x, primary.size.height - onScreen.y);
+    }
+    CGEventSetLocation(cg, target);
     id ev = send(cast(id) cls("NSEvent"), sel("eventWithCGEvent:"), cg);
     if (ev is null) {
         return false;

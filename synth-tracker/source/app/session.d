@@ -21,7 +21,7 @@
  *   External: core.thread (Thread.sleep), core.time (Duration, MonoTime), std.math (isFinite)
  *
  * Planned API (Types, Functions & Hooks):
- *   - class StudioSession : initialize(), shutdown(), dispose(), attachAudioDriver(), synchronizeEngine(),
+ *   - class StudioSession : initialize(), shutdown(), dispose(), documentRevision(), setCurrentOctave(), attachAudioDriver(), synchronizeEngine(),
  *     setEngineSyncTimeout(), pendingRetiredModuleCount(), sampleRate(), changeSampleRate(), newEmptyProject(),
  *     compileAndSwapGraph(), doAddModule(), doRemoveModule(), doConnectWire(), doDisconnectWire(), doSetParam(),
  *     doPatchCell(), doResizePattern(), doReplacePatternCells(), doAddClip(), doMoveClip(), doCloneClip(),
@@ -478,6 +478,7 @@ class StudioSession {
     private float sampleRate_ = 44_100.0f;
     private bool initialized_ = false;
     private bool dirty_ = false;
+    private ulong revision_ = 1;
     private bool recording_ = false;
     private int currentOctave_ = 4;
     private uint currentPatternId_ = 1;
@@ -660,6 +661,22 @@ class StudioSession {
     }
 
     /**
+     * Returns a counter that increases on every document change (edits, undo/redo, load, new project), so views
+     * can cache derived layout and rebuild only when it changes.
+     *
+     * Returns:
+     *   Monotonic document revision.
+     */
+    ulong documentRevision() const {
+        return revision_;
+    }
+
+    private void markDirty() {
+        dirty_ = true;
+        revision_++;
+    }
+
+    /**
      * Reports whether unsaved document edits exist since the last save/load.
      *
      * Returns:
@@ -687,6 +704,16 @@ class StudioSession {
      */
     int currentOctave() const {
         return currentOctave_;
+    }
+
+    /**
+     * Sets the QWERTY piano base octave used by handleKeyEvent() (kept in sync with the editor octave by the UI).
+     *
+     * Params:
+     *   octave = Octave in [-1, 9] (clamped).
+     */
+    void setCurrentOctave(int octave) {
+        currentOctave_ = octave < -1 ? -1 : (octave > 9 ? 9 : octave);
     }
 
     /**
@@ -742,6 +769,7 @@ class StudioSession {
         currentPatternId_ = 1;
         currentPath_ = null;
         dirty_ = false;
+        revision_++;
         if (history_ !is null) history_.clear();
 
         compileAndSwapGraph(true);
@@ -1313,6 +1341,7 @@ class StudioSession {
         }
         currentPath_ = path;
         dirty_ = false;
+        revision_++;
         return true;
     }
 
@@ -1641,7 +1670,7 @@ class StudioSession {
         sm.metaInputModuleId = inputModId;
         sm.metaMacros = macros;
         sm.childProjectMsv = childBytes;
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2368,7 +2397,7 @@ class StudioSession {
                 }
                 sm.paramValues[mm.paramIdx] = denormalizeParam(inst.desc.params[mm.paramIdx],
                     mm.min01 + (mm.max01 - mm.min01) * v);
-                dirty_ = true;
+                markDirty();
                 mirrored++;
             }
         }
@@ -2439,7 +2468,7 @@ class StudioSession {
             doc_.loopEndLine = e0;
             return false;
         }
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2452,7 +2481,7 @@ class StudioSession {
             return false;
         }
         doc_.patterns ~= copyPat;
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2491,7 +2520,7 @@ class StudioSession {
         if (currentPatternId_ == patternId) {
             currentPatternId_ = doc_.patterns.length > 0 ? doc_.patterns[0].patternId : 0;
         }
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2515,7 +2544,7 @@ class StudioSession {
             return false;
         }
         sp.name = name;
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2533,7 +2562,7 @@ class StudioSession {
             sm.bypassed = b0;
             return false;
         }
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2553,7 +2582,7 @@ class StudioSession {
             return false;
         }
         sm.name = name;
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2579,7 +2608,7 @@ class StudioSession {
         }
         sm.extraBlob = blob.dup;
         invalidatePeaks(modId);
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2590,7 +2619,7 @@ class StudioSession {
             doc_.midiMappings = prev;
             return false;
         }
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2679,7 +2708,7 @@ class StudioSession {
             return false;
         }
         sp.cells[idx] = cell;
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2712,7 +2741,7 @@ class StudioSession {
             return false;
         }
         *sp = next;
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2730,7 +2759,7 @@ class StudioSession {
             discardUnpublishedModule(copyMod.id);
             return false;
         }
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2767,7 +2796,7 @@ class StudioSession {
             retiredModules_ ~= PendingModuleRetire(*pInst, guard);
             liveModules_.remove(modId);
         }
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2796,7 +2825,7 @@ class StudioSession {
             }
             return false;
         }
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2809,7 +2838,7 @@ class StudioSession {
             doc_.wires.length = doc_.wires.length - 1;
             return false;
         }
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2833,7 +2862,7 @@ class StudioSession {
             doc_.wires = prev;
             return false;
         }
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2854,7 +2883,7 @@ class StudioSession {
             }
         }
         sm.paramValues[paramIdx] = val;
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2865,7 +2894,7 @@ class StudioSession {
         }
         sm.posX = x;
         sm.posY = y;
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2878,7 +2907,7 @@ class StudioSession {
             doc_.clips.length = doc_.clips.length - 1;
             return false;
         }
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2891,7 +2920,7 @@ class StudioSession {
                     c = prev;
                     return false;
                 }
-                dirty_ = true;
+                markDirty();
                 return true;
             }
         }
@@ -2917,7 +2946,7 @@ class StudioSession {
             doc_.clips = prev;
             return false;
         }
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -2934,7 +2963,7 @@ class StudioSession {
         }
         doc_.bpm = bpmVal;
         doc_.ticksPerLine = tplVal;
-        dirty_ = true;
+        markDirty();
         return true;
     }
 
@@ -3121,6 +3150,7 @@ class StudioSession {
         currentPatternId_ = doc_.patterns.length > 0 ? doc_.patterns[0].patternId : 1;
         currentPath_ = path;
         dirty_ = false;
+        revision_++;
         if (history_ !is null) history_.clear();
         reapplyTransientEngineState();
         return true;

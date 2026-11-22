@@ -58,8 +58,6 @@
                 "."
             ],
             "excludedSourceFiles": [
-                "source/gui/views/*",
-                "source/gui/views/**/*",
                 "source/platform/macos/appkit.d",
                 "source/platform/macos/coretext.d",
                 "source/platform/macos/metal_renderer.d",

@@ -18,7 +18,8 @@
  *   - int runListDevices()
  *   - int runCliDemo(string[] args)
  *   - --studio-selftest -> app.studio_selftest.runStudioSelfTest() (macOS)
- *   - StudioGUI builds: no arguments / --gui -> app.gui_shell.runStudioGui(), --gui-selftest -> runGuiSelfTest()
+ *   - StudioGUI builds: no arguments / --gui / <file.msv> -> app.studio_app.runStudioApp(), --gallery ->
+ *     app.gui_shell.runStudioGui(), --gui-selftest -> runGuiSelfTest()
  *   - struct CliDemoPolySynth (live @nogc ModuleAdapter polyphonic synth)
  *
  * See_Also:
@@ -56,6 +57,7 @@ import platform.interfaces;
 
 version (StudioGUI) {
     import app.gui_shell : runGuiSelfTest, runStudioGui;
+    import app.studio_app : runStudioApp;
 }
 
 version (OSX) {
@@ -839,7 +841,9 @@ private void printUsage() {
     version (StudioGUI) {
         writeln("SynthTracker (native macOS studio)");
         writeln("Usage:");
-        writeln("  synth-tracker [--gui]                 launch the studio window (default)");
+        writeln("  synth-tracker [--gui] [project.msv]   launch the studio (default)");
+        writeln("  synth-tracker --gallery               Phase 7 toolkit/renderer gallery");
+        writeln("  synth-tracker --studio-gui-selftest [--quick]  end-to-end GUI workflow verification");
         writeln("  synth-tracker --gui-selftest [--quick] run the automated Phase 7 GUI verification");
     } else {
         writeln("SynthTracker Headless CLI");
@@ -870,6 +874,14 @@ int main(string[] args) {
                 return runGuiSelfTest(args);
             }
             if (arg == "--gui") {
+                return runStudioApp(args);
+            }
+            if (arg == "--studio-gui-selftest") {
+                import app.studio_app : runStudioGuiSelfTest;
+
+                return runStudioGuiSelfTest(args);
+            }
+            if (arg == "--gallery") {
                 return runStudioGui(args);
             }
         }
@@ -889,8 +901,8 @@ int main(string[] args) {
     }
 
     version (StudioGUI) {
-        if (args.length == 1) {
-            return runStudioGui(args);
+        if (args.length == 1 || (args.length == 2 && args[1].length > 4 && args[1][$ - 4 .. $] == ".msv")) {
+            return runStudioApp(args);
         }
     }
     printUsage();
