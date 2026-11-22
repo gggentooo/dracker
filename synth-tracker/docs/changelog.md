@@ -10,6 +10,61 @@ All major changes to `synth-tracker/` must be recorded in reverse-chronological 
 
 ---
 
+## [2026-11-22 14:30:15 KST]
+- **Author:** Claude Opus 5.5 (Claude Code)
+- **Reason / Summary:** Owner revision: the monospace font is **Fira Code** (installed) instead of Fira Mono (not installed). Documentation only; no code changed.
+  - Every Phase 8.5 and Phase 9 reference in `dev_plan.md` and `agents.md` now names Fira Code.
+  - Fira Code's variable default instance is Light (300), so the plan requires requesting and verifying Regular (400) for low-vision legibility; the same applies to Atkinson Hyperlegible Next.
+  - Programming ligatures don't apply because the rasterizer draws glyphs per code point; a test pins this.
+  - Both fonts are installed per-user, so Phase 8.5 can use them directly.
+  - Recorded a Phase 9.1 prerequisite: the OFL license texts for both fonts are not on disk and must be obtained from the official upstreams before packaging.
+- **Affected Files:**
+  - `dev_plan.md`
+  - `synth-tracker/agents.md`
+  - `synth-tracker/docs/changelog.md`
+
+---
+
+## [2026-11-22 14:28:09 KST]
+- **Author:** Claude Opus 5.5 (Claude Code)
+- **Reason / Summary:** Recorded owner decisions for Phase 8.5 and Phase 9. Documentation only; no code changed.
+  - Monospace font: **Fira Mono**.
+  - Phase 9.1 bundles Atkinson Hyperlegible Next and Fira Mono plus their OFL 1.1 license texts in `Contents/Resources/Fonts`, with `ATSApplicationFontsPath`. The build fails if any file is missing, and the Phase 9 exit criteria now require the resolved font URLs to point inside the bundle.
+  - Low contrast floor confirmed at 4.5:1 for text.
+  - Phase 8.5.3 now registers bundled fonts at process scope (`resources/fonts/` in dev builds, `Contents/Resources/Fonts` in the app) before checking installed fonts and the system fallback. The UI and tests prefer Fira Mono for monospace text.
+  - Readiness finding: Fira Mono is **not** installed on the development machine (only Fira Code is), so its files must be installed or approved for fetching from the official upstream before 8.5.3.
+- **Affected Files:**
+  - `synth-tracker/agents.md`
+  - `dev_plan.md`
+  - `synth-tracker/docs/changelog.md`
+
+---
+
+## [2026-11-22 14:23:26 KST]
+- **Author:** Claude Opus 5.5 (Claude Code)
+- **Reason / Summary:** Planned Phase 8.5 (Accessible Appearance) at the owner's request before Phase 9. This entry covers documentation only; no code changed.
+  - **Defaults:** light high-contrast mode, Atkinson Hyperlegible Next as the UI font, and a colorblind-safe palette derived from Okabe–Ito. Font sizes and UI geometry stay unchanged.
+  - **Appearance menu:** UI and monospace font, High/Low contrast, palette presets, a custom palette editor, and persistent preferences.
+  - **Subtasks `8.5.1`–`8.5.6`:**
+    - the appearance model and palettes
+    - removal of dark-mode assumptions, hard-coded colors, and color-only cues
+    - CoreText font-family selection
+    - runtime theme switching
+    - the Appearance menu/panel and persistence
+    - verification
+  - **Gates:** WCAG AAA 7:1 text / 4.5:1 graphics in High contrast; 4.5:1 / 3:1 in Low contrast; CIEDE2000 ΔE ≥ 10 under simulated protanopia, deuteranopia, and tritanopia; theme metrics and layout bit-identical to Phase 8.
+  - **Findings recorded in the plan:**
+    - Atkinson Hyperlegible Next is installed per-user as a variable font.
+    - Views already use theme tokens almost everywhere. The remaining hard-coded or dark-assuming colors are in the widget `brighten()` hover logic, transport lit colors, the timeline's HSV pattern colors, the gallery, and the Metal clear color.
+    - Several Okabe–Ito mid tones are only about 3:1 on white, so darkened variants are specified.
+  - Phase 9 now depends on Phase 8.5.
+- **Affected Files:**
+  - `synth-tracker/agents.md`
+  - `dev_plan.md`
+  - `synth-tracker/docs/changelog.md`
+
+---
+
 ## [2026-11-22 14:12:26 KST]
 - **Author:** Claude Opus 5.5 (Claude Code), with five Claude subagents implementing the views in parallel (8.1 transport/scope, 8.2 patchbay, 8.3 parameter rack/sample editor, 8.4 pattern editor, 8.5 timeline)
 - **Reason / Summary:** Implemented Phase 8 (Modular Synth Tracker Studio GUI).
