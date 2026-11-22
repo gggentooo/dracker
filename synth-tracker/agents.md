@@ -164,13 +164,13 @@ Each phase below tracks status with `[ ]` / `[x]`. Do not mark any item `[x]` un
   - `[x]` `5.5` `modules/control/metamodule.d` (child `Engine`, BPM sync, `MAX_METAMODULE_DEPTH = 16`)
 - **Exit Criteria:** Unit & golden tests pass for every sequencer component, clones, Supertracks, dynamic BPM/TPL, sub-line delays (`0x40`–`0x5F`), nested `MetaModule`, live pattern/timeline edits during playback, and `rt_malloc_trap`.
 
-### `[ ]` Phase 6 — Native Persistence, Undo/Redo & Optional Importers *(Deps: Phases 4 Tier 1, 5)*
+### `[x]` Phase 6 — Native Persistence, Undo/Redo & Optional Importers *(Deps: Phases 4 Tier 1, 5)*
 - **Subtasks:**
-  - `[ ]` `6.1` `io/binary_stream.d` (`@safe` bounds-checked LE/BE reader/writer)
-  - `[ ]` `6.2` `io/project_format.d` (4CC chunked `.msv` / `.msym` format)
-  - `[ ]` `6.3` `app/history.d`, `app/session.d`, `app/keymap.d`
-  - `[ ]` `6.4` `tests/fuzz/project_format_fuzz.d` (100,000+ mutated/truncated inputs)
-  - `[ ]` `6.5` *(Optional)* `io/importers/{smf,xm,sunvox}_importer.d` (`.sunvox` scoped to best-effort musical/structural mapping)
+  - `[x]` `6.1` `io/binary_stream.d` (`@safe` bounds-checked LE/BE reader/writer)
+  - `[x]` `6.2` `io/project_format.d` (4CC chunked `.msv` / `.msym` format)
+  - `[x]` `6.3` `app/history.d`, `app/session.d`, `app/keymap.d`
+  - `[x]` `6.4` `tests/fuzz/project_format_fuzz.d` (100,000+ mutated/truncated inputs)
+  - `[x]` `6.5` *(Optional)* `io/importers/{smf,xm,sunvox}_importer.d` (`.sunvox` scoped to best-effort musical/structural mapping)
 - **Exit Criteria:** Unit tests for stream bounds, undo/redo, and session bridge pass; complex `.msv`/`.msym` round-trips render bit-identical WAV output; 100k+ fuzz tests pass with zero panics/OOB reads.
 
 ### `[ ]` Phase 7 — Native macOS AppKit/Metal Shell & Pure-D UI Toolkit *(Deps: Phases 0, 3; parallelizable with Phases 4–6)*

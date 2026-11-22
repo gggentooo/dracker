@@ -10,6 +10,69 @@ All major changes to `synth-tracker/` must be recorded in reverse-chronological 
 
 ---
 
+## [2026-11-22 10:15:35 KST]
+- **Author:** Claude Opus 5.5 (Claude Code)
+- **Reason / Summary:** Phase 6 review remediation. An independent review of the uncommitted Phase 6 work found nine defects (RT use-after-free, stale saves, unreloadable saves, pattern-slot overflow/leak, live-engine teardown, ignored push/compile failures, SunVox note mis-targeting, unbounded undo coalescing, vacuous tests). Phase 6 was reverted to `[ ]` until all were fixed and verified, with owner approval for the UI/RT boundary changes (Rule 5).
+  - **RT module retirement:** removed modules are now tagged with the `GraphPlan` that still references them and freed only after that exact plan returns through the retire ring (`Engine.tryPopRetired()`), replacing the unsafe "free when stopped or when anything retired" heuristic.
+  - **Save source of truth:** parameter values are saved from the document; module asset blobs are read only after `StudioSession.synchronizeEngine()` (new `EngineCmdKind.fence` + `Engine.appliedFence()` acquire/release round-trip while audio runs, `Engine.applyPendingCommandsOffRT()` when it does not). MetaModule state is saved from the document (its live `serializeExtra` reads RT-mutated child tempo).
+  - **Save/load parity:** `serializeProject`/`serializePreset` now run `validateProjectForSave`/`validateModuleForSave` (tempo range, finite params/macros, string/blob caps, nesting depth incl. child re-parse, duplicate module/pattern ids); loader rejects duplicate ids; `MAX_CELLS_PER_PATTERN = MAX_TRACKS * MAX_LINES`; `doSetTempo`/`doSetParam`/`doResizePattern` reject out-of-range input.
+  - **Pattern slots:** `MAX_PATTERNS` now equals `Engine.MAX_PATTERNS` (256); `materializeProjectToEngine` frees and fails on a rejected pattern attach; XM cap statically asserted against it.
+  - **Engine teardown:** `StudioSession.attachAudioDriver(IAudioDriver)`; load/new-project/shutdown stop the driver before tearing down the Engine and restart it afterwards; `immediate` attach paths fall back to queued commands while audio runs; loaded projects recompile their plan through the session so plan guards are known.
+  - **All-or-nothing mutations:** `IUndoCommand.execute/undo` return `bool`; every `*Direct` mutator rolls the document back if its plan/snapshot/command cannot reach the Engine (`sendCommand` drains or waits instead of dropping); `UndoHistory` records only successful commands and leaves stacks unchanged on failed undo/redo.
+  - **Undo coalescing:** merges additionally require consecutive pushes within a 500 ms window (`setCoalesceWindow`, deterministic `pushAndExecuteAt`).
+  - **SunVox importer:** pattern cells keep raw module indices and are remapped through `indexToId`; notes aimed at skipped modules are cleared and counted in `ImportReport.droppedNoteTargets`.
+  - **Tests:** new `tests/unit/session_safety_test.d` (plan-guarded retirement, save-without-render, a threaded `IAudioDriver` rendering concurrently through 40 add/wire/param/patch/remove cycles + fenced save + suspended load/new-project, save validation incl. 64x4096 pattern round-trip, 256/257 pattern caps, failure-aware undo/redo, time-window coalescing, SunVox remap); `persistence_test.d` gains a bit-exact `.msym` (WaveShaper curve + nested MetaModule) render-parity test with a non-vacuity control; the fuzz harness hand-encodes over-deep MetaModule files (asserts 16 levels accepted, 17 rejected), and materializes + renders every accepted mutated project.
+- **Verification Results:**
+  - `dub test --compiler=ldc2 --config=headless --force`: 10 modules passed; 15 consecutive reruns of the test binary all passed (threaded driver suite stable).
+  - `DFLAGS="-unittest -O3 -w" dub test --compiler=ldc2 --config=headless --force`: 11 modules passed, zero warnings.
+  - Mutation checks: reverting guarded retirement and inverting the `.msym` control assertion each make the suite fail.
+  - `dub build --config=headless --build=release` + `--cli-demo --duration=0.35 --auto-chord` (120 callbacks, 15,360 frames, 0 xruns); `x86_64-apple-macos12.0 -O3 -w -unittest` cross-compile OK; DDoc-only comment audit, `clang -Wall -Wextra` shim check, `plutil -lint`, and `bash -n` all passed.
+- **Affected Files:**
+  - `synth-tracker/source/sequencer/engine.d`
+  - `synth-tracker/source/io/project_format.d`
+  - `synth-tracker/source/io/importers/sunvox_importer.d`
+  - `synth-tracker/source/io/importers/xm_importer.d`
+  - `synth-tracker/source/app/history.d`
+  - `synth-tracker/source/app/session.d`
+  - `synth-tracker/tests/fuzz/project_format_fuzz.d`
+  - `synth-tracker/tests/unit/persistence_test.d`
+  - `synth-tracker/tests/unit/session_safety_test.d` (created)
+  - `synth-tracker/agents.md`
+  - `synth-tracker/docs/changelog.md`
+
+---
+
+## [2026-11-22 09:52:12 KST]
+- **Author:** Antigravity (Gemini 4 Neon)
+- **Reason / Summary:** Completed Phase 6 (Native Persistence, Undo/Redo, Session Bridge & Optional Importers).
+  - Implemented `source/io/binary_stream.d` (`BinaryReader` and `BinaryWriter`) with `@safe` overflow-safe bounds checking, LE/BE integer & IEEE-754 float codecs, MIDI VLQ decoding, FourCC helpers, and isolated `readChunk`/`writeChunk` framing.
+  - Implemented `source/io/project_format.d` (`MSV1` `.msv` project and `MSYM` `.msym` module/MetaModule preset formats) with unknown-chunk forward-compatibility skipping, recursion depth enforcement (`MAX_METAMODULE_DEPTH`), and `materializeProjectToEngine`.
+  - Implemented `source/app/keymap.d` (macOS 29-key two-octave QWERTY tracker piano + `StudioAction` bindings), `source/app/history.d` (`IUndoCommand`, `UndoHistory` with drag coalescing and 14 concrete commands), and `source/app/session.d` (`StudioSession` bridging UI/CLI actions, persistence, importers, `UndoHistory`, and lock-free `Engine` snapshot/command dispatch + `pollRetiredAndTelemetry`).
+  - Implemented optional importers in `source/io/importers/{smf,xm,sunvox}_importer.d` supporting Standard MIDI Files (`.mid` Format 0/1 with sub-line delay quantization and channel 9 drum kit mapping), FastTracker II (`.xm` packed patterns and 8/16-bit delta PCM samples mapped to `synth.sampler`), and best-effort `.sunvox` (`SVOX`) structural import with `ImportReport` diagnostics.
+  - Added `tests/fuzz/project_format_fuzz.d` executing 100,000 deterministic mutation/truncation/corruption/overflow/NaN/deep-nesting runs across `.msv`, `.msym`, `.mid`, `.xm`, and `.sunvox` parsers, plus `tests/unit/persistence_test.d` verifying stream bounds, bit-exact `.msv`/`.msym` WAV round-trips (`Sampler`, `WaveShaper`, `Echo`, `AnalogGen`, nested `MetaModule`, unknown `FUTR` chunk), `UndoHistory`/`StudioSession`/`Keymap` with `verifyZeroRtAllocationsNothrow`, and all three optional importers.
+  - Marked Phase 6 and subtasks `6.1`–`6.5` as completed `[x]` in `synth-tracker/agents.md`.
+- **Verification Results:**
+  - `dub test --compiler=ldc2 --config=headless --force --skip-registry=all`: 9 modules passed unittests (`120` `__unittest` symbols via `nm`).
+  - `DFLAGS="-unittest -O3 -w" dub test --compiler=ldc2 --config=headless --force --skip-registry=all`: 10 modules passed unittests with zero warnings.
+  - `dub build --compiler=ldc2 --config=headless --build=release --force --skip-registry=all`, `./build/synth-tracker --list-devices`, and `./build/synth-tracker --cli-demo --duration=0.35 --auto-chord` (122 callbacks, 15,616 frames, 0 xruns) passed cleanly.
+  - `x86_64-apple-macos12.0` `-O3 -w -unittest` cross-compile passed (`X86_64_COMPILE_OK`).
+  - Strict DDoc-only comment audit (`PHASE6_COMMENT_AUDIT_OK: 10 files`), `plutil -lint packaging/macos/Info.plist`, `clang -Wall -Wextra -fsyntax-only source/platform/macos/objc_blocks_shim.m`, and `bash -n` script check all passed.
+- **Affected Files:**
+  - `synth-tracker/source/io/binary_stream.d`
+  - `synth-tracker/source/io/project_format.d`
+  - `synth-tracker/source/io/importers/smf_importer.d`
+  - `synth-tracker/source/io/importers/xm_importer.d`
+  - `synth-tracker/source/io/importers/sunvox_importer.d`
+  - `synth-tracker/source/app/keymap.d`
+  - `synth-tracker/source/app/history.d`
+  - `synth-tracker/source/app/session.d`
+  - `synth-tracker/tests/fuzz/project_format_fuzz.d`
+  - `synth-tracker/tests/unit/persistence_test.d`
+  - `synth-tracker/agents.md`
+  - `synth-tracker/docs/changelog.md`
+
+---
+
 ## [2026-11-22 09:33:25 KST]
 - **Author:** Antigravity (Gemini 4 Neon)
 - **Summary:** Implemented Phase 5 (Tracker Sequencer, Timeline, Supertracks & `MetaModule`) with 8-byte POD `NoteCell` atomic pattern patching, Copy-on-Write `PatternSnapshot` & `TimelineSnapshot` (pattern clones, mute/solo, loops, persistent-lane Supertracks), drift-free 64-bit `RationalClock`, full `TrackEffectBank` effect suite including exact sample-frame sub-line delays (`0x40`–`0x5F`), unified instance-scoped `Engine` with lock-free commands/retire queue & per-module stem WAV export, and re-entrant nested `MetaModule` (`ctl.metamodule`, `MAX_METAMODULE_DEPTH = 16`, 39 built-in registered modules).

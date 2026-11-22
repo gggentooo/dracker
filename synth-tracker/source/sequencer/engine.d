@@ -15,13 +15,14 @@
  *
  * Planned API (Types, Functions & Hooks):
  *   - enum EngineCmdKind / struct EngineCommand / struct EngineTelemetry / struct StemExportSpec
- *   - struct Engine : tryInit(), reset(), pushCommand(), drainRetireRing(), processHostBuffer(), processDirectSubFrames(), renderOfflineToBuffer(), exportOfflineWav(), exportStemsWav()
+ *   - struct Engine : tryInit(), reset(), pushCommand(), drainRetireRing(), tryPopRetired(), applyPendingCommandsOffRT(), appliedFence(), processHostBuffer(), processDirectSubFrames(), renderOfflineToBuffer(), exportOfflineWav(), exportStemsWav()
  *
  * See_Also:
  *   architecture_proposal.md, dev_plan_proposal.md
  */
 module sequencer.engine;
 
+import core.atomic : atomicLoad, atomicStore, MemoryOrder;
 import core.lifetime : move;
 import std.math : fabs, isFinite;
 
@@ -61,7 +62,8 @@ enum EngineCmdKind : ubyte {
     liveNoteOn = 15,
     liveNoteOff = 16,
     allNotesOff = 17,
-    sendModEvent = 18
+    sendModEvent = 18,
+    fence = 19
 }
 
 /**
@@ -433,6 +435,22 @@ struct EngineCommand {
         c.modEvent = ev;
         return c;
     }
+
+    /**
+     * Builds an ordering fence acknowledged by the RT thread once every earlier queued command has been applied.
+     *
+     * Params:
+     *   sequence = Monotonic non-zero fence token published through Engine.appliedFence().
+     *
+     * Returns:
+     *   Populated EngineCommand.
+     */
+    static EngineCommand makeFence(ulong sequence) {
+        EngineCommand c;
+        c.kind = EngineCmdKind.fence;
+        c.lineVal = cast(long) sequence;
+        return c;
+    }
 }
 
 static assert(!hasGcReference!EngineCommand,
@@ -509,6 +527,7 @@ struct Engine {
     private long pendingJumpLine_ = -1;
     private float sampleRate_ = 44_100.0f;
     private bool initialized_ = false;
+    private shared ulong appliedFence_ = 0;
 
     @disable this(this);
 
@@ -839,6 +858,44 @@ struct Engine {
             transport_.playing = false;
             trackFx_.releaseAllActive(graph_, graph_.renderedFrames());
         }
+    }
+
+    /**
+     * Pops one retired resource without reclaiming it so the caller can inspect its identity first.
+     *
+     * Params:
+     *   item = Receives the retired resource; the caller must invoke item.reclaimOffRT() off-RT.
+     *
+     * Returns:
+     *   True if an item was popped; false if the retire ring is empty.
+     */
+    bool tryPopRetired(out RetiredResource item) {
+        if (!initialized_) {
+            return false;
+        }
+        return retireRing_.tryPop(item);
+    }
+
+    /**
+     * Applies every queued EngineCommand on the calling thread.
+     *
+     * Precondition: no RT audio thread is rendering this Engine (device stopped or never started),
+     * so the caller is the sole owner of all RT state for the duration of the call.
+     */
+    void applyPendingCommandsOffRT() {
+        if (initialized_) {
+            drainCommands();
+        }
+    }
+
+    /**
+     * Returns the newest fence token acknowledged by the thread that drains commands.
+     *
+     * Returns:
+     *   Last applied fence sequence (acquire ordering), or 0 if none.
+     */
+    ulong appliedFence() const {
+        return atomicLoad!(MemoryOrder.acq)(appliedFence_);
     }
 
     /**
@@ -1200,6 +1257,10 @@ struct Engine {
                     if (cmd.targetMod.isValid()) {
                         graph_.enqueueEvent(cmd.targetMod, cmd.modEvent, nowFrame);
                     }
+                    break;
+
+                case EngineCmdKind.fence:
+                    atomicStore!(MemoryOrder.rel)(appliedFence_, cast(ulong) cmd.lineVal);
                     break;
 
                 default:
