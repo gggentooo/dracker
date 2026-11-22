@@ -10,6 +10,25 @@ All major changes to `synth-tracker/` must be recorded in reverse-chronological 
 
 ---
 
+## [2026-11-22 09:33:25 KST]
+- **Author:** Antigravity (Gemini 4 Neon)
+- **Summary:** Implemented Phase 5 (Tracker Sequencer, Timeline, Supertracks & `MetaModule`) with 8-byte POD `NoteCell` atomic pattern patching, Copy-on-Write `PatternSnapshot` & `TimelineSnapshot` (pattern clones, mute/solo, loops, persistent-lane Supertracks), drift-free 64-bit `RationalClock`, full `TrackEffectBank` effect suite including exact sample-frame sub-line delays (`0x40`–`0x5F`), unified instance-scoped `Engine` with lock-free commands/retire queue & per-module stem WAV export, and re-entrant nested `MetaModule` (`ctl.metamodule`, `MAX_METAMODULE_DEPTH = 16`, 39 built-in registered modules).
+- **Changes & Verification:**
+  - Graph Protocol Extensions: extended `ProcessContext` with `metaDepth`, added `ModEventKind.setParamNormalized` + `ModuleVTable.setParamNormalized` (mapping `[0..1]` across linear/logarithmic/discrete `@Param` descriptors in `ModuleAdapter!T`), extended `RetiredKind` with `patternSnapshot`/`timelineSnapshot`/`childEngine`, and added `setNodeMuted`, `setNodeBypassed`, `renderQuantumDirect`, and `copyLastNodeAudioBus` on `AudioGraph`.
+  - Pattern, Timeline & Clock (`5.1`, `5.2`, `5.3`): implemented 8-byte POD `NoteCell` + `NoteCmd` + `EffectCode` in `source/sequencer/note.d`, unmanaged atomic-patchable `PatternSnapshot` in `source/sequencer/pattern.d`, CoW `TimelineSnapshot` (`TimelineClip`, pattern clones, `SupertrackState`) in `source/sequencer/timeline.d`, 64-bit exact rational `RationalClock` (zero drift under dynamic BPM/TPL edits + `subLineDelaySamples`) in `source/sequencer/clock.d`, and `TrackEffectBank` (`0x01`–`0x5F`, `NoteCmd`, normalized parameter automation, deterministic probability `0x20`–`0x2F`) in `source/sequencer/track_effects.d`.
+  - Unified `Engine` & Re-Entrant `MetaModule` (`5.4`, `5.5`): implemented zero-global-state `Engine` (`SpscRing!EngineCommand`, `SpscRing!RetiredResource`, `TripleBuffer!EngineTelemetry`, live QWERTY/MIDI voice tracking, offline mix & `exportStemsWav` exporter) in `source/sequencer/engine.d`, implemented `MetaModule` + `MetaModuleAsset` (`MAX_METAMODULE_DEPTH = 16`, BPM/TPL sync, 8 macro bindings, audio passthrough, off-RT serialization) in `source/modules/control/metamodule.d`, and registered `ctl.metamodule` in `source/graph/registry.d` (39 built-in modules total).
+  - Tests & Verification Gate: added [tests/unit/sequencer_test.d](file:///Users/leehk/dev/sunvox_tools/synth-tracker/tests/unit/sequencer_test.d) covering atomic `PatternSnapshot`, 100k-tick `RationalClock`, exact sample `2646` sub-line delay, clones, Supertracks, all effect opcodes, live playback edits + `drainRetireRing()`, per-module stem WAV sum parity, and 2-level nested `MetaModule` + `MAX_METAMODULE_DEPTH` cutoff; updated `modules_test.d` (39 modules) and appended a Phase 5 multi-pattern nested `MetaModule` golden song test in `tests/golden/golden_suite.d`. Verified debug `dub test` (`7 modules passed unittests`), `DFLAGS="-unittest -O3 -w" dub test` (`8 modules passed unittests`, `114` `__unittest` symbols), `dub build --config=headless --build=release`, `--list-devices`, `--cli-demo --duration=0.35 --auto-chord` (`callbacks=123, frames=15744, xruns=0`), `ldc2 -mtriple=x86_64-apple-macos12.0 -O3 -w -unittest` (`X86_64_COMPILE_OK`), `PHASE5_COMMENT_AUDIT_OK: 15 files`, `plutil -lint`, and `clang -Wall -Wextra`.
+- **Affected Files:**
+  - `synth-tracker/agents.md` (updated — marked Phase 5 and `5.1`–`5.5` complete)
+  - `synth-tracker/docs/changelog.md` (updated — added this entry)
+  - `synth-tracker/source/graph/{context,event,module_api,audio_graph,registry}.d` (modified)
+  - `synth-tracker/source/sequencer/{note,pattern,timeline,clock,track_effects,engine}.d` (created)
+  - `synth-tracker/source/modules/control/metamodule.d` (created)
+  - `synth-tracker/tests/unit/sequencer_test.d` (created)
+  - `synth-tracker/tests/unit/modules_test.d`, `synth-tracker/tests/golden/golden_suite.d` (modified)
+
+---
+
 ## [2026-11-22 09:17:07 KST]
 - **Author:** Antigravity (Gemini 4 Neon)
 - **Summary:** Implemented Phase 4 (Built-In Module Library — Tier 1 & Tier 2) with all 38 built-in `ModuleRegistry` modules, off-RT `StreamWorker` background audio decode/streaming (`VorbisPlayer` + `StreamAudioRing`), host duplex audio-input staging in `AudioGraph`, automated `@nogc` + `rt_malloc_trap` unit and golden WAV verification suites, `-O3` allocator/GC trap escape hardening in `foundation_test.d`, and updated checklist/changelog documentation.

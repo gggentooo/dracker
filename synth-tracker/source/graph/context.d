@@ -82,4 +82,5 @@ struct ProcessContext {
     bool inputSilent = false;
     const(float)[][2] hostAudioIn;
     bool hostInputSilent = true;
+    uint metaDepth = 0;
 }

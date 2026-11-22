@@ -29,6 +29,7 @@ import modules.control.adsr_mod : AdsrMod;
 import modules.control.ctl2note : Ctl2Note;
 import modules.control.feedback : Feedback;
 import modules.control.glide : Glide;
+import modules.control.metamodule : MetaModule;
 import modules.control.multictl : MultiCtl;
 import modules.control.multisynth : MultiSynth;
 import modules.control.pitch2ctl : Pitch2Ctl;
@@ -102,7 +103,8 @@ private alias RegisteredModuleTypes = AliasSeq!(
     PitchDetector,
     SpectraVoice,
     AudioInput,
-    VorbisPlayer
+    VorbisPlayer,
+    MetaModule
 );
 
 private ModuleDescriptor[RegisteredModuleTypes.length] buildRegisteredDescriptors() {

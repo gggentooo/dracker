@@ -78,7 +78,7 @@ version (unittest) {
 
     unittest {
         auto descs = ModuleRegistry.descriptors();
-        assert(descs.length == 38);
+        assert(descs.length == 39);
 
         foreach (i; 0 .. descs.length) {
             assert(descs[i].typeId.length > 0 && descs[i].ports.length > 0);
@@ -95,6 +95,7 @@ version (unittest) {
         assert(ModuleRegistry.findByTypeId("fx.fft") !is null);
         assert(ModuleRegistry.findByTypeId("ctl.pitch_detector") !is null);
         assert(ModuleRegistry.findByTypeId("synth.vorbis_player") !is null);
+        assert(ModuleRegistry.findByTypeId("ctl.metamodule") !is null);
 
         float[FIXED_BLOCK_FRAMES] zeroInL = 0.0f;
         float[FIXED_BLOCK_FRAMES] zeroInR = 0.0f;

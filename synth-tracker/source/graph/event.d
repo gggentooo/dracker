@@ -42,7 +42,8 @@ enum ModEventKind : ubyte {
     setParam = 4,
     setParamInstant = 5,
     allNotesOff = 6,
-    transport = 7
+    transport = 7,
+    setParamNormalized = 8
 }
 
 /**
@@ -154,6 +155,34 @@ struct ModEvent {
      */
     static ModEvent makeAllNotesOff(uint frameOffset = 0) {
         return ModEvent(frameOffset, ModEventKind.allNotesOff, NoteId.none, 0, 0.0f, 0.0f);
+    }
+
+    /**
+     * Constructs a normalized [0.0f, 1.0f] parameter automation event mapped using module ParamScale.
+     *
+     * Params:
+     *   paramIdx = Zero-based parameter index on the destination module.
+     *   norm01 = Normalized parameter value clamped to [0.0f, 1.0f].
+     *   instant = When true, snaps parameter smoothers immediately.
+     *   frameOffset = Sample offset within the slice.
+     *
+     * Returns:
+     *   Initialized ModEvent.
+     */
+    static ModEvent makeSetParamNormalized(
+        uint paramIdx,
+        float norm01,
+        bool instant = false,
+        uint frameOffset = 0
+    ) {
+        return ModEvent(
+            frameOffset,
+            ModEventKind.setParamNormalized,
+            NoteId.none,
+            paramIdx,
+            norm01,
+            instant ? 1.0f : 0.0f
+        );
     }
 }
 

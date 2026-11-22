@@ -155,13 +155,13 @@ Each phase below tracks status with `[ ]` / `[x]`. Do not mark any item `[x]` un
   - `[x]` `4.9` `spectravoice.d`, `input.d`, `sequencer/stream_worker.d` + `vorbis_player.d` (off-RT decode ring)
 - **Exit Criteria:** Unit tests, `@nogc` + `rt_malloc_trap`, silence-decay checks, extreme-sweep zero-`NaN` checks, and golden WAV tests (`tests/golden/golden_suite.d`) pass for every implemented module; `VorbisPlayer` runs with zero RT syscalls.
 
-### `[ ]` Phase 5 — Tracker Sequencer, Timeline, Supertracks & `MetaModule` *(Deps: Phases 2, 4 Tier 1)*
+### `[x]` Phase 5 — Tracker Sequencer, Timeline, Supertracks & `MetaModule` *(Deps: Phases 2, 4 Tier 1)*
 - **Subtasks:**
-  - `[ ]` `5.1` `sequencer/note.d` (`NoteCell`, `EffectCode`) & `sequencer/pattern.d` (atomic patch + CoW `PatternSnapshot`)
-  - `[ ]` `5.2` `sequencer/timeline.d` (`TimelineClip`, clones, Supertracks, CoW `TimelineSnapshot`)
-  - `[ ]` `5.3` `sequencer/clock.d` (64-bit rational BPM/TPL clock) & `sequencer/track_effects.d`
-  - `[ ]` `5.4` `sequencer/engine.d` (unified instance-scoped `Engine`, live input, offline stem WAV export)
-  - `[ ]` `5.5` `modules/control/metamodule.d` (child `Engine`, BPM sync, `MAX_METAMODULE_DEPTH = 16`)
+  - `[x]` `5.1` `sequencer/note.d` (`NoteCell`, `EffectCode`) & `sequencer/pattern.d` (atomic patch + CoW `PatternSnapshot`)
+  - `[x]` `5.2` `sequencer/timeline.d` (`TimelineClip`, clones, Supertracks, CoW `TimelineSnapshot`)
+  - `[x]` `5.3` `sequencer/clock.d` (64-bit rational BPM/TPL clock) & `sequencer/track_effects.d`
+  - `[x]` `5.4` `sequencer/engine.d` (unified instance-scoped `Engine`, live input, offline stem WAV export)
+  - `[x]` `5.5` `modules/control/metamodule.d` (child `Engine`, BPM sync, `MAX_METAMODULE_DEPTH = 16`)
 - **Exit Criteria:** Unit & golden tests pass for every sequencer component, clones, Supertracks, dynamic BPM/TPL, sub-line delays (`0x40`–`0x5F`), nested `MetaModule`, live pattern/timeline edits during playback, and `rt_malloc_trap`.
 
 ### `[ ]` Phase 6 — Native Persistence, Undo/Redo & Optional Importers *(Deps: Phases 4 Tier 1, 5)*

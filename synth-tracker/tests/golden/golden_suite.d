@@ -36,6 +36,11 @@ version (unittest) {
     import graph.module_api : ModuleInstance;
     import graph.plan : GraphCompileError, GraphCompiler, GraphPlan, NodeSpec, WireSpec;
     import graph.registry : ModuleRegistry;
+    import modules.control.metamodule : MetaMacroBinding, MetaModuleAsset;
+    import sequencer.engine : Engine;
+    import sequencer.note : EffectCode, NoteCell;
+    import sequencer.pattern : PatternSnapshot;
+    import sequencer.timeline : TimelineClip, TimelineSnapshot;
     import tests.audio_harness : AudioMetrics, assertBufferSizeInvariance, compareStereo,
         compareWithGoldenWav, renderOfflineStereo, renderOfflineToWav;
     import tests.rt_malloc_trap : verifyZeroRtAllocationsNothrow;
@@ -298,5 +303,128 @@ version (unittest) {
             },
             2048
         );
+    }
+
+    unittest {
+        Engine songEng;
+        assert(songEng.tryInit(44_100.0f));
+
+        ModuleInstance bass;
+        ModuleInstance meta;
+        ModuleInstance echo;
+        ModuleInstance sink;
+        assert(ModuleRegistry.createOffRT("synth.fm_synth", ModuleId(1), 44_100.0f, bass));
+        assert(ModuleRegistry.createOffRT("ctl.metamodule", ModuleId(2), 44_100.0f, meta));
+        assert(ModuleRegistry.createOffRT("fx.echo", ModuleId(3), 44_100.0f, echo));
+        assert(ModuleRegistry.createOffRT("core.output", ModuleId(4), 44_100.0f, sink));
+        scope (exit) {
+            songEng.releaseAllOwnedResources();
+            bass.destroyOffRT();
+            meta.destroyOffRT();
+            echo.destroyOffRT();
+            sink.destroyOffRT();
+        }
+
+        MetaModuleAsset* childAsset = MetaModuleAsset.createOffRT(44_100.0f);
+        assert(childAsset !is null);
+        ModuleInstance cOsc;
+        ModuleInstance cOut;
+        assert(ModuleRegistry.createOffRT("synth.analog_gen", ModuleId(1), 44_100.0f, cOsc));
+        assert(ModuleRegistry.createOffRT("core.output", ModuleId(2), 44_100.0f, cOut));
+        NodeSpec[2] cNodes = [NodeSpec.fromInstance(cOsc), NodeSpec.fromInstance(cOut)];
+        WireSpec[1] cWires = [WireSpec(ModuleId(1), 2, ModuleId(2), 0, 1.0f)];
+        GraphPlan* cPlan = null;
+        GraphCompileError err;
+        assert(GraphCompiler.compile(cNodes[], cWires[], cPlan, err));
+        childAsset.adoptModule(cOsc);
+        childAsset.adoptModule(cOut);
+        childAsset.childEngine.attachPlanOffRT(cPlan);
+        childAsset.macros[0] = MetaMacroBinding(ModuleId(1), 4, 400.0f, 5000.0f, true);
+        PatternSnapshot* cPat = PatternSnapshot.createOffRT(1, 1, 2);
+        cPat.setCellAtomic(0, 0, NoteCell.makeNote(64, 0.8f, 1));
+        cPat.setCellAtomic(0, 1, NoteCell.makeNote(71, 0.8f, 1));
+        childAsset.childEngine.attachPatternOffRT(1, cPat);
+        TimelineClip[1] cClips = [TimelineClip(1, 1, 0, 0, 2, 0, 0, false, false, false)];
+        childAsset.childEngine.attachTimelineOffRT(TimelineSnapshot.createOffRT(cClips[], 0, 2));
+        void* prevMeta = null;
+        assert(meta.desc.vtable.swapAsset(meta.state, 0, childAsset, prevMeta));
+
+        NodeSpec[4] pNodes = [
+            NodeSpec.fromInstance(bass),
+            NodeSpec.fromInstance(meta),
+            NodeSpec.fromInstance(echo),
+            NodeSpec.fromInstance(sink)
+        ];
+        WireSpec[3] pWires = [
+            WireSpec(ModuleId(1), 1, ModuleId(3), 0, 0.7f),
+            WireSpec(ModuleId(2), 2, ModuleId(3), 0, 0.5f),
+            WireSpec(ModuleId(3), 1, ModuleId(4), 0, 1.0f)
+        ];
+        GraphPlan* pPlan = null;
+        assert(GraphCompiler.compile(pNodes[], pWires[], pPlan, err));
+        songEng.attachPlanOffRT(pPlan);
+
+        PatternSnapshot* pat1 = PatternSnapshot.createOffRT(1, 2, 2);
+        pat1.setCellAtomic(0, 0, NoteCell.makeNote(45, 0.9f, 1, EffectCode.subLineDelayBase + 16, 0));
+        pat1.setCellAtomic(0, 1, NoteCell.makeEffect(EffectCode.setBpm, 140));
+        pat1.setCellAtomic(1, 0, NoteCell.makeEffect(EffectCode.setSpeed, 4));
+        songEng.attachPatternOffRT(1, pat1);
+
+        PatternSnapshot* pat2 = PatternSnapshot.createOffRT(2, 1, 2);
+        pat2.setCellAtomic(0, 0, NoteCell.makeNote(52, 0.9f, 0, EffectCode.portamento, 12));
+        songEng.attachPatternOffRT(2, pat2);
+
+        TimelineClip[3] sClips = [
+            TimelineClip(1, 1, 0, 0, 2, 0, 0, false, false, true),
+            TimelineClip(2, 1, 1, 2, 2, 0, 0, false, false, true),
+            TimelineClip(3, 2, 0, 1, 3, 0, 0, false, false, true)
+        ];
+        songEng.attachTimelineOffRT(TimelineSnapshot.createOffRT(sClips[], 0, 4));
+
+        void resetSong() {
+            songEng.reset();
+            childAsset.childEngine.reset();
+            childAsset.childEngine.seekLine(0);
+            songEng.setTempo(125.0, 6);
+            songEng.setPlaying(true);
+        }
+
+        assertBufferSizeInvariance(
+            &resetSong,
+            (float[] l, float[] r, size_t startFrame) @nogc nothrow {
+                cast(void) startFrame;
+                float[][2] outs = [l, r];
+                const(float[])[2] ins = [null, null];
+                songEng.processHostBuffer(outs, ins, cast(uint) l.length);
+            },
+            4096
+        );
+
+        resetSong();
+        float[128] rtL = 0.0f;
+        float[128] rtR = 0.0f;
+        float[][2] rtOuts = [rtL[], rtR[]];
+        const(float[])[2] rtIns = [null, null];
+        verifyZeroRtAllocationsNothrow(() @nogc nothrow {
+            songEng.processHostBuffer(rtOuts, rtIns, 128);
+        });
+
+        enum string goldenSongWav = "/tmp/synth_tracker_phase5_golden_song.wav";
+        scope (exit) {
+            if (exists(goldenSongWav)) {
+                remove(goldenSongWav);
+            }
+        }
+        resetSong();
+        string wErr;
+        assert(songEng.exportOfflineWav(goldenSongWav, 4096, 128, wErr), wErr);
+
+        resetSong();
+        OwnedBuffer!float checkL;
+        OwnedBuffer!float checkR;
+        assert(songEng.renderOfflineToBuffer(4096, 64, checkL, checkR));
+
+        immutable AudioMetrics m = compareWithGoldenWav(goldenSongWav, checkL[], checkR[], wErr);
+        assert(wErr is null && m.bitExact() && m.peakActual > 0.05);
     }
 }

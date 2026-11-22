@@ -45,7 +45,10 @@ enum size_t MAX_SLICE_EVENTS = 128;
 enum RetiredKind : ubyte {
     graphPlan = 0,
     moduleState = 1,
-    moduleAsset = 2
+    moduleAsset = 2,
+    patternSnapshot = 3,
+    timelineSnapshot = 4,
+    childEngine = 5
 }
 
 /**
@@ -144,6 +147,7 @@ struct AudioGraph {
     private float sampleRate_ = 44100.0f;
     private FrameTime renderedFrames_ = 0;
     private ulong sliceCounter_ = 0;
+    private uint baseMetaDepth_ = 0;
 
     @disable this(this);
 
@@ -329,6 +333,177 @@ struct AudioGraph {
         return nb.vtable.setParam(nb.state, paramIdx, value, sampleRate_, instant);
     }
 
+    /**
+     * Applies a normalized [0.0f, 1.0f] parameter change on the active plan's matching module.
+     *
+     * Params:
+     *   id = Target ModuleId.
+     *   paramIdx = Zero-based parameter index.
+     *   norm01 = Normalized parameter value clamped to [0.0f, 1.0f].
+     *   instant = When true, snaps parameter smoothers immediately without ramping.
+     *
+     * Returns:
+     *   True if the module and parameter index were valid and updated.
+     */
+    bool setModuleParamNormalized(ModuleId id, uint paramIdx, float norm01, bool instant = false) {
+        if (activePlan_ is null) {
+            return false;
+        }
+        NodeBinding* nb = activePlan_.findNode(id);
+        if (nb is null || nb.vtable is null || nb.vtable.setParamNormalized is null || nb.state is null) {
+            return false;
+        }
+        return nb.vtable.setParamNormalized(nb.state, paramIdx, norm01, sampleRate_, instant);
+    }
+
+    /**
+     * Sets runtime mute state on all compiled steps belonging to id without reallocating GraphPlan.
+     *
+     * Params:
+     *   id = Target ModuleId in activePlan_.
+     *   muted = True to mute node output.
+     *
+     * Returns:
+     *   True if the node exists in activePlan_.
+     */
+    bool setNodeMuted(ModuleId id, bool muted) {
+        if (activePlan_ is null || !id.isValid()) {
+            return false;
+        }
+        bool found = false;
+        foreach (ref step; activePlan_.steps[]) {
+            if (step.nodeIndex < activePlan_.nodeCount() && activePlan_.nodeAt(step.nodeIndex).id == id) {
+                step.muted = muted;
+                found = true;
+            }
+        }
+        return found;
+    }
+
+    /**
+     * Sets runtime bypass state on all compiled steps belonging to id without reallocating GraphPlan.
+     *
+     * Params:
+     *   id = Target ModuleId in activePlan_.
+     *   bypassed = True to bypass node processing.
+     *
+     * Returns:
+     *   True if the node exists in activePlan_.
+     */
+    bool setNodeBypassed(ModuleId id, bool bypassed) {
+        if (activePlan_ is null || !id.isValid()) {
+            return false;
+        }
+        bool found = false;
+        foreach (ref step; activePlan_.steps[]) {
+            if (step.nodeIndex < activePlan_.nodeCount() && activePlan_.nodeAt(step.nodeIndex).id == id) {
+                step.bypassed = bypassed;
+                found = true;
+            }
+        }
+        return found;
+    }
+
+    /**
+     * Configures the nested MetaModule recursion depth forwarded into every ProcessContext.
+     *
+     * Params:
+     *   depth = Nesting depth (0 for top-level Engine, parent.metaDepth + 1 inside MetaModule).
+     */
+    void setMetaDepth(uint depth) pure @safe {
+        baseMetaDepth_ = depth;
+    }
+
+    /**
+     * Renders 1..FIXED_BLOCK_FRAMES frames directly from in64 to out64 without host staging lag.
+     *
+     * Params:
+     *   out64 = Destination stereo slices (each >= frames).
+     *   in64 = Optional host stereo input slices for hardware duplex / MetaModule input.
+     *   transport = Mutable transport state whose totalFrames advances by frames.
+     *   frames = Direct slice length in [1 .. FIXED_BLOCK_FRAMES].
+     */
+    void renderQuantumDirect(
+        float[][2] out64,
+        const(float[])[2] in64,
+        ref TransportState transport,
+        uint frames = FIXED_BLOCK_FRAMES
+    ) {
+        auto denormGuard = ScopedNoDenormals.enter();
+        cast(void) denormGuard;
+
+        if (frames == 0) {
+            return;
+        }
+        immutable uint qf = frames > FIXED_BLOCK_FRAMES ? FIXED_BLOCK_FRAMES : frames;
+        assert(out64[0].length >= qf && out64[1].length >= qf,
+            "AudioGraph.renderQuantumDirect output slices smaller than requested frames");
+
+        stageIn_[0][] = 0.0f;
+        stageIn_[1][] = 0.0f;
+        float peakIn = 0.0f;
+        const(float)[] inL = in64[0];
+        const(float)[] inR = in64[1];
+        foreach (i; 0 .. qf) {
+            immutable float l = (i < inL.length && isFinite(inL[i])) ? inL[i] : 0.0f;
+            immutable float r = (i < inR.length && isFinite(inR[i])) ? inR[i] : 0.0f;
+            stageIn_[0][i] = l;
+            stageIn_[1][i] = r;
+            immutable float al = fabs(l);
+            immutable float ar = fabs(r);
+            if (al > peakIn) peakIn = al;
+            if (ar > peakIn) peakIn = ar;
+        }
+        stageInSilent_ = peakIn <= 1e-7f;
+
+        renderFixedQuantumCore(transport, qf);
+        out64[0][0 .. qf] = stageOut_[0][0 .. qf];
+        out64[1][0 .. qf] = stageOut_[1][0 .. qf];
+    }
+
+    /**
+     * Copies the most recently rendered 64-frame stereo audio bus output for modId.
+     *
+     * Params:
+     *   modId = Source ModuleId in activePlan_.
+     *   dstL = Destination left buffer (>= FIXED_BLOCK_FRAMES).
+     *   dstR = Destination right buffer (>= FIXED_BLOCK_FRAMES).
+     *
+     * Returns:
+     *   True if modId exists and has an audio output bus; false otherwise.
+     */
+    bool copyLastNodeAudioBus(ModuleId modId, float[] dstL, float[] dstR) {
+        if (activePlan_ is null || !modId.isValid()
+                || dstL.length < FIXED_BLOCK_FRAMES || dstR.length < FIXED_BLOCK_FRAMES) {
+            return false;
+        }
+        uint targetNodeIdx = uint.max;
+        foreach (i; 0 .. activePlan_.nodeCount()) {
+            if (activePlan_.nodeAt(i).id == modId) {
+                targetNodeIdx = cast(uint) i;
+                break;
+            }
+        }
+        if (targetNodeIdx == uint.max) {
+            return false;
+        }
+        foreach (ref step; activePlan_.steps[]) {
+            if (step.nodeIndex == targetNodeIdx && step.hasAudioOut && step.audioOutBus < activePlan_.numAudioBuses) {
+                if (step.muted) {
+                    dstL[0 .. FIXED_BLOCK_FRAMES] = 0.0f;
+                    dstR[0 .. FIXED_BLOCK_FRAMES] = 0.0f;
+                } else {
+                    const busL = activePlan_.audioBusChannel(step.audioOutBus, 0);
+                    const busR = activePlan_.audioBusChannel(step.audioOutBus, 1);
+                    dstL[0 .. FIXED_BLOCK_FRAMES] = busL[0 .. FIXED_BLOCK_FRAMES];
+                    dstR[0 .. FIXED_BLOCK_FRAMES] = busR[0 .. FIXED_BLOCK_FRAMES];
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
     private bool enqueueEventImpl(ModuleId targetMod, scope const ref ModEvent ev, FrameTime targetFrame) {
         return scheduledEvents_.tryPush(targetMod, targetFrame, ev);
     }
@@ -499,12 +674,16 @@ struct AudioGraph {
     }
 
     private void renderFixedQuantum(ref TransportState transport) {
-        immutable FrameTime quantumStart = renderedFrames_;
-        immutable FrameTime quantumEnd = quantumStart + FIXED_BLOCK_FRAMES;
-
         popHostInputQuantum();
-        stageOut_[0][] = 0.0f;
-        stageOut_[1][] = 0.0f;
+        renderFixedQuantumCore(transport, FIXED_BLOCK_FRAMES);
+    }
+
+    private void renderFixedQuantumCore(ref TransportState transport, uint quantumFrames) {
+        immutable FrameTime quantumStart = renderedFrames_;
+        immutable FrameTime quantumEnd = quantumStart + quantumFrames;
+
+        stageOut_[0][0 .. quantumFrames] = 0.0f;
+        stageOut_[1][0 .. quantumFrames] = 0.0f;
         emittedEvents_.clear();
 
         GraphTelemetry* tel = &telemetry_.backBuffer();
@@ -514,7 +693,7 @@ struct AudioGraph {
             scheduledEvents_.pruneBefore(quantumEnd);
             renderedFrames_ = quantumEnd;
             sliceCounter_++;
-            transport.totalFrames += FIXED_BLOCK_FRAMES;
+            transport.totalFrames += quantumFrames;
             tel.totalFramesRendered = renderedFrames_;
             tel.slicesRendered = sliceCounter_;
             telemetry_.publish();
@@ -535,7 +714,7 @@ struct AudioGraph {
                 }
             }
         }
-        splitPoints[splitCount++] = FIXED_BLOCK_FRAMES;
+        splitPoints[splitCount++] = quantumFrames;
 
         float[MAX_TELEMETRY_MODULES] nodePeakAccum = 0.0f;
         bool[MAX_TELEMETRY_MODULES] nodeAnyActive = false;
@@ -559,7 +738,7 @@ struct AudioGraph {
         float masterL = 0.0f;
         float masterR = 0.0f;
         bool clipped = false;
-        foreach (i; 0 .. FIXED_BLOCK_FRAMES) {
+        foreach (i; 0 .. quantumFrames) {
             immutable float l = stageOut_[0][i];
             immutable float r = stageOut_[1][i];
             tel.scopeLeft[i] = l;
@@ -598,7 +777,7 @@ struct AudioGraph {
 
         renderedFrames_ = quantumEnd;
         sliceCounter_++;
-        transport.totalFrames += FIXED_BLOCK_FRAMES;
+        transport.totalFrames += quantumFrames;
         tel.totalFramesRendered = renderedFrames_;
         tel.slicesRendered = sliceCounter_;
         telemetry_.publish();
@@ -641,6 +820,7 @@ struct AudioGraph {
                 fbCtx.transport = transport;
                 fbCtx.transport.totalFrames = subStartFrame;
                 fbCtx.inputSilent = step.muted ? true : mainSilent;
+                fbCtx.metaDepth = baseMetaDepth_;
                 if (nb.vtable.processFeedbackSend !is null) {
                     nb.vtable.processFeedbackSend(nb.state, io.audioIn, fbCtx);
                 }
@@ -736,6 +916,7 @@ struct AudioGraph {
             ctx.hostAudioIn[0] = stageIn_[0][subStart .. subEnd];
             ctx.hostAudioIn[1] = stageIn_[1][subStart .. subEnd];
             ctx.hostInputSilent = stageInSilent_;
+            ctx.metaDepth = baseMetaDepth_;
             if (step.eventOutWireCount > 0) {
                 ctx.eventOut = EventSink(&routeEmittedEvent, &routerCtx);
             }
@@ -879,6 +1060,12 @@ struct AudioGraph {
             immutable bool instant = (ev.kind == ModEventKind.setParamInstant);
             if (nb.vtable.setParam !is null
                     && nb.vtable.setParam(nb.state, ev.paramId, ev.valueA, sampleRate_, instant)) {
+                return;
+            }
+        }
+        if (ev.kind == ModEventKind.setParamNormalized) {
+            if (nb.vtable.setParamNormalized !is null
+                    && nb.vtable.setParamNormalized(nb.state, ev.paramId, ev.valueA, sampleRate_, ev.valueB >= 0.5f)) {
                 return;
             }
         }

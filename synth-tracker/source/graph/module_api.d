@@ -28,7 +28,7 @@ module graph.module_api;
 import core.lifetime : emplace;
 import core.stdc.stdlib : free, malloc;
 version (Posix) import core.sys.posix.stdlib : posix_memalign;
-import std.math : isFinite, isNaN;
+import std.math : exp, isFinite, isNaN, log;
 import std.traits : FieldNameTuple, getUDAs, hasElaborateDestructor, hasUDA, isFloatingPoint,
     isStaticArray;
 
@@ -97,6 +97,7 @@ struct ModuleVTable {
     void function(void*, const(float[])[2] audioIn, ref ProcessContext ctx) @nogc nothrow processFeedbackSend;
     float function(const(void)*, uint paramIdx) @nogc nothrow getParam;
     bool function(void*, uint paramIdx, float val, float sampleRate, bool instant) @nogc nothrow setParam;
+    bool function(void*, uint paramIdx, float norm01, float sampleRate, bool instant) @nogc nothrow setParamNormalized;
     bool function(void*, uint slot, void* newAsset, out void* oldAsset) @nogc nothrow swapAsset;
     bool function(const(void)*, out ubyte[] payload) serializeExtra;
     bool function(void*, const(ubyte)[] payload, float sampleRate) deserializeExtra;
@@ -438,6 +439,46 @@ template ModuleAdapter(T) {
         return false;
     }
 
+    private bool setParamNormalizedImpl(
+        void* raw,
+        uint paramIdx,
+        float norm01,
+        float sampleRate,
+        bool instant
+    ) @nogc nothrow {
+        if (raw is null || paramIdx >= PARAM_COUNT) {
+            return false;
+        }
+        float n = isFinite(norm01) ? norm01 : 0.0f;
+        if (n < 0.0f) {
+            n = 0.0f;
+        } else if (n > 1.0f) {
+            n = 1.0f;
+        }
+        static if (PARAM_COUNT > 0) {
+            static foreach (i; 0 .. PARAM_COUNT) {
+                if (paramIdx == i) {
+                    {
+                        enum ParamDescriptor desc = PARAM_STORAGE[i];
+                        float mapped = desc.defaultVal;
+                        if (desc.scale == ParamScale.logarithmic && desc.minVal > 0.0f && desc.maxVal > desc.minVal) {
+                            immutable double ratio = cast(double) desc.maxVal / cast(double) desc.minVal;
+                            mapped = cast(float)(cast(double) desc.minVal * exp(log(ratio) * cast(double) n));
+                        } else if (desc.scale == ParamScale.discrete) {
+                            immutable float span = desc.maxVal - desc.minVal;
+                            immutable int step = cast(int)(n * span + 0.5f);
+                            mapped = desc.minVal + cast(float) step;
+                        } else {
+                            mapped = desc.minVal + (desc.maxVal - desc.minVal) * n;
+                        }
+                        return setParamImpl(raw, paramIdx, mapped, sampleRate, instant);
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     private bool swapAssetImpl(void* raw, uint slot, void* newAsset, out void* oldAsset) @nogc nothrow {
         oldAsset = null;
         if (raw is null) {
@@ -492,6 +533,7 @@ template ModuleAdapter(T) {
         HAS_FEEDBACK_SEND ? &processFeedbackSendImpl : null,
         &getParamImpl,
         &setParamImpl,
+        &setParamNormalizedImpl,
         &swapAssetImpl,
         &serializeExtraImpl,
         &deserializeExtraImpl
