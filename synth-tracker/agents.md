@@ -141,18 +141,18 @@ Each phase below tracks status with `[ ]` / `[x]`. Do not mark any item `[x]` un
   - `[x]` `3.4` Device hot-unplug/sample-rate listeners + `main.d --cli-demo`
 - **Exit Criteria:** Hardware/driver unit & integration tests pass; sustained 44.1/48 kHz playback at 64–128 frames with zero xruns; MIDI-to-audio latency $< 10$ ms; callback verified unregistered with GC and allocation-free.
 
-### `[ ]` Phase 4 — Built-In Module Library *(Deps: Phases 0, 1, 2, 3)*
+### `[x]` Phase 4 — Built-In Module Library *(Deps: Phases 0, 1, 2, 3)*
 - **Subtasks (Tier 1 MVP — 18 modules):**
-  - `[ ]` `4.1` Core Effects (`amplifier`, `dc_blocker`, `filter_pro`, `distortion`, `delay`, `echo`, `reverb`, `compressor` w/ sidechain)
-  - `[ ]` `4.2` Core Control (`multisynth`, `multictl`, `adsr_mod`, `lfo`, `feedback`)
-  - `[ ]` `4.3` Core Percussion/Synths (`kicker`, `drumsynth`, `analog_gen`, `fm_synth`)
-  - `[ ]` `4.4` `sampler.d` (multi-slot, Catmull-Rom, loops, envelopes, off-RT `SwapModuleAsset`)
-  - `[ ]` `4.5` Tier 1 automated verification suite + 1-file/1-line extensibility test
+  - `[x]` `4.1` Core Effects (`amplifier`, `dc_blocker`, `filter_pro`, `distortion`, `delay`, `echo`, `reverb`, `compressor` w/ sidechain)
+  - `[x]` `4.2` Core Control (`multisynth`, `multictl`, `adsr_mod`, `lfo`, `feedback`)
+  - `[x]` `4.3` Core Percussion/Synths (`kicker`, `drumsynth`, `analog_gen`, `fm_synth`)
+  - `[x]` `4.4` `sampler.d` (multi-slot, Catmull-Rom, loops, envelopes, off-RT `SwapModuleAsset`)
+  - `[x]` `4.5` Tier 1 automated verification suite + 1-file/1-line extensibility test
 - **Subtasks (Tier 2 Expansion — 19 modules, can interleave with Phases 5–8):**
-  - `[ ]` `4.6` Expansion FX A (`eq`, `waveshaper`, `flanger`, `vibrato`, `modulator`, `smooth_fx`)
-  - `[ ]` `4.7` Expansion Spectral/Time FX B (`vocal_filter`, `pitch_shifter`, `fft_fx`, `loop_fx`)
-  - `[ ]` `4.8` Expansion Control (`glide`, `ctl2note`, `pitch2ctl`, `velocity2ctl`, `sound2ctl`, `pitch_detector`)
-  - `[ ]` `4.9` `spectravoice.d`, `input.d`, `sequencer/stream_worker.d` + `vorbis_player.d` (off-RT decode ring)
+  - `[x]` `4.6` Expansion FX A (`eq`, `waveshaper`, `flanger`, `vibrato`, `modulator`, `smooth_fx`)
+  - `[x]` `4.7` Expansion Spectral/Time FX B (`vocal_filter`, `pitch_shifter`, `fft_fx`, `loop_fx`)
+  - `[x]` `4.8` Expansion Control (`glide`, `ctl2note`, `pitch2ctl`, `velocity2ctl`, `sound2ctl`, `pitch_detector`)
+  - `[x]` `4.9` `spectravoice.d`, `input.d`, `sequencer/stream_worker.d` + `vorbis_player.d` (off-RT decode ring)
 - **Exit Criteria:** Unit tests, `@nogc` + `rt_malloc_trap`, silence-decay checks, extreme-sweep zero-`NaN` checks, and golden WAV tests (`tests/golden/golden_suite.d`) pass for every implemented module; `VorbisPlayer` runs with zero RT syscalls.
 
 ### `[ ]` Phase 5 — Tracker Sequencer, Timeline, Supertracks & `MetaModule` *(Deps: Phases 2, 4 Tier 1)*

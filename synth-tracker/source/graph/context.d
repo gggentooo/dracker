@@ -80,4 +80,6 @@ struct ProcessContext {
     TransportState transport;
     EventSink eventOut;
     bool inputSilent = false;
+    const(float)[][2] hostAudioIn;
+    bool hostInputSilent = true;
 }

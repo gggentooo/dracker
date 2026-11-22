@@ -10,6 +10,28 @@ All major changes to `synth-tracker/` must be recorded in reverse-chronological 
 
 ---
 
+## [2026-11-22 09:17:07 KST]
+- **Author:** Antigravity (Gemini 4 Neon)
+- **Summary:** Implemented Phase 4 (Built-In Module Library — Tier 1 & Tier 2) with all 38 built-in `ModuleRegistry` modules, off-RT `StreamWorker` background audio decode/streaming (`VorbisPlayer` + `StreamAudioRing`), host duplex audio-input staging in `AudioGraph`, automated `@nogc` + `rt_malloc_trap` unit and golden WAV verification suites, `-O3` allocator/GC trap escape hardening in `foundation_test.d`, and updated checklist/changelog documentation.
+- **Changes & Verification:**
+  - Core & Expansion Effects (`4.1`, `4.6`, `4.7`): implemented `FilterPro`, `Distortion`, `Delay`, `Echo`, `Reverb` (8-line Householder FDN), `Compressor` (with `sidechainStereo`), `Eq3Band`, `WaveShaper` (1x/2x/4x oversampling + swappable table), `Flanger`, `Vibrato`, `Modulator` (audio/CV ring/AM/PM), `SmoothFx`, `VocalFilter`, `PitchShifter`, `FftFx` (75%-overlap STFT via `FftFloat`), and `LoopFx`.
+  - Core & Expansion Control (`4.2`, `4.8`): implemented `MultiSynth`, `MultiCtl` (with swappable fan-out curve/target maps), `AdsrMod`, `LfoMod`, `Glide`, `Ctl2Note`, `Pitch2Ctl`, `Velocity2Ctl`, `Sound2Ctl`, and `PitchDetector` (first-peak NSDF MPM autocorrelation + zero-crossing pitch-to-note tracking).
+  - Core & Expansion Synths, Sampler & Streaming (`4.3`, `4.4`, `4.9`): implemented `Kicker`, `DrumSynth`, `AnalogGen` (32-voice unison + drawn wavetable asset), `FmSynth` (5-op 6-algo), `Sampler` (multi-slot keymap, Catmull-Rom/linear/nearest, forward/ping-pong loops, breakpoint envelopes, off-RT decode, `swapAsset`, serialization), `SpectraVoice` (inverse-FFT harmonic wavetables), `AudioInput` (`synth.input` reading staged duplex host input from `ProcessContext.hostAudioIn`), and `StreamWorker` + `VorbisPlayer` (`StreamAudioRing` wait-free streaming with zero RT syscalls).
+  - Graph & Registry: extended `ProcessContext` and `AudioGraph` with lock-free host audio input ring staging and sub-block slicing, and statically registered all 38 built-in modules in `ModuleRegistry` (`source/graph/registry.d`).
+  - Verification & Test Suites (`4.5`): added `tests/unit/modules_test.d` (38-module silence/extreme/`rt_malloc_trap` matrix, per-module DSP/asset/serialization/streaming checks, `DummyExtensibilityModule` 1-file/1-line contract) and `tests/golden/golden_suite.d` (multi-module patches, 64..512 buffer-size invariance, cyclic `Feedback` determinism, golden WAV round-trips); fixed `tests/unit/foundation_test.d` allocator/GC escape sinks so `-unittest -O3` does not dead-eliminate trap checks. Verified `dub test` (`6 modules passed unittests`), `DFLAGS="-unittest -O3 -w" dub test` (`7 modules passed unittests`, `102` `__unittest` symbols), `dub build --config=headless --build=release`, `--list-devices`, `--cli-demo --duration=0.35 --auto-chord` (`callbacks=116, frames=14848, xruns=0`), `ldc2 -mtriple=x86_64-apple-macos12.0 -O3 -w -unittest` (`X86_64_COMPILE_OK`), `PHASE4_COMMENT_AUDIT_OK: 46 files`, `plutil -lint`, and `clang -Wall -Wextra`.
+- **Affected Files:**
+  - `synth-tracker/agents.md` (updated — marked Phase 4 and `4.1`–`4.9` complete)
+  - `synth-tracker/docs/changelog.md` (updated — added this entry)
+  - `synth-tracker/source/graph/context.d`, `synth-tracker/source/graph/audio_graph.d`, `synth-tracker/source/graph/registry.d` (modified)
+  - `synth-tracker/source/modules/effects/{filter_pro,distortion,delay,echo,reverb,compressor,lfo,eq,waveshaper,flanger,vibrato,modulator,smooth_fx,vocal_filter,pitch_shifter,fft_fx,loop_fx}.d` (created)
+  - `synth-tracker/source/modules/control/{multisynth,multictl,adsr_mod,glide,ctl2note,pitch2ctl,velocity2ctl,sound2ctl,pitch_detector}.d` (created)
+  - `synth-tracker/source/modules/synths/{kicker,drumsynth,analog_gen,fm_synth,sampler,spectravoice,input,vorbis_player}.d` (created)
+  - `synth-tracker/source/sequencer/stream_worker.d` (created)
+  - `synth-tracker/tests/unit/modules_test.d`, `synth-tracker/tests/golden/golden_suite.d` (created)
+  - `synth-tracker/tests/unit/foundation_test.d` (modified)
+
+---
+
 ## [2026-11-22 08:46:27 KST]
 - **Timestamp:** `2026-11-22 08:46:27 KST`
 - **Author:** Antigravity (Gemini 4 Neon)

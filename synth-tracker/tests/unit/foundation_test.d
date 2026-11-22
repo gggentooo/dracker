@@ -61,6 +61,8 @@ version (unittest) {
     }
 
     private __gshared size_t[4] gResourceDestroyCounts = 0;
+    private shared size_t gTrapEscapeSink = 0;
+    private __gshared void[] gGcEscapeSink = null;
 
     private struct CountedResource {
         size_t counterSlot = 0;
@@ -783,6 +785,8 @@ version (unittest) {
         immutable RtAllocationAudit mallocAudit = auditRtAllocations({
             void* ptr = malloc(128);
             assert(ptr !is null);
+            (cast(ubyte*) ptr)[0] = 1;
+            atomicStore!(MemoryOrder.seq)(gTrapEscapeSink, cast(size_t) ptr);
             free(ptr);
         });
         assert(!mallocAudit.clean() && mallocAudit.allocCallCount >= 1 && mallocAudit.freeCallCount >= 1);
@@ -790,14 +794,19 @@ version (unittest) {
         immutable RtAllocationAudit callocAudit = auditRtAllocations({
             void* ptr = calloc(8, 16);
             assert(ptr !is null);
+            atomicStore!(MemoryOrder.seq)(gTrapEscapeSink, cast(size_t) ptr);
             free(ptr);
         });
         assert(!callocAudit.clean() && callocAudit.heapCallCount >= 2);
 
         immutable RtAllocationAudit reallocAudit = auditRtAllocations({
             void* p1 = malloc(32);
+            assert(p1 !is null);
+            (cast(ubyte*) p1)[0] = 2;
+            atomicStore!(MemoryOrder.seq)(gTrapEscapeSink, cast(size_t) p1);
             void* p2 = realloc(p1, 256);
             assert(p2 !is null);
+            atomicStore!(MemoryOrder.seq)(gTrapEscapeSink, cast(size_t) p2);
             free(p2);
         });
         assert(!reallocAudit.clean() && reallocAudit.heapCallCount >= 3);
@@ -805,6 +814,8 @@ version (unittest) {
         immutable RtAllocationAudit alignAudit = auditRtAllocations({
             void* ptr = null;
             assert(posix_memalign(&ptr, 64, 128) == 0 && ptr !is null);
+            (cast(ubyte*) ptr)[0] = 3;
+            atomicStore!(MemoryOrder.seq)(gTrapEscapeSink, cast(size_t) ptr);
             free(ptr);
         });
         assert(!alignAudit.clean() && alignAudit.heapCallCount >= 2);
@@ -812,19 +823,27 @@ version (unittest) {
         immutable RtAllocationAudit ownedBufAudit = auditRtAllocations({
             OwnedBuffer!float tmp;
             assert(OwnedBuffer!float.tryAllocate(64, tmp));
+            atomicStore!(MemoryOrder.seq)(gTrapEscapeSink, cast(size_t) tmp.ptr);
         });
         assert(!ownedBufAudit.clean() && ownedBufAudit.heapCallCount >= 2);
 
         immutable RtAllocationAudit gcAudit = auditRtAllocations({
             auto gcSlice = new int[64];
             gcSlice[0] = 7;
+            gGcEscapeSink = gcSlice;
+            atomicStore!(MemoryOrder.seq)(gTrapEscapeSink, cast(size_t) gcSlice.ptr);
         });
+        gGcEscapeSink = null;
         assert(!gcAudit.clean() && gcAudit.gcBytesAllocated > 0);
 
         bool caughtAssertion = false;
         try {
             verifyZeroRtAllocations({
                 void* bad = malloc(64);
+                if (bad !is null) {
+                    (cast(ubyte*) bad)[0] = 4;
+                    atomicStore!(MemoryOrder.seq)(gTrapEscapeSink, cast(size_t) bad);
+                }
                 free(bad);
             });
         } catch (AssertError) {
@@ -837,10 +856,13 @@ version (unittest) {
             verifyZeroRtAllocations({
                 auto badGc = new float[32];
                 badGc[0] = 1.0f;
+                gGcEscapeSink = badGc;
+                atomicStore!(MemoryOrder.seq)(gTrapEscapeSink, cast(size_t) badGc.ptr);
             });
         } catch (AssertError) {
             caughtGcAssertion = true;
         }
+        gGcEscapeSink = null;
         assert(caughtGcAssertion);
 
         auto bgThread = new Thread({

@@ -28,7 +28,7 @@ import std.math : fabs, isFinite;
 
 import foundation.concurrency : TripleBuffer;
 import foundation.math_rt : ScopedNoDenormals;
-import foundation.memory : FixedArray;
+import foundation.memory : FixedArray, OwnedBuffer;
 import foundation.types : FIXED_BLOCK_FRAMES, FrameTime, ModuleId;
 import graph.buffer : CvInView, CvOutView, MAX_CV_PORTS, ProcessIO;
 import graph.context : EventSink, ProcessContext, TransportState;
@@ -132,6 +132,13 @@ struct AudioGraph {
     private float[FIXED_BLOCK_FRAMES][2] stageOut_ = 0.0f;
     private uint stageOutRead_ = FIXED_BLOCK_FRAMES;
     private uint stageOutAvail_ = 0;
+    private OwnedBuffer!float hostInRingL_;
+    private OwnedBuffer!float hostInRingR_;
+    private size_t hostInRead_ = 0;
+    private size_t hostInWrite_ = 0;
+    private size_t hostInCount_ = 0;
+    private float[FIXED_BLOCK_FRAMES][2] stageIn_ = 0.0f;
+    private bool stageInSilent_ = true;
     private TripleBuffer!GraphTelemetry telemetry_;
     private GraphPlan* activePlan_ = null;
     private float sampleRate_ = 44100.0f;
@@ -164,8 +171,21 @@ struct AudioGraph {
         if (!EventArena.tryCreate(maxScheduledEvents, emit)) {
             return false;
         }
+        OwnedBuffer!float hInL;
+        OwnedBuffer!float hInR;
+        if (!OwnedBuffer!float.tryAllocate(8192, hInL) || !OwnedBuffer!float.tryAllocate(8192, hInR)) {
+            return false;
+        }
         scheduledEvents_ = move(sched);
         emittedEvents_ = move(emit);
+        hostInRingL_ = move(hInL);
+        hostInRingR_ = move(hInR);
+        hostInRead_ = 0;
+        hostInWrite_ = 0;
+        hostInCount_ = 0;
+        stageIn_[0][] = 0.0f;
+        stageIn_[1][] = 0.0f;
+        stageInSilent_ = true;
         sampleRate_ = sampleRate;
         stageOutRead_ = FIXED_BLOCK_FRAMES;
         stageOutAvail_ = 0;
@@ -184,6 +204,18 @@ struct AudioGraph {
         stageOut_[1][] = 0.0f;
         stageOutRead_ = FIXED_BLOCK_FRAMES;
         stageOutAvail_ = 0;
+        if (!hostInRingL_.empty()) {
+            hostInRingL_.opSlice()[] = 0.0f;
+        }
+        if (!hostInRingR_.empty()) {
+            hostInRingR_.opSlice()[] = 0.0f;
+        }
+        hostInRead_ = 0;
+        hostInWrite_ = 0;
+        hostInCount_ = 0;
+        stageIn_[0][] = 0.0f;
+        stageIn_[1][] = 0.0f;
+        stageInSilent_ = true;
         renderedFrames_ = 0;
         sliceCounter_ = 0;
         if (activePlan_ !is null) {
@@ -346,7 +378,6 @@ struct AudioGraph {
         uint hostFrames,
         ref TransportState transport
     ) {
-        cast(void) inputs;
         auto denormGuard = ScopedNoDenormals.enter();
         cast(void) denormGuard;
 
@@ -355,6 +386,8 @@ struct AudioGraph {
         }
         assert(outputs[0].length >= hostFrames && outputs[1].length >= hostFrames,
             "AudioGraph.render output slices smaller than hostFrames");
+
+        pushHostInputs(inputs, hostFrames);
 
         uint hostPos = 0;
         while (hostPos < hostFrames) {
@@ -418,10 +451,58 @@ struct AudioGraph {
         }
     }
 
+    private void pushHostInputs(const(float[])[2] inputs, uint hostFrames) {
+        if (hostInRingL_.empty() || hostInRingR_.empty()) {
+            return;
+        }
+        immutable size_t cap = hostInRingL_.length;
+        immutable size_t mask = cap - 1;
+        const(float)[] inL = inputs[0];
+        const(float)[] inR = inputs[1];
+        foreach (i; 0 .. hostFrames) {
+            immutable float l = (i < inL.length && isFinite(inL[i])) ? inL[i] : 0.0f;
+            immutable float r = (i < inR.length && isFinite(inR[i])) ? inR[i] : 0.0f;
+            if (hostInCount_ >= cap) {
+                hostInRead_ = (hostInRead_ + 1) & mask;
+                hostInCount_--;
+            }
+            hostInRingL_[hostInWrite_] = l;
+            hostInRingR_[hostInWrite_] = r;
+            hostInWrite_ = (hostInWrite_ + 1) & mask;
+            hostInCount_++;
+        }
+    }
+
+    private void popHostInputQuantum() {
+        stageIn_[0][] = 0.0f;
+        stageIn_[1][] = 0.0f;
+        stageInSilent_ = true;
+        if (hostInRingL_.empty() || hostInRingR_.empty() || hostInCount_ == 0) {
+            return;
+        }
+        immutable size_t mask = hostInRingL_.length - 1;
+        immutable size_t pullCount = hostInCount_ < FIXED_BLOCK_FRAMES ? hostInCount_ : FIXED_BLOCK_FRAMES;
+        float peak = 0.0f;
+        foreach (i; 0 .. pullCount) {
+            immutable float l = hostInRingL_[hostInRead_];
+            immutable float r = hostInRingR_[hostInRead_];
+            hostInRead_ = (hostInRead_ + 1) & mask;
+            stageIn_[0][i] = l;
+            stageIn_[1][i] = r;
+            immutable float al = fabs(l);
+            immutable float ar = fabs(r);
+            if (al > peak) peak = al;
+            if (ar > peak) peak = ar;
+        }
+        hostInCount_ -= pullCount;
+        stageInSilent_ = peak <= 1e-7f;
+    }
+
     private void renderFixedQuantum(ref TransportState transport) {
         immutable FrameTime quantumStart = renderedFrames_;
         immutable FrameTime quantumEnd = quantumStart + FIXED_BLOCK_FRAMES;
 
+        popHostInputQuantum();
         stageOut_[0][] = 0.0f;
         stageOut_[1][] = 0.0f;
         emittedEvents_.clear();
@@ -652,6 +733,9 @@ struct AudioGraph {
             ctx.transport = transport;
             ctx.transport.totalFrames = subStartFrame;
             ctx.inputSilent = mainSilent;
+            ctx.hostAudioIn[0] = stageIn_[0][subStart .. subEnd];
+            ctx.hostAudioIn[1] = stageIn_[1][subStart .. subEnd];
+            ctx.hostInputSilent = stageInSilent_;
             if (step.eventOutWireCount > 0) {
                 ctx.eventOut = EventSink(&routeEmittedEvent, &routerCtx);
             }
@@ -760,6 +844,12 @@ struct AudioGraph {
             localCtx.frames = nextSplit - cursor;
             localCtx.sliceOffset = fullCtx.sliceOffset + cursor;
             localCtx.transport.totalFrames = fullCtx.transport.totalFrames + cursor;
+            if (fullCtx.hostAudioIn[0].length >= nextSplit) {
+                localCtx.hostAudioIn[0] = fullCtx.hostAudioIn[0][cursor .. nextSplit];
+            }
+            if (fullCtx.hostAudioIn[1].length >= nextSplit) {
+                localCtx.hostAudioIn[1] = fullCtx.hostAudioIn[1][cursor .. nextSplit];
+            }
             if (nb.vtable.process !is null && nb.vtable.process(nb.state, localIo, localCtx)) {
                 anyProduced = true;
             } else {
