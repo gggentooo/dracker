@@ -1,7 +1,7 @@
-# Ignore everything at the repository root outside synth-tracker/
+# Ignore everything at the repository root outside dracker/
 /*
 !.gitignore
-!synth-tracker/
+!dracker/
 
 # Standard OS / macOS files
 .DS_Store

@@ -1,0 +1,63 @@
+# File:         ci/macos.yml
+# Phase:        Phase 0.1 — CI Workflow & Headless Quality Gates
+#
+# Purpose:
+#   Automated macOS CI pipeline running headless unit tests, rt_malloc_trap
+#   allocation audits, golden WAV regression checks, and app build compilation.
+#   Live hardware CoreAudio/CoreMIDI/Metal rendering audits run locally on
+#   developer machines (GitHub Actions macOS runners lack audio hardware/GPU).
+#
+# Dependencies:
+#   LDC2 1.40+, DUB, Xcode Command Line Tools / Metal toolchain (for app config).
+
+name: macOS CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  headless-test-and-build:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: dracker
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install LDC2 and DUB
+        run: |
+          brew update
+          brew install ldc
+          ldc2 --version
+          dub --version
+
+      - name: Verify audio-formats Boost subconfiguration
+        run: |
+          dub describe --compiler=ldc2 --config=headless > /tmp/dub-describe.json
+          head -n 60 /tmp/dub-describe.json
+          grep -q '"rootConfiguration": "boost"' /tmp/dub-describe.json
+
+      - name: Run headless tests (unit, rt_malloc_trap, golden WAV, fuzz smoke)
+        run: dub test --compiler=ldc2 --config=headless
+
+      - name: Verify headless release build
+        run: dub build --compiler=ldc2 --config=headless --build=release
+
+      - name: Verify standalone x86_64 foundation cross-compile and macOS tooling lints
+        run: |
+          ldc2 -mtriple=x86_64-apple-macos12.0 -w -c -o- -Isource source/foundation/types.d source/foundation/memory.d source/foundation/concurrency.d source/foundation/math_rt.d
+          clang -x objective-c -fobjc-arc -mmacosx-version-min=12.0 -fsyntax-only -Wall -Wextra source/platform/macos/objc_blocks_shim.m
+          plutil -lint packaging/macos/Info.plist packaging/macos/entitlements.plist
+          bash -n packaging/macos/bundle_macos.sh
+
+      - name: Verify full app configuration compilation (when Metal toolchain available)
+        run: |
+          if xcrun --find metal >/dev/null 2>&1; then
+            dub build --compiler=ldc2 --config=app --build=debug
+          else
+            echo "Metal toolchain unavailable on runner; skipping app shader compile."
+          fi
