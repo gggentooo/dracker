@@ -24,8 +24,9 @@
  * Planned API (Types, Functions & Hooks):
  *   - interface IAudioControl / interface IStudioClipboard
  *   - class StudioContext : tick(), selectModule(), selectPattern(), requestScopeTaps(), takeMidiNotes(),
- *     setStatus(), revision counters, applyAppearance(), loadAppearance(), saveAppearance(), toggleContrast(),
- *     themeRevision(), onThemeChanged()
+ *     setStatus(), revision counters, setEditOctave(), octaveRevision(), setQwertyNote(), clearQwertyNote(),
+ *     clearVisualNotes(), hasHeldExternalNotes(), noteHighlightRevision(), activeNoteMask(), isNoteHighlighted(),
+ *     applyAppearance(), loadAppearance(), saveAppearance(), toggleContrast(), themeRevision(), onThemeChanged()
  *
  * See_Also:
  *   architecture.md, dev_plan.md (Phase 8)
@@ -35,6 +36,7 @@ module gui.views.studio_context;
 import app.audio_host : AudioLoadTelemetry;
 import app.session : MidiNoteEvent, StudioSession;
 import app.telemetry : makeStudioTelemetry, ScopeHistory, StudioTelemetry;
+import foundation.types : ModuleId;
 import gui.appearance : AppearanceSettings, decodeAppearance, encodeAppearance, FontResolution, IAppearanceBackend,
     IAppearanceStore, themeFor;
 import gui.theme : ContrastMode, StudioTheme;
@@ -142,6 +144,11 @@ interface IStudioClipboard {
     bool setText(string text);
 }
 
+private struct HeldQwerty {
+    uint mod = 0;
+    ubyte midi = 0;
+}
+
 /**
  * Shared state and services for all studio views.
  */
@@ -175,6 +182,10 @@ final class StudioContext {
     private ulong frame_ = 0;
     private ulong themeRevision_ = 1;
     private void delegate()[] themeListeners_;
+    private HeldQwerty[uint] qwertyHeld_;
+    private uint[128][16] midiHeldMod_;
+    private ulong noteHighlightRevision_ = 1;
+    private ulong octaveRevision_ = 1;
 
     /**
      * Creates a context over session.
@@ -205,6 +216,9 @@ final class StudioContext {
     void tick() {
         frame_++;
         session.setCurrentOctave(editOctave);
+        if (auto eng = session.engine()) {
+            eng.setWatchedNoteModule(ModuleId(selectedModule_));
+        }
         scopes.consume(session.engine());
         AudioLoadTelemetry load;
         bool haveLoad = false;
@@ -217,6 +231,7 @@ final class StudioContext {
             immutable size_t n = audio.drainMidi(midiScratch_[]);
             if (n > 0) {
                 session.processMidiFromRt(midiScratch_[0 .. n], midiNotes_);
+                trackMidiPackets(midiScratch_[0 .. n]);
             }
         }
         telemetry = makeStudioTelemetry(session.engine(), haveLoad ? &load : null);
@@ -265,6 +280,9 @@ final class StudioContext {
         }
         selectedModule_ = moduleId;
         selectionRevision_++;
+        if (auto eng = session.engine()) {
+            eng.setWatchedNoteModule(ModuleId(moduleId));
+        }
         if (audio !is null) {
             audio.setMidiTarget(moduleId);
         }
@@ -390,6 +408,159 @@ final class StudioContext {
     }
 
     /**
+     * Clamps and updates the shared edit octave (-1..9), syncing the session and bumping octaveRevision().
+     *
+     * Params:
+     *   octave = Desired octave index.
+     */
+    void setEditOctave(int octave) {
+        immutable int clamped = octave < -1 ? -1 : (octave > 9 ? 9 : octave);
+        if (clamped == editOctave) {
+            return;
+        }
+        editOctave = clamped;
+        session.setCurrentOctave(clamped);
+        octaveRevision_++;
+    }
+
+    /**
+     * Returns a counter bumped by setEditOctave().
+     *
+     * Returns:
+     *   Octave revision.
+     */
+    ulong octaveRevision() const {
+        return octaveRevision_;
+    }
+
+    /**
+     * Records an active QWERTY piano hold for visual highlighting on the on-screen piano.
+     *
+     * Params:
+     *   keyCode = macOS virtual key code.
+     *   moduleId = Target module receiving the note.
+     *   midi = MIDI note number 0..127.
+     */
+    void setQwertyNote(uint keyCode, uint moduleId, ubyte midi) {
+        if (moduleId == 0 || midi > 127) {
+            return;
+        }
+        qwertyHeld_[keyCode] = HeldQwerty(moduleId, midi);
+        noteHighlightRevision_++;
+    }
+
+    /**
+     * Clears a QWERTY piano hold when the key is released.
+     *
+     * Params:
+     *   keyCode = macOS virtual key code.
+     */
+    void clearQwertyNote(uint keyCode) {
+        if ((keyCode in qwertyHeld_) !is null) {
+            qwertyHeld_.remove(keyCode);
+            noteHighlightRevision_++;
+        }
+    }
+
+    /**
+     * Clears all tracked QWERTY and external MIDI visual note highlights.
+     */
+    void clearVisualNotes() {
+        bool changed = qwertyHeld_.length > 0;
+        qwertyHeld_ = null;
+        foreach (ref ch; midiHeldMod_) {
+            foreach (ref slot; ch) {
+                if (slot != 0) {
+                    slot = 0;
+                    changed = true;
+                }
+            }
+        }
+        if (changed) {
+            noteHighlightRevision_++;
+        }
+    }
+
+    /**
+     * Reports whether any QWERTY or external MIDI notes are currently held.
+     *
+     * Returns:
+     *   True if at least one external live note is active.
+     */
+    bool hasHeldExternalNotes() const {
+        if (qwertyHeld_.length > 0) {
+            return true;
+        }
+        foreach (ref ch; midiHeldMod_) {
+            foreach (slot; ch) {
+                if (slot != 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns a counter bumped whenever tracked QWERTY or external MIDI note highlights change.
+     *
+     * Returns:
+     *   Note-highlight revision.
+     */
+    ulong noteHighlightRevision() const {
+        return noteHighlightRevision_;
+    }
+
+    /**
+     * Computes the 128-bit mask of MIDI notes currently sounding for the selected module from QWERTY, external MIDI,
+     * and active pattern playback.
+     *
+     * Params:
+     *   mask = Receives the two-word mask (cleared if no module is selected).
+     */
+    void activeNoteMask(out ulong[2] mask) const {
+        mask[0] = 0uL;
+        mask[1] = 0uL;
+        if (selectedModule_ == 0) {
+            return;
+        }
+        foreach (h; qwertyHeld_.byValue()) {
+            if (h.mod == selectedModule_ && h.midi < 128) {
+                mask[h.midi >> 6] |= (1uL << (h.midi & 63));
+            }
+        }
+        foreach (ref ch; midiHeldMod_) {
+            foreach (n; 0 .. 128) {
+                if (ch[n] == selectedModule_) {
+                    mask[n >> 6] |= (1uL << (n & 63));
+                }
+            }
+        }
+        if (telemetry.engine.playing && telemetry.engine.patternNoteModuleId == selectedModule_) {
+            mask[0] |= telemetry.engine.patternNoteMask[0];
+            mask[1] |= telemetry.engine.patternNoteMask[1];
+        }
+    }
+
+    /**
+     * Reports whether midi is currently highlighted for the selected module from QWERTY, MIDI, or pattern playback.
+     *
+     * Params:
+     *   midi = MIDI note number 0..127.
+     *
+     * Returns:
+     *   True if active.
+     */
+    bool isNoteHighlighted(ubyte midi) const {
+        if (midi >= 128) {
+            return false;
+        }
+        ulong[2] mask;
+        activeNoteMask(mask);
+        return (mask[midi >> 6] & (1uL << (midi & 63))) != 0;
+    }
+
+    /**
      * Applies an appearance everywhere in one step: builds the theme, updates the renderer clear color and glyph
      * gamma, switches font families (flushing the glyph cache), bumps themeRevision, notifies listeners (the
      * studio root relayouts its UiContext), and optionally persists the settings.
@@ -493,6 +664,43 @@ final class StudioContext {
     void onThemeChanged(void delegate() listener) {
         if (listener !is null) {
             themeListeners_ ~= listener;
+        }
+    }
+
+    private void trackMidiPackets(const(MidiPacket)[] packets) {
+        bool changed = false;
+        foreach (ref pkt; packets) {
+            if (pkt.len < 3) {
+                continue;
+            }
+            immutable ubyte kind = pkt.status() & 0xF0;
+            immutable ubyte ch = pkt.status() & 0x0F;
+            if (kind == 0x90 && pkt.data2() > 0) {
+                immutable ubyte note = pkt.data1() & 0x7F;
+                if (midiHeldMod_[ch][note] != selectedModule_) {
+                    midiHeldMod_[ch][note] = selectedModule_;
+                    changed = true;
+                }
+            } else if (kind == 0x80 || kind == 0x90) {
+                immutable ubyte note = pkt.data1() & 0x7F;
+                if (midiHeldMod_[ch][note] != 0) {
+                    midiHeldMod_[ch][note] = 0;
+                    changed = true;
+                }
+            } else if (kind == 0xB0) {
+                immutable ubyte cc = pkt.data1() & 0x7F;
+                if (cc == 120 || cc == 123) {
+                    foreach (ref slot; midiHeldMod_[ch]) {
+                        if (slot != 0) {
+                            slot = 0;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if (changed) {
+            noteHighlightRevision_++;
         }
     }
 

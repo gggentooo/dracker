@@ -17,7 +17,7 @@
  *   - enum EngineCmdKind / struct EngineCommand / struct EngineTelemetry / struct StemExportSpec / struct MidiMapEntry
  *     / struct MidiMapSnapshot / struct ScopeBlock
  *   - struct Engine : tryInit(), reset(), pushCommand(), drainRetireRing(), tryPopRetired(), applyPendingCommandsOffRT(), appliedFence(), liveNoteOnRt(), liveNoteOffRt(),
- *     enqueueLiveEventRt(), applyMidiCcRt(), tryPopScopeBlock(), scopeBlocksDropped(), processHostBuffer(), processDirectSubFrames(), renderOfflineToBuffer(), exportOfflineWav(), exportStemsWav()
+ *     enqueueLiveEventRt(), applyMidiCcRt(), setWatchedNoteModule(), watchedNoteModule(), tryPopScopeBlock(), scopeBlocksDropped(), processHostBuffer(), processDirectSubFrames(), renderOfflineToBuffer(), exportOfflineWav(), exportStemsWav()
  *
  * See_Also:
  *   architecture_proposal.md, dev_plan_proposal.md
@@ -605,6 +605,23 @@ struct EngineTelemetry {
     uint ticksPerLine = 6;
     bool playing = false;
     ulong totalFrames = 0;
+    uint patternNoteModuleId = 0;
+    ulong[2] patternNoteMask = 0;
+
+    /**
+     * Reports whether a pattern voice targeting moduleId is currently sounding midi.
+     *
+     * Params:
+     *   moduleId = Module identifier to test.
+     *   midi = MIDI note number 0..127.
+     *
+     * Returns:
+     *   True if active during playback.
+     */
+    bool isPatternNoteActive(uint moduleId, ubyte midi) const @nogc nothrow pure @safe {
+        return playing && moduleId != 0 && patternNoteModuleId == moduleId && midi < 128
+            && ((patternNoteMask[midi >> 6] & (1uL << (midi & 63))) != 0);
+    }
 }
 
 /**
@@ -639,6 +656,7 @@ struct Engine {
     enum size_t MAX_LIVE_VOICES = 64;
     enum size_t SCOPE_RING_BLOCKS = 512;
     enum uint MIDI_KEY_TAG_BASE = 0x0100_0000u;
+    enum uint PIANO_KEY_TAG_BASE = 0x0200_0000u;
 
     private AudioGraph graph_;
     private RationalClock clock_;
@@ -674,6 +692,7 @@ struct Engine {
     private bool scopeEnabled_ = false;
     private shared ulong scopeDropped_ = 0;
     private ScopeBlock scopeScratch_;
+    private shared uint watchNoteModule_ = 0;
 
     @disable this(this);
 
@@ -1150,6 +1169,26 @@ struct Engine {
      */
     ulong appliedFence() const {
         return atomicLoad!(MemoryOrder.acq)(appliedFence_);
+    }
+
+    /**
+     * Selects the module whose active pattern notes are reported in EngineTelemetry.patternNoteMask.
+     *
+     * Params:
+     *   modId = Target module identifier (invalid disables pattern-note tracking).
+     */
+    void setWatchedNoteModule(ModuleId modId) {
+        atomicStore!(MemoryOrder.rel)(watchNoteModule_, modId.value);
+    }
+
+    /**
+     * Returns the module currently watched for pattern-note telemetry.
+     *
+     * Returns:
+     *   Watched module id, or 0 when disabled.
+     */
+    uint watchedNoteModule() const {
+        return atomicLoad!(MemoryOrder.acq)(watchNoteModule_);
     }
 
     /**
@@ -1793,6 +1832,13 @@ struct Engine {
         tel.ticksPerLine = clock_.ticksPerLine();
         tel.playing = playing_;
         tel.totalFrames = cast(ulong) graph_.renderedFrames();
+        immutable uint watchMod = atomicLoad!(MemoryOrder.acq)(watchNoteModule_);
+        tel.patternNoteModuleId = watchMod;
+        tel.patternNoteMask[0] = 0uL;
+        tel.patternNoteMask[1] = 0uL;
+        if (playing_ && watchMod != 0) {
+            trackFx_.collectActiveNotes(ModuleId(watchMod), tel.patternNoteMask);
+        }
         telemetry_.publish();
     }
 }

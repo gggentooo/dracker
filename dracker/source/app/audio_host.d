@@ -30,8 +30,8 @@
  *   - struct AudioLoadTelemetry / struct EngineRtContext
  *   - extern(C) void engineRenderCallback(...) @nogc nothrow
  *   - EngineRtContext* createEngineRtContext(Engine*, size_t) / void destroyEngineRtContext(EngineRtContext*)
- *   - class AudioHost : open(), close(), isRunning(), poll(), readLoad(), drainMidi(), setMidiTarget(),
- *     selectOutputDevice(), enumerateDevices(), midiSources()
+ *   - class AudioHost : open(), close(), isRunning(), poll(), readLoad(), drainMidi(), hasPendingMidi(),
+ *     setMidiTarget(), selectOutputDevice(), enumerateDevices(), midiSources()
  *
  * See_Also:
  *   architecture.md, dev_plan.md (Phase 7.5)
@@ -537,6 +537,16 @@ version (OSX) {
                 n++;
             }
             return n;
+        }
+
+        /**
+         * Reports whether unread MIDI packets from the RT thread are waiting for UI consumption.
+         *
+         * Returns:
+         *   True if at least one packet is queued.
+         */
+        bool hasPendingMidi() const {
+            return ctx_ !is null && !ctx_.uiMidi.empty();
         }
 
         /**

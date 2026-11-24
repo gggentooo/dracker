@@ -194,6 +194,8 @@ final class StudioScene : IGuiScene {
     private ulong drawnDocRevision_ = 0;
     private ulong drawnStatusRevision_ = 0;
     private ulong drawnSelection_ = 0;
+    private ulong drawnNoteRevision_ = 0;
+    private ulong drawnOctaveRevision_ = 0;
     private string lastTitle_;
     private MonoTime lastPoll_;
     private bool exportWatch_ = false;
@@ -289,6 +291,8 @@ final class StudioScene : IGuiScene {
         drawnDocRevision_ = ctx_.documentRevision();
         drawnStatusRevision_ = ctx_.statusRevision();
         drawnSelection_ = ctx_.selectionRevision();
+        drawnNoteRevision_ = ctx_.noteHighlightRevision();
+        drawnOctaveRevision_ = ctx_.octaveRevision();
         ui_.draw(r);
         updateTitle();
     }
@@ -296,7 +300,9 @@ final class StudioScene : IGuiScene {
     override bool needsRedraw() {
         pollBackground();
         return ui_.needsRedraw || drawnDocRevision_ != ctx_.documentRevision()
-            || drawnStatusRevision_ != ctx_.statusRevision() || drawnSelection_ != ctx_.selectionRevision();
+            || drawnStatusRevision_ != ctx_.statusRevision() || drawnSelection_ != ctx_.selectionRevision()
+            || drawnNoteRevision_ != ctx_.noteHighlightRevision() || drawnOctaveRevision_ != ctx_.octaveRevision()
+            || (host_ !is null && host_.hasPendingMidi());
     }
 
     override bool isAnimating() {
@@ -894,6 +900,44 @@ int runStudioGuiSelfTest(string[] args) {
     }
 
     {
+        import std.math : fabs;
+
+        click(root.patchbay.nodeCenter(gen));
+        pumpUntil(() => ctx.selectedModule() == gen);
+        immutable bool spanOk = root.piano.bounds.w == root.bounds.w
+            && root.piano.bounds.y > root.patchbay.bounds.y
+            && root.piano.bounds.bottom() <= root.pattern.bounds.y;
+        immutable int oct0 = ctx.editOctave;
+        click(root.piano.octaveUpRect().center());
+        immutable int octUp = ctx.editOctave;
+        click(root.piano.octaveDownRect().center());
+        immutable int octBack = ctx.editOctave;
+        immutable ubyte testMidi = cast(ubyte)((octBack + 1) * 12);
+        immutable Point2F keyPt = root.piano.keyRect(testMidi).center();
+        postSyntheticMouse(shell.window, 1, keyPt.x, keyPt.y);
+        pumpFor(0.15);
+        immutable bool keyHeld = root.piano.pressedMidi() == cast(int) testMidi
+            && root.piano.isKeyHighlighted(testMidi);
+        immutable float heldPeak = ctx.telemetry.engine.graph.masterPeakL > ctx.telemetry.engine.graph.masterPeakR
+            ? ctx.telemetry.engine.graph.masterPeakL : ctx.telemetry.engine.graph.masterPeakR;
+        postSyntheticMouse(shell.window, 2, keyPt.x, keyPt.y);
+        pumpFor(0.08);
+        immutable bool keyReleased = root.piano.pressedMidi() == -1 && !root.piano.isKeyHighlighted(testMidi);
+        immutable float h0 = root.piano.bounds.h;
+        immutable float topY = root.piano.bounds.y - 2.0f;
+        drag(Point2F(200.0f, topY), Point2F(200.0f, topY - 24.0f));
+        immutable float hAfterTop = root.piano.bounds.h;
+        immutable float botY = root.piano.bounds.bottom() + 2.0f;
+        drag(Point2F(200.0f, botY), Point2F(200.0f, botY + 20.0f));
+        immutable float hAfterBot = root.piano.bounds.h;
+        check("on-screen piano", spanOk && octUp == oct0 + 1 && octBack == oct0 && keyHeld && keyReleased
+            && heldPeak > 1e-3f && hAfterTop > h0 + 15.0f && hAfterBot > hAfterTop + 12.0f
+            && fabs(root.piano.bounds.w - root.bounds.w) < 0.5f,
+            format("oct %s->%s->%s, peak %.3f, h %.0f->%.0f->%.0f", oct0, octUp, octBack, heldPeak, h0, hAfterTop,
+                hAfterBot));
+    }
+
+    {
         immutable size_t mods = doc().modules.length;
         immutable size_t clips = doc().clips.length;
         immutable size_t wires = doc().wires.length;
@@ -927,7 +971,7 @@ int runStudioGuiSelfTest(string[] args) {
 
         RectF[] rects() {
             return [root.bounds, root.transport.bounds, root.patchbay.bounds, root.rack.bounds, root.scopeView.bounds,
-                root.pattern.bounds, root.timeline.bounds, root.sampleEditor.bounds];
+                root.piano.bounds, root.pattern.bounds, root.timeline.bounds, root.sampleEditor.bounds];
         }
         bool pickItem(Dropdown d, size_t i) {
             click(d.bounds.center());

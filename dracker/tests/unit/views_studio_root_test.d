@@ -145,16 +145,52 @@ version (unittest) {
         foreach (ref c; dl.commands) {
             assert(c.scissor.x + c.scissor.w <= 2880 && c.scissor.y + c.scissor.h <= 1800);
         }
-        foreach (w; [cast(Object) r.root.transport, r.root.patchbay, r.root.rack, r.root.scopeView, r.root.pattern,
-                r.root.timeline, r.root.sampleEditor]) {
+        foreach (w; [cast(Object) r.root.transport, r.root.patchbay, r.root.rack, r.root.scopeView, r.root.piano,
+                r.root.pattern, r.root.timeline, r.root.sampleEditor]) {
             assert(w !is null);
         }
-        assert(!r.root.patchbay.bounds.isEmpty() && !r.root.pattern.bounds.isEmpty() && !r.root.timeline.bounds.isEmpty());
+        assert(!r.root.patchbay.bounds.isEmpty() && !r.root.piano.bounds.isEmpty()
+            && !r.root.pattern.bounds.isEmpty() && !r.root.timeline.bounds.isEmpty());
         assert(r.root.transport.bounds.h == StudioRoot.TRANSPORT_HEIGHT);
+        assert(r.root.piano.bounds.w == r.root.bounds.w);
+        assert(r.root.patchbay.bounds.bottom() < r.root.piano.bounds.y);
+        assert(r.root.piano.bounds.bottom() < r.root.pattern.bounds.y);
+        assert(r.root.piano.bounds.bottom() < r.root.timeline.bounds.y);
         assert(r.root.patchbay.bounds.intersect(r.root.pattern.bounds).isEmpty());
+        assert(r.root.patchbay.bounds.intersect(r.root.piano.bounds).isEmpty());
+        assert(r.root.piano.bounds.intersect(r.root.pattern.bounds).isEmpty());
+        assert(r.root.piano.bounds.intersect(r.root.timeline.bounds).isEmpty());
         assert(r.root.patchbay.bounds.intersect(r.root.rack.bounds).isEmpty());
         assert(r.root.pattern.bounds.intersect(r.root.timeline.bounds).isEmpty());
         assert(r.root.transport.bounds.intersect(r.root.patchbay.bounds).isEmpty());
+    }
+
+    unittest {
+        Rig r = makeRig();
+        scope (exit) r.session.dispose();
+        immutable float patchH0 = r.root.patchbay.bounds.h;
+        immutable float pianoH0 = r.root.piano.bounds.h;
+        immutable float patY0 = r.root.pattern.bounds.y;
+        immutable float patH0 = r.root.pattern.bounds.h;
+        immutable float topSplitY = r.root.piano.bounds.y - 2.0f;
+        r.mouse(PlatformEventKind.mouseDown, Point2F(100.0f, topSplitY));
+        r.mouse(PlatformEventKind.mouseMove, Point2F(100.0f, topSplitY - 24.0f));
+        r.mouse(PlatformEventKind.mouseUp, Point2F(100.0f, topSplitY - 24.0f));
+        r.frame();
+        assert(fabs(r.root.patchbay.bounds.h - (patchH0 - 24.0f)) < 1e-3f);
+        assert(fabs(r.root.piano.bounds.h - (pianoH0 + 24.0f)) < 1e-3f);
+        assert(fabs(r.root.pattern.bounds.y - patY0) < 1e-3f && fabs(r.root.pattern.bounds.h - patH0) < 1e-3f);
+
+        immutable float patchH1 = r.root.patchbay.bounds.h;
+        immutable float pianoH1 = r.root.piano.bounds.h;
+        immutable float botSplitY = r.root.piano.bounds.bottom() + 2.0f;
+        r.mouse(PlatformEventKind.mouseDown, Point2F(100.0f, botSplitY));
+        r.mouse(PlatformEventKind.mouseMove, Point2F(100.0f, botSplitY + 20.0f));
+        r.mouse(PlatformEventKind.mouseUp, Point2F(100.0f, botSplitY + 20.0f));
+        r.frame();
+        assert(fabs(r.root.patchbay.bounds.h - patchH1) < 1e-3f);
+        assert(fabs(r.root.piano.bounds.h - (pianoH1 + 20.0f)) < 1e-3f);
+        assert(fabs(r.root.pattern.bounds.h - (patH0 - 20.0f)) < 1e-3f);
     }
 
     unittest {
@@ -270,13 +306,39 @@ version (unittest) {
 
         r.key(6);
         assert(peak() < 1e-6f);
+        assert(!r.root.piano.isKeyHighlighted(60));
         r.key(6, 0, false);
         r.ctx.selectModule(gen);
         r.frame();
         r.key(6);
+        assert(r.root.piano.isKeyHighlighted(60));
         assert(peak() > 0.02f);
         r.key(6, 0, false);
         r.frame();
+        assert(!r.root.piano.isKeyHighlighted(60));
+
+        r.click(r.root.pattern.fieldRect(1, 0, 0).center());
+        r.key(6);
+        assert(r.root.piano.isKeyHighlighted(60));
+        r.key(6, 0, false);
+        r.frame();
+        assert(!r.root.piano.isKeyHighlighted(60));
+
+        r.ctx.recording = true;
+        r.click(r.root.piano.keyRect(64).center());
+        r.ctx.recording = false;
+        assert(r.session.document().patterns[0].cells[1].note == NoteCell.encodeMidiNote(64));
+        assert(r.session.document().patterns[0].cells[1].moduleId == gen);
+
+        assert(r.session.doPatchCell(1, 0, 0, NoteCell.makeNote(62, 0.8f, cast(ushort) gen)));
+        r.session.play();
+        r.session.engine().processHostBuffer(outs, ins, 64);
+        r.frame();
+        assert(r.root.piano.isKeyHighlighted(62));
+        r.session.stop();
+        r.session.engine().processHostBuffer(outs, ins, 64);
+        r.frame();
+        assert(!r.root.piano.isKeyHighlighted(62));
 
         assert(r.session.doRemoveModule(gen));
         r.frame();
@@ -335,7 +397,8 @@ version (unittest) {
 
     private RectF[] paneRects(ref Rig r) {
         return [r.root.bounds, r.root.transport.bounds, r.root.patchbay.bounds, r.root.rack.bounds,
-            r.root.scopeView.bounds, r.root.pattern.bounds, r.root.timeline.bounds, r.root.sampleEditor.bounds];
+            r.root.scopeView.bounds, r.root.piano.bounds, r.root.pattern.bounds, r.root.timeline.bounds,
+            r.root.sampleEditor.bounds];
     }
 
     private bool drewColor(ref Rig r, ColorRGBA c, RectF within) {

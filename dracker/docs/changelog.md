@@ -10,6 +10,51 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
 
 ---
 
+## [2026-11-24 13:06:35 KST]
+- **Author:** Gemini (Antigravity)
+- **Reason / Summary:** Added a full-width, resizable, stark black-and-white high-contrast on-screen piano keyboard above the pattern editor and timeline panes, along with user manual documentation.
+  - **Layout & resizing (`gui/layout.d`, `gui/views/studio_root.d`, `gui/views/piano_view.d`):** Docked `PianoKeyboardView` (`"piano.keyboard"`, `DEFAULT_HEIGHT = 60.0f`, `MIN_HEIGHT = 48.0f`) full-width between the upper (`patchbay` / `rack`+`scope`) and lower (`pattern` / `timeline`+`sample`) areas. Updated `DockLayout.beginDrag()`, `dragTo()`, and `endDrag()` with sibling-anchored same-axis split dragging so dragging the piano's top or bottom edge resizes only the adjacent panes 1:1 without shifting the opposite outer edge.
+  - **Piano rendering, octave controls & proportional keys (`gui/views/piano_view.d`, `gui/theme.d`, `gui/appearance.d`):**
+    - Leftmost key is always `C` of the shared `StudioContext.editOctave` (`-1..9`, default `4`), stopping at MIDI `127`. White key widths scale proportionally with strip height (`WHITE_KEY_ASPECT = 0.58f`, clamped to `[18.0f, 72.0f]`).
+    - Every visible `C` key renders its octave number centered in the lower white-key zone below the black keys (`BLACK_KEY_HEIGHT_RATIO = 0.62f`).
+    - Stacked `PianoOctaveButton` (`"piano.octaveUp"` / `"piano.octaveDown"`) sits on the far-right `36.0f` strip and updates `ctx.setEditOctave(...)`, staying synchronized with the transport `OCT` drag box, pattern editor, and `F1`/`F2` shortcuts.
+    - Added stark black-and-white `StudioTheme` tokens (`pianoWhiteKey = #FFFFFF`, `pianoBlackKey = #000000`, `pianoKeyBorder = #000000`, `pianoKeyText = #000000`) and registered them in `gui/appearance.d` (`usedTextPairs()`, `usedGraphicPairs()`, `"Piano"` group). Pressed/active keys highlight in `theme.accent` (with `theme.accentText` on active `C` labels).
+  - **Live playback, recording & multi-source highlighting (`sequencer/track_effects.d`, `sequencer/engine.d`, `app/session.d`, `app/audio_host.d`, `gui/views/{studio_context,pattern_editor,studio_root}.d`, `app/studio_app.d`):**
+    - Mouse click/drag auditions notes with glissando on the selected module via `StudioSession.triggerLiveNote()` / `releaseLiveNote()` (`Engine.PIANO_KEY_TAG_BASE`) and injects `MidiNoteEvent` entries when `ctx.recording` is enabled. Releases cleanly on mouse-up, capture loss, octave change, module change, and Panic (`⌘.`).
+    - Added `TrackEffectState.lastEmittedPitch`, `@nogc nothrow pure @safe` `TrackEffectBank.collectActiveNotes()`, atomic `Engine.setWatchedNoteModule()`, and `EngineTelemetry.patternNoteModuleId` / `patternNoteMask` / `isPatternNoteActive()` so active pattern playback notes targeting the currently selected module highlight on the piano alongside QWERTY holds and external MIDI input (`AudioHost.hasPendingMidi()`, `StudioContext.activeNoteMask()`).
+  - **Documentation & tests:** Documented the on-screen piano in `docs/manual.md` (§2 layout diagram & §2.1 resizing, plus new §12.2 On-screen piano keyboard), added `tests/unit/views_piano_test.d`, updated `tests/unit/{gui_test,appearance_test,studio_backend_test,views_studio_root_test}.d`, and added the `"on-screen piano"` check to `runStudioGuiSelfTest()`.
+- **Verification Results:**
+  - Zero-warning builds: `DFLAGS="-w" dub build --compiler=ldc2 --config=headless --force` and `DFLAGS="-w" dub build --compiler=ldc2 --config=app --build=debug --force` both exited 0 with zero warnings.
+  - `dub test --compiler=ldc2 --config=app`: `4 modules passed unittests`.
+  - `caffeinate -dims ./build/dracker --studio-gui-selftest --quick`: `14/14 checks passed` (including `record notes (QWERTY)`, `playback stress (60+ fps)` at `120.0 fps` / `0 xruns`, and `on-screen piano`).
+  - `dub test --compiler=ldc2 --config=headless`: 24/25 modules passed (all new and modified test modules passed; 1 pre-existing failure in untouched `tests/unit/views_patchbay_test.d:824` — `menu should contain 'Add Core ▸'` from commit `430cdc7`).
+  - Rule 1 comment audit across all 18 created/modified `.d` files: `0` issues.
+- **Affected Files:**
+  - Created:
+    - `dracker/source/gui/views/piano_view.d`
+    - `dracker/tests/unit/views_piano_test.d`
+  - Modified:
+    - `dracker/source/sequencer/track_effects.d`
+    - `dracker/source/sequencer/engine.d`
+    - `dracker/source/app/session.d`
+    - `dracker/source/app/audio_host.d`
+    - `dracker/source/app/studio_app.d`
+    - `dracker/source/gui/theme.d`
+    - `dracker/source/gui/appearance.d`
+    - `dracker/source/gui/layout.d`
+    - `dracker/source/gui/views/studio_context.d`
+    - `dracker/source/gui/views/transport_bar.d`
+    - `dracker/source/gui/views/studio_root.d`
+    - `dracker/source/gui/views/pattern_editor.d`
+    - `dracker/tests/unit/gui_test.d`
+    - `dracker/tests/unit/appearance_test.d`
+    - `dracker/tests/unit/studio_backend_test.d`
+    - `dracker/tests/unit/views_studio_root_test.d`
+    - `dracker/docs/manual.md`
+    - `dracker/docs/changelog.md`
+
+---
+
 ## [2026-11-22 16:56:04 KST]
 - **Author:** Claude Opus 5.5 (Claude Code)
 - **Reason / Summary:** Added the user and beta-tester manual, `docs/manual.md`. Documentation only; no code changed.

@@ -1437,10 +1437,6 @@ final class PatternEditorView : Widget, StudioCommandSink {
     }
 
     private bool pianoKey(const ref KeyEvent e, bool down) {
-        ubyte midi = 0;
-        if (!ctx.session.keymap().resolveNote(e.keyCode, ctx.editOctave, midi)) {
-            return false;
-        }
         if (!down) {
             auto held = e.keyCode in heldNotes_;
             if (held is null) {
@@ -1448,8 +1444,14 @@ final class PatternEditorView : Widget, StudioCommandSink {
             }
             immutable uint mod = *held;
             heldNotes_.remove(e.keyCode);
-            audition(PlatformEventKind.keyUp, e, mod);
+            ctx.clearQwertyNote(e.keyCode);
+            ctx.session.releaseLiveNote(ModuleId(mod), e.keyCode);
+            invalidate();
             return true;
+        }
+        ubyte midi = 0;
+        if (!ctx.session.keymap().resolveNote(e.keyCode, ctx.editOctave, midi)) {
+            return false;
         }
         if (e.isRepeat) {
             return true;
@@ -1462,7 +1464,9 @@ final class PatternEditorView : Widget, StudioCommandSink {
         }
         if (mod != 0) {
             heldNotes_[e.keyCode] = mod;
+            ctx.setQwertyNote(e.keyCode, mod, midi);
             audition(PlatformEventKind.keyDown, e, mod);
+            invalidate();
         }
         return true;
     }

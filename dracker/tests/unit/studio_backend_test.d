@@ -45,7 +45,7 @@ version (unittest) {
     import io.audio_io : DecodedAudio, decodeAudioFile, deinterleaveToPlanar, writeWavMemory;
     import io.project_format : LoadedProject, loadProject, SavedMidiMapping, serializeProject;
     import platform.interfaces : MidiPacket;
-    import sequencer.engine : Engine, ScopeBlock;
+    import sequencer.engine : Engine, EngineTelemetry, ScopeBlock;
     import sequencer.note : NoteCell;
     import tests.rt_malloc_trap : verifyZeroRtAllocationsNothrow;
 
@@ -568,6 +568,61 @@ version (unittest) {
         s.waitForExport();
         immutable auto st2 = s.exportStatus();
         assert(st2.state == ExportState.cancelled || st2.state == ExportState.succeeded);
+    }
+
+    unittest {
+        uint gen;
+        StudioSession s = makeSynthSession(gen);
+        scope (exit) s.dispose();
+        immutable uint gen2 = s.doAddModule("synth.analog_gen", "Gen2");
+        assert(gen2 != 0 && s.doConnectWire(gen2, 2, 1, 0, 1.0f));
+        assert(s.doSetParam(gen, 8, 0.05f));
+        assert(s.synchronizeEngine());
+
+        assert(!s.triggerLiveNote(ModuleId.invalid, Engine.PIANO_KEY_TAG_BASE | 60, 60.0f));
+        assert(s.triggerLiveNote(ModuleId(gen), Engine.PIANO_KEY_TAG_BASE | 60, 60.0f, 0.85f));
+        assert(s.triggerLiveNote(ModuleId(gen), 6, 64.0f, 0.85f));
+        assert(renderPeak(s, 8) > 0.01f);
+        assert(s.releaseLiveNote(ModuleId(gen), 6));
+        assert(renderPeak(s, 4) > 0.01f);
+        assert(s.releaseLiveNote(ModuleId(gen), Engine.PIANO_KEY_TAG_BASE | 60));
+        cast(void) renderPeak(s, 60);
+        assert(renderPeak(s, 8) < 1e-4f);
+
+        assert(s.doPatchCell(1, 0, 0, NoteCell.makeNote(60, 0.8f, cast(ushort) gen)));
+        assert(s.doPatchCell(1, 1, 0, NoteCell.makeNote(67, 0.8f, cast(ushort) gen2)));
+        assert(s.doPatchCell(1, 0, 4, NoteCell.makeNoteOff()));
+        assert(s.doPatchCell(1, 1, 4, NoteCell.makeNoteOff()));
+        s.engine().setWatchedNoteModule(ModuleId(gen));
+        assert(s.engine().watchedNoteModule() == gen);
+        s.play();
+
+        float[64] l = 0.0f;
+        float[64] r = 0.0f;
+        Engine* eng = s.engine();
+        verifyZeroRtAllocationsNothrow(() @nogc nothrow {
+            float[][2] outs = [l[], r[]];
+            const(float[])[2] ins = [null, null];
+            eng.processHostBuffer(outs, ins, 64);
+        });
+        EngineTelemetry tel;
+        assert(s.engine().readTelemetry(tel));
+        assert(tel.isPatternNoteActive(gen, 60));
+        assert(!tel.isPatternNoteActive(gen, 67) && !tel.isPatternNoteActive(gen2, 67));
+
+        s.engine().setWatchedNoteModule(ModuleId(gen2));
+        verifyZeroRtAllocationsNothrow(() @nogc nothrow {
+            float[][2] outs = [l[], r[]];
+            const(float[])[2] ins = [null, null];
+            eng.processHostBuffer(outs, ins, 64);
+        });
+        assert(s.engine().readTelemetry(tel));
+        assert(tel.isPatternNoteActive(gen2, 67) && !tel.isPatternNoteActive(gen, 60));
+
+        s.stop();
+        s.engine().processHostBuffer([l[], r[]], [null, null], 64);
+        assert(s.engine().readTelemetry(tel));
+        assert(!tel.isPatternNoteActive(gen2, 67));
     }
 
     import std.conv : to;

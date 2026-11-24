@@ -666,6 +666,7 @@ ContrastPair[] usedTextPairs(const ref StudioTheme t) {
     add("text", "categoryCore+outputTint+panelRaised",
         compositeOver(t.categoryCore.withAlpha(t.categoryTint(true)), t.panelRaised));
     add("textDim", "trackerBackground", t.trackerBackground);
+    add("pianoKeyText", "pianoWhiteKey", t.pianoWhiteKey);
     return out_;
 }
 
@@ -710,6 +711,8 @@ ContrastPair[] usedGraphicPairs(const ref StudioTheme t) {
     }
     add("scrollThumb", "panel+scrollTrack", compositeOver(t.scrollTrack, t.panel));
     add("borderStrong", "clip", t.clip0);
+    add("pianoKeyBorder", "pianoWhiteKey", t.pianoWhiteKey);
+    add("pianoBlackKey", "pianoWhiteKey", t.pianoWhiteKey);
     return out_;
 }
 
@@ -1442,7 +1445,8 @@ TokenGroup[] tokenGroups() {
         TokenGroup("Tracker fields", ["trackerCursor", "trackerNote", "trackerVelocity", "trackerModule",
             "trackerEffect", "trackerParam", "trackerEmpty"]),
         TokenGroup("Categories & clips", ["categoryCore", "categorySynth", "categoryEffect", "categoryControl", "clip0",
-            "clip1", "clip2", "clip3", "clip4", "clip5", "clip6", "clip7"])
+            "clip1", "clip2", "clip3", "clip4", "clip5", "clip6", "clip7"]),
+        TokenGroup("Piano", ["pianoWhiteKey", "pianoBlackKey", "pianoKeyBorder", "pianoKeyText"])
     ];
 }
 

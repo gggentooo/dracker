@@ -986,6 +986,64 @@ version (unittest) {
     }
 
     unittest {
+        auto bottom = SplitPaneNode.leaf("bottom");
+        auto middle = SplitPaneNode.leaf("middle");
+        auto lower = SplitPaneNode.split(Axis.vertical, middle, bottom, 0.1685f, 48, 180, 4);
+        auto top = SplitPaneNode.leaf("top");
+        auto dock = new DockLayout(SplitPaneNode.split(Axis.vertical, top, lower, 0.4518f, 180, 232, 4));
+        dock.arrange(RectF(0, 0, 400, 834));
+        immutable RectF top0 = top.bounds;
+        immutable RectF mid0 = middle.bounds;
+        immutable RectF bot0 = bottom.bounds;
+        assert(near(top0.h + 4.0f + mid0.h + 4.0f + bot0.h, 834.0f));
+
+        immutable float topSplitY = dock.root.splitterRect.y + 2.0f;
+        assert(dock.beginDrag(Point2F(100, topSplitY)) && dock.draggingNode() is dock.root);
+        dock.dragTo(Point2F(100, topSplitY + 20.0f));
+        assert(near(top.bounds.h, top0.h + 20.0f));
+        assert(near(middle.bounds.h, mid0.h - 20.0f));
+        assert(near(bottom.bounds.y, bot0.y) && near(bottom.bounds.h, bot0.h));
+
+        dock.dragTo(Point2F(100, topSplitY + 500.0f));
+        assert(near(middle.bounds.h, 48.0f));
+        assert(near(bottom.bounds.y, bot0.y) && near(bottom.bounds.h, bot0.h));
+
+        dock.dragTo(Point2F(100, topSplitY - 500.0f));
+        assert(near(top.bounds.h, 180.0f));
+        assert(near(bottom.bounds.y, bot0.y) && near(bottom.bounds.h, bot0.h));
+        dock.endDrag();
+
+        dock.arrange(RectF(0, 0, 400, 834));
+        immutable RectF top1 = top.bounds;
+        immutable RectF mid1 = middle.bounds;
+        immutable RectF bot1 = bottom.bounds;
+        immutable float botSplitY = lower.splitterRect.y + 2.0f;
+        assert(dock.beginDrag(Point2F(100, botSplitY)) && dock.draggingNode() is lower);
+        dock.dragTo(Point2F(100, botSplitY + 30.0f));
+        assert(near(top.bounds.h, top1.h));
+        assert(near(middle.bounds.h, mid1.h + 30.0f));
+        assert(near(bottom.bounds.h, bot1.h - 30.0f));
+        dock.endDrag();
+
+        auto leftA = SplitPaneNode.leaf("a");
+        auto midB = SplitPaneNode.leaf("b");
+        auto rightC = SplitPaneNode.leaf("c");
+        auto leftPair = SplitPaneNode.split(Axis.horizontal, leftA, midB, 0.5f, 50, 50, 4);
+        auto hdock = new DockLayout(SplitPaneNode.split(Axis.horizontal, leftPair, rightC, 0.6f, 104, 80, 4));
+        hdock.arrange(RectF(0, 0, 504, 100));
+        immutable RectF a0 = leftA.bounds;
+        immutable RectF b0 = midB.bounds;
+        immutable RectF c0 = rightC.bounds;
+        immutable float splitX = hdock.root.splitterRect.x + 2.0f;
+        assert(hdock.beginDrag(Point2F(splitX, 50)) && hdock.draggingNode() is hdock.root);
+        hdock.dragTo(Point2F(splitX + 25.0f, 50));
+        assert(near(leftA.bounds.w, a0.w));
+        assert(near(midB.bounds.w, b0.w + 25.0f));
+        assert(near(rightC.bounds.w, c0.w - 25.0f));
+        hdock.endDrag();
+    }
+
+    unittest {
         auto root = new Panel();
         auto a = root.add(new Probe(RectF(0, 0, 100, 100)));
         auto b = root.add(new Probe(RectF(50, 50, 100, 100)));

@@ -31,7 +31,7 @@
  *     play()/stop()/togglePlay()/seekLine()/playPattern()/isPlaying(), setScopeTaps(), doAddMidiMapping(),
  *     doRemoveMidiMapping(), beginMidiLearn()/cancelMidiLearn(), processMidiFromRt(), beginExport()/exportStatus()/
  *     cancelExport()/waitForExport(), undo(), redo(), save/open/preset/import APIs, handleKeyEvent(),
- *     pollRetiredAndTelemetry()
+ *     triggerLiveNote(), releaseLiveNote(), pollRetiredAndTelemetry()
  *   - struct MidiNoteEvent / SamplePeaks / ExportOptions / ExportStatus; enum ExportState; class ExportJob
  *   - SamplePeaks computeSamplePeaks(...) / float denormalizeParam(...)
  *
@@ -1588,6 +1588,42 @@ class StudioSession {
             return true;
         }
         return false;
+    }
+
+    /**
+     * Triggers a live note-on directly on target using a caller-supplied voice tag (used by the on-screen piano).
+     *
+     * Params:
+     *   target = Destination synth ModuleId.
+     *   keyTag = Unique voice tag paired with releaseLiveNote().
+     *   midiNote = Fractional MIDI note pitch.
+     *   velocity = Normalized note velocity [0..1].
+     *
+     * Returns:
+     *   True if the command was enqueued.
+     */
+    bool triggerLiveNote(ModuleId target, uint keyTag, float midiNote, float velocity = 0.85f) {
+        if (!initialized_ || !target.isValid()) {
+            return false;
+        }
+        return sendCommand(EngineCommand.makeLiveNoteOn(target, keyTag, midiNote, velocity));
+    }
+
+    /**
+     * Releases a previously triggered live note matching target and keyTag.
+     *
+     * Params:
+     *   target = Target synth ModuleId (invalid matches any module holding keyTag).
+     *   keyTag = Voice tag passed to triggerLiveNote().
+     *
+     * Returns:
+     *   True if the command was enqueued.
+     */
+    bool releaseLiveNote(ModuleId target, uint keyTag) {
+        if (!initialized_) {
+            return false;
+        }
+        return sendCommand(EngineCommand.makeLiveNoteOff(target, keyTag));
     }
 
     /**

@@ -162,6 +162,11 @@ struct StudioTheme {
     ColorRGBA clip7 = ColorRGBA.fromHex(0xC7C7C7FF);
     ColorRGBA clipText = ColorRGBA.fromHex(0x000000FF);
 
+    ColorRGBA pianoWhiteKey = ColorRGBA.fromHex(0xFFFFFFFF);
+    ColorRGBA pianoBlackKey = ColorRGBA.fromHex(0x000000FF);
+    ColorRGBA pianoKeyBorder = ColorRGBA.fromHex(0x000000FF);
+    ColorRGBA pianoKeyText = ColorRGBA.fromHex(0x000000FF);
+
     /**
      * True for light (dark-on-light) appearances; selects the emphasize() direction.
      */

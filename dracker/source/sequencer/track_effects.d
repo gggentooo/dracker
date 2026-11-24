@@ -16,7 +16,7 @@
  * Planned API (Types, Functions & Hooks):
  *   - struct TrackEffectState : per-channel note/slide/vibrato/arp/retrig/cut/delay state
  *   - struct SequencerActionFlags : BPM/TPL/jump/stop requests returned per tick
- *   - struct TrackEffectBank : processCellTick(), releaseAllActive()
+ *   - struct TrackEffectBank : processCellTick(), releaseAllActive(), collectActiveNotes()
  *
  * See_Also:
  *   architecture_proposal.md, dev_plan_proposal.md
@@ -54,6 +54,7 @@ struct TrackEffectState {
     NoteId activeNoteId = NoteId.none;
     float basePitch = 60.0f;
     float currentPitch = 60.0f;
+    float lastEmittedPitch = 60.0f;
     float velocity = 0.8f;
 
     ubyte lastSlideUp = 0;
@@ -134,6 +135,32 @@ struct TrackEffectBank {
             if (ch.allocated && ch.activeModule.isValid() && ch.activeNoteId.isValid()) {
                 graph.enqueueEvent(ch.activeModule, ModEvent.makeNoteOff(ch.activeNoteId), absFrame);
                 ch.activeNoteId = NoteId.none;
+            }
+        }
+    }
+
+    /**
+     * Collects MIDI note numbers of currently sounding tracker voices targeting targetMod into a 128-bit mask.
+     *
+     * Params:
+     *   targetMod = Module identifier to inspect.
+     *   outMask = Output two-word bitmask covering MIDI notes 0..127 (cleared before filling).
+     */
+    void collectActiveNotes(ModuleId targetMod, ref ulong[2] outMask) const pure @safe {
+        outMask[0] = 0uL;
+        outMask[1] = 0uL;
+        if (!targetMod.isValid()) {
+            return;
+        }
+        foreach (ref ch; channels_) {
+            if (ch.allocated && ch.activeModule == targetMod && ch.activeNoteId.isValid()) {
+                immutable float p = ch.lastEmittedPitch;
+                if (p >= -0.5f && p < 127.5f) {
+                    immutable int note = p < 0.0f ? 0 : cast(int)(p + 0.5f);
+                    if (note >= 0 && note < 128) {
+                        outMask[note >> 6] |= (1uL << (note & 63));
+                    }
+                }
             }
         }
     }
@@ -377,6 +404,7 @@ struct TrackEffectBank {
                 st.activeNoteId = nextNoteId();
                 st.basePitch = targetNote;
                 st.currentPitch = targetNote;
+                st.lastEmittedPitch = targetNote;
                 graph.enqueueEvent(
                     st.activeModule,
                     ModEvent.makeNoteOn(st.activeNoteId, targetNote, st.velocity),
@@ -415,6 +443,7 @@ struct TrackEffectBank {
             case EffectCode.pitchOffsetUp:
                 if (st.activeModule.isValid() && st.activeNoteId.isValid()) {
                     st.currentPitch += cast(float) cell.effectVal * 0.0625f;
+                    st.lastEmittedPitch = st.currentPitch;
                     graph.enqueueEvent(
                         st.activeModule,
                         ModEvent.makeSetPitch(st.activeNoteId, st.currentPitch),
@@ -426,6 +455,7 @@ struct TrackEffectBank {
             case EffectCode.pitchOffsetDown:
                 if (st.activeModule.isValid() && st.activeNoteId.isValid()) {
                     st.currentPitch -= cast(float) cell.effectVal * 0.0625f;
+                    st.lastEmittedPitch = st.currentPitch;
                     graph.enqueueEvent(
                         st.activeModule,
                         ModEvent.makeSetPitch(st.activeNoteId, st.currentPitch),
@@ -578,7 +608,10 @@ struct TrackEffectBank {
         }
 
         if (pitchDirty) {
+            st.lastEmittedPitch = emittedPitch;
             graph.enqueueEvent(st.activeModule, ModEvent.makeSetPitch(st.activeNoteId, emittedPitch), absFrame);
+        } else {
+            st.lastEmittedPitch = st.currentPitch;
         }
 
         if (cell.effect == EffectCode.velocitySlide) {

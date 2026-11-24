@@ -703,6 +703,10 @@ final class DockLayout {
     float hitSlop = 2.0f;
     private SplitPaneNode dragging_;
     private float grabOffset_ = 0.0f;
+    private bool anchorFirst_ = false;
+    private float anchoredFirstLen_ = 0.0f;
+    private bool anchorSecond_ = false;
+    private float anchoredSecondLen_ = 0.0f;
 
     /**
      * Creates a layout around a tree.
@@ -799,11 +803,21 @@ final class DockLayout {
      *   True if a drag started.
      */
     bool beginDrag(Point2F p) @safe nothrow pure @nogc {
+        anchorFirst_ = false;
+        anchorSecond_ = false;
         dragging_ = splitterAt(p);
         if (dragging_ is null) {
             return false;
         }
         grabOffset_ = dragging_.axis == Axis.horizontal ? p.x - dragging_.splitterRect.x : p.y - dragging_.splitterRect.y;
+        if (!dragging_.first.isLeaf() && dragging_.first.axis == dragging_.axis) {
+            anchorFirst_ = true;
+            anchoredFirstLen_ = axisLength(dragging_.first.first.bounds, dragging_.axis);
+        }
+        if (!dragging_.second.isLeaf() && dragging_.second.axis == dragging_.axis) {
+            anchorSecond_ = true;
+            anchoredSecondLen_ = axisLength(dragging_.second.second.bounds, dragging_.axis);
+        }
         return true;
     }
 
@@ -822,7 +836,37 @@ final class DockLayout {
         }
         immutable float origin = dragging_.axis == Axis.horizontal ? dragging_.bounds.x : dragging_.bounds.y;
         immutable float pos = dragging_.axis == Axis.horizontal ? p.x : p.y;
-        dragging_.setFirstLength(pos - grabOffset_ - origin);
+        immutable float wantFirst = pos - grabOffset_ - origin;
+        if (!anchorFirst_ && !anchorSecond_) {
+            dragging_.setFirstLength(wantFirst);
+            return true;
+        }
+        immutable float avail = dragging_.availableLength();
+        float minFirst = dragging_.minFirst;
+        if (anchorFirst_) {
+            immutable float needed = anchoredFirstLen_ + dragging_.first.splitterThickness + dragging_.first.minSecond;
+            if (needed > minFirst) {
+                minFirst = needed;
+            }
+        }
+        float minSecond = dragging_.minSecond;
+        if (anchorSecond_) {
+            immutable float needed = dragging_.second.minFirst + dragging_.second.splitterThickness + anchoredSecondLen_;
+            if (needed > minSecond) {
+                minSecond = needed;
+            }
+        }
+        immutable float maxFirst = avail - minSecond;
+        immutable float targetFirst = maxFirst >= minFirst
+            ? clampf(wantFirst, minFirst, maxFirst)
+            : dragging_.clampFirstLength(wantFirst);
+        dragging_.setFirstLength(targetFirst);
+        if (anchorFirst_) {
+            dragging_.first.setFirstLength(anchoredFirstLen_);
+        }
+        if (anchorSecond_) {
+            dragging_.second.setFirstLength(dragging_.second.availableLength() - anchoredSecondLen_);
+        }
         return true;
     }
 
@@ -831,6 +875,12 @@ final class DockLayout {
      */
     void endDrag() @safe nothrow pure @nogc {
         dragging_ = null;
+        anchorFirst_ = false;
+        anchorSecond_ = false;
+    }
+
+    private static float axisLength(RectF r, Axis a) @safe nothrow pure @nogc {
+        return a == Axis.horizontal ? r.w : r.h;
     }
 
     /**

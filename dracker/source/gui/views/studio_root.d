@@ -5,8 +5,9 @@
  *
  * Purpose:
  *   Assembles every studio view into one docked window layout: transport bar on top; a resizable split grid with
- *   the patchbay and parameter rack + scope above, and the pattern editor and timeline + sample editor below; and
- *   a status bar. Routes keyboard shortcuts resolved through the session Keymap: document-level actions run here
+ *   the patchbay and parameter rack + scope above, a full-width resizable piano keyboard in the middle, and the
+ *   pattern editor and timeline + sample editor below; and a status bar. Routes keyboard shortcuts resolved through
+ *   the session Keymap: document-level actions run here
  *   (transport, record, octave, undo/redo, panic, play-pattern, loop) or go to the app layer (new/open/save/
  *   export/quit); context-dependent actions go to the StudioCommandSink view that holds focus (or was used last);
  *   unhandled piano keys play live notes on the selected module. Phase 8.5: openAppearance opens the Appearance
@@ -38,6 +39,7 @@ import gui.views.appearance_panel : AppearancePanel;
 import gui.views.param_rack : ParamRackView;
 import gui.views.patchbay_view : PatchbayView;
 import gui.views.pattern_editor : PatternEditorView;
+import gui.views.piano_view : PianoKeyboardView;
 import gui.views.sample_editor : SampleEditorView;
 import gui.views.scope_view : ScopeView;
 import gui.views.studio_context : StudioContext;
@@ -58,6 +60,7 @@ final class StudioRoot : Widget {
     PatchbayView patchbay;
     ParamRackView rack;
     ScopeView scopeView;
+    PianoKeyboardView piano;
     PatternEditorView pattern;
     TimelineView timeline;
     SampleEditorView sampleEditor;
@@ -76,7 +79,7 @@ final class StudioRoot : Widget {
 
     private Widget lastSink_;
     private AppearancePanel appearancePanel_;
-    private bool[uint] heldPianoKeys_;
+    private uint[uint] heldPianoKeys_;
 
     /**
      * Builds every view over ctx.
@@ -91,6 +94,7 @@ final class StudioRoot : Widget {
         patchbay = new PatchbayView(ctx);
         rack = new ParamRackView(ctx);
         scopeView = new ScopeView(ctx);
+        piano = new PianoKeyboardView(ctx);
         pattern = new PatternEditorView(ctx);
         timeline = new TimelineView(ctx);
         sampleEditor = new SampleEditorView(ctx);
@@ -101,10 +105,14 @@ final class StudioRoot : Widget {
         SplitPaneNode bottom = SplitPaneNode.split(Axis.horizontal, SplitPaneNode.leaf("pattern"),
             SplitPaneNode.split(Axis.vertical, SplitPaneNode.leaf("timeline"), SplitPaneNode.leaf("sample"), 0.55f,
                 100.0f, 100.0f), 0.58f, 320.0f, 240.0f);
-        grid = add(new SplitView(SplitPaneNode.split(Axis.vertical, top, bottom, 0.5f, 180.0f, 180.0f)));
+        SplitPaneNode lower = SplitPaneNode.split(Axis.vertical, SplitPaneNode.leaf("piano"), bottom,
+            0.1327f, PianoKeyboardView.MIN_HEIGHT, 180.0f);
+        grid = add(new SplitView(SplitPaneNode.split(Axis.vertical, top, lower,
+            0.4124f, 180.0f, PianoKeyboardView.MIN_HEIGHT + 4.0f + 180.0f)));
         grid.setPane("patchbay", patchbay);
         grid.setPane("rack", rack);
         grid.setPane("scope", scopeView);
+        grid.setPane("piano", piano);
         grid.setPane("pattern", pattern);
         grid.setPane("timeline", timeline);
         grid.setPane("sample", sampleEditor);
@@ -244,11 +252,11 @@ final class StudioRoot : Widget {
                 ctx.setStatus(ctx.recording ? "Record on" : "Record off");
                 break;
             case StudioAction.octaveUp:
-                if (ctx.editOctave < 9) ctx.editOctave++;
+                ctx.setEditOctave(ctx.editOctave + 1);
                 ctx.setStatus("Octave " ~ octaveText());
                 break;
             case StudioAction.octaveDown:
-                if (ctx.editOctave > -1) ctx.editOctave--;
+                ctx.setEditOctave(ctx.editOctave - 1);
                 ctx.setStatus("Octave " ~ octaveText());
                 break;
             case StudioAction.undo:
@@ -258,6 +266,9 @@ final class StudioRoot : Widget {
                 ctx.setStatus(s.redo() ? "Redo" : "Nothing to redo");
                 break;
             case StudioAction.panic:
+                piano.releaseHeld();
+                heldPianoKeys_ = null;
+                ctx.clearVisualNotes();
                 s.stop();
                 ctx.setStatus("All notes off");
                 break;
@@ -300,19 +311,26 @@ final class StudioRoot : Widget {
     }
 
     private bool livePiano(const ref KeyEvent e, bool down) {
+        if (!down) {
+            auto held = e.keyCode in heldPianoKeys_;
+            if (held is null) {
+                return false;
+            }
+            immutable uint mod = *held;
+            heldPianoKeys_.remove(e.keyCode);
+            ctx.clearQwertyNote(e.keyCode);
+            invalidate();
+            return ctx.session.releaseLiveNote(ModuleId(mod), e.keyCode);
+        }
         ubyte midi;
         if (ctx.selectedModule() == 0 || !ctx.session.keymap().resolveNote(e.keyCode, ctx.editOctave, midi)) {
             return false;
         }
-        if (down) {
-            heldPianoKeys_[e.keyCode] = true;
-        } else if ((e.keyCode in heldPianoKeys_) is null) {
-            return false;
-        } else {
-            heldPianoKeys_.remove(e.keyCode);
-        }
+        heldPianoKeys_[e.keyCode] = ctx.selectedModule();
+        ctx.setQwertyNote(e.keyCode, ctx.selectedModule(), midi);
+        invalidate();
         PlatformEvent ev;
-        ev.kind = down ? PlatformEventKind.keyDown : PlatformEventKind.keyUp;
+        ev.kind = PlatformEventKind.keyDown;
         ev.keyCode = e.keyCode;
         ev.modifiers = e.modifiers;
         return ctx.session.handleKeyEvent(ev, ModuleId(ctx.selectedModule()));

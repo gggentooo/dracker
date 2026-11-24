@@ -28,7 +28,7 @@ Everything runs live: edits are heard immediately, and you can play notes from t
 9. [The timeline: arranging the song](#9-the-timeline)
 10. [The sample editor](#10-the-sample-editor)
 11. [The scope](#11-the-scope)
-12. [Playing live: computer keyboard and MIDI](#12-playing-live)
+12. [Playing live: computer keyboard, piano and MIDI](#12-playing-live)
 13. [Files: new, open, save, export, import](#13-files)
 14. [Appearance and accessibility](#14-appearance-and-accessibility)
 15. [Undo and redo](#15-undo-and-redo)
@@ -89,7 +89,9 @@ Startup sequence:
 │                              │  Parameter rack                          │
 │  Patchbay                    ├──────────────────────────────────────────┤
 │                              │  Scope                                   │
-├──────────────────────────────┼──────────────────────────────────────────┤
+├──────────────────────────────┴─────────────────────────────────────┬────┤
+│  On-screen piano (full width, leftmost C = edit octave)            │▲/▼ │
+├──────────────────────────────┬─────────────────────────────────────┴────┤
 │                              │  Timeline (arranger)                     │
 │  Pattern editor              ├──────────────────────────────────────────┤
 │                              │  Sample editor                           │
@@ -100,8 +102,9 @@ Startup sequence:
 
 ### 2.1 Resizing panes
 - Drag the thin dividers between panes to resize them. A divider is highlighted when you hover over or drag it.
+- Dragging the top or bottom edge of the on-screen piano resizes the piano vertically (minimum 48 pt) without shifting the opposite half's outer split; key width scales proportionally with strip height.
 - Each pane has a minimum size:
-  - top and bottom halves: 180 pt tall;
+  - top and bottom halves: 180 pt tall (piano minimum: 48 pt tall);
   - patchbay and pattern editor: 320 pt wide;
   - the right-hand columns: 240 pt wide.
 
@@ -754,12 +757,20 @@ When no shortcut uses a key, the letter keys play the **selected module** like a
 - Keys play only when a module is selected, and they don't auto-repeat.
 - Hold several keys for chords.
 
-### 12.2 MIDI keyboards and controllers
+### 12.2 On-screen piano keyboard
+A stark black-and-white high-contrast piano strip sits across the full viewport width above the pattern editor and timeline:
+
+- **Layout & resizing:** The leftmost key is always **C** of the current **edit octave** (each visible **C** key shows its octave number below the black keys). Drag the top or bottom border of the strip to resize it; key widths scale proportionally with height.
+- **Octave buttons:** Click the stacked **up/down** buttons at the far right to shift the shared edit octave (`-1` to `9`, synchronized with the transport **OCT** box and **F1 / F2**).
+- **Playing & recording:** Click or drag across keys to play notes on the **selected module**. With **Record** enabled, clicked keys also insert notes into the pattern editor.
+- **Live highlighting:** Active keys highlight in the theme's accent color for mouse presses, computer-keyboard piano holds, external MIDI input, and pattern playback targeting the currently selected module.
+
+### 12.3 MIDI keyboards and controllers
 - All connected MIDI sources play the **selected module**. The transport shows which sources are connected.
 - Map controller knobs to parameters with **MIDI Learn** ([§7.3](#73-midi-learn-controlling-a-parameter-from-hardware)).
 - Record MIDI notes into patterns with Record on ([§8.9](#89-recording-from-midi)).
 
-### 12.3 Panic
+### 12.4 Panic
 **⌘.** stops playback and silences everything. Use it if a note gets stuck.
 
 ---

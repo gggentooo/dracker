@@ -88,6 +88,12 @@ version (unittest) {
         assert(names == ["Light · High Contrast · Okabe–Ito", "Light · Low Contrast · Okabe–Ito",
             "Light · High Contrast · Tol Bright", "Light · Low Contrast · Tol Bright",
             "Dark · High Contrast · Okabe–Ito", "Dark · Low Contrast · Okabe–Ito"]);
+        foreach (t; allBuiltinThemes()) {
+            assert(t.pianoWhiteKey == ColorRGBA.fromHex(0xFFFFFFFF));
+            assert(t.pianoBlackKey == ColorRGBA.fromHex(0x000000FF));
+            assert(t.pianoKeyBorder == ColorRGBA.fromHex(0x000000FF));
+            assert(t.pianoKeyText == ColorRGBA.fromHex(0x000000FF));
+        }
     }
 
     unittest {

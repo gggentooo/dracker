@@ -370,7 +370,7 @@ final class TransportBarView : Widget, StudioCommandSink {
         octaveBox_ = add(new NumericDragBox(ValueRange(-1.0f, 9.0f, 4.0f, false, 1.0f), 0));
         octaveBox_.id = "transport.octave";
         octaveBox_.pixelsPerStep = 8.0f;
-        octaveBox_.onChange = (float v) { ctx_.editOctave = cast(int) round(v); };
+        octaveBox_.onChange = (float v) { ctx_.setEditOctave(cast(int) round(v)); };
         stepBox_ = add(new NumericDragBox(ValueRange(0.0f, 16.0f, 1.0f, false, 1.0f), 0));
         stepBox_.id = "transport.step";
         stepBox_.pixelsPerStep = 8.0f;
