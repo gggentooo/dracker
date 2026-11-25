@@ -10,6 +10,160 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
 
 ---
 
+## [2026-11-25 18:30:00 KST]
+- **Author:** Claude Opus 5.5
+- **Affected Files:** `source/app/chord_progression.d`, `source/app/session.d`, `source/gui/views/studio_context.d`, `source/gui/views/pattern_editor.d`, `source/gui/views/timeline_view.d`, `source/gui/views/transport_bar.d`, `tests/unit/chord_progression_test.d`, `tests/unit/studio_backend_test.d`, `tests/unit/views_pattern_editor_test.d`, `tests/unit/views_timeline_test.d`, `tests/unit/views_transport_test.d`, `docs/manual.md`, `docs/todo.md`
+- **Reason / Summary:** Skeleton project generator tasks T16, T17, T18 and the T29 count-in rule (`docs/todo.md`). Owner decisions (Rule 5): the default bass and piano are approved after listening to `build/default-sounds.wav`, so T13 is done; the count-in is one bar with at least two beats (T29).
+  - **Preset progressions (`app/chord_progression.d`, T16):**
+    - `ProgressionPreset`, `PROGRESSION_PRESETS`: the 11 presets of T04 as Roman-numeral text, so they follow the key.
+    - `presetsFor(mode)`, `presetBlocks()` (one bar per chord), `presetLabel()`.
+    - The names not given in T04 were chosen here; they are listed in `docs/todo.md` → T16.
+  - **Beats and bars in the views (`gui/views/pattern_editor.d`, `gui/views/timeline_view.d`, T17):**
+    - Pattern editor: row shading, bar rules and bold line numbers follow `StudioSession.linesPerBeat()` / `linesPerBar()`. The `beatLines` / `barLines` fields became methods.
+    - Timeline: the `linesPerBeat` / `linesPerBar` constants became methods reading the session.
+      - `gridFor()` is now an instance method: beat by default, line with Shift, bar with ⌘.
+      - Grid lines and ruler ticks follow the session's values.
+      - `majorStep()` is now public. It places ruler labels only on beat or bar divisions; 4/4 is unchanged.
+  - **Time signature control (`gui/views/transport_bar.d`, T18):**
+    - **SIG** after TPL: a numerator drag box (`transport.sigNum`, 1–16) and a denominator dropdown (`transport.sigDen`: 2, 4, 8, 16) after a "/" caption.
+    - Each drag or choice is one "Change Time Signature" undo step through `doSetTimeSignature()`. Both controls follow undo and outside changes.
+    - The Rec button's count-in blink now follows the beat length instead of 4 lines.
+    - The bar's controls take 122 more points, so in narrow windows the right-hand items are hidden sooner.
+  - **Count-in (`app/session.d`, `gui/views/studio_context.d`, T29):**
+    - New `StudioSession.countInBeats()`: one bar, at least `MIN_COUNT_IN_BEATS` = 2 beats. It replaces `COUNT_IN_BEATS` (4 beats in every time signature).
+    - 4/4 is unchanged. 3/4 counts in 3 beats, 6/8 counts 6 eighths, 2/2 and 1/4 count 2 beats.
+    - The first "Count-in N" status uses the new value.
+  - **Tests:**
+    - `chord_progression_test.d`: the presets parse and resolve in every key of their mode; chord names of seven presets.
+    - `views_pattern_editor_test.d`: drawn beat and bar rows in 4/4, 3/4, 6/8 and after undo.
+    - `views_timeline_test.d`: drawn bar and beat grid lines, snap grids, and label steps for six time signatures × seven zoom levels.
+    - `views_transport_test.d`: SIG ids and order, drag and clamping, dropdown, undo, outside changes, typed entry.
+    - `studio_backend_test.d`: count-in length and start line in six time signatures.
+  - **Docs:**
+    - `docs/manual.md`: §5 SIG row and undo note; §8 row shading; §8.11 count-in; §9.3 snapping and grid; §13.1 (the time signature now has a control; the key does not yet).
+    - `docs/todo.md` updated.
+  - **Verification:**
+    - `dub test --compiler=ldc2 --config=headless`: 29 of 30 modules pass. The failure is the existing `tests/unit/views_patchbay_test.d:824` failure.
+    - `dub test --compiler=ldc2 --config=app`: 4 of 4 modules pass.
+    - `dub build --config=app` succeeds.
+    - The changed files compile with `ldc2 -w`.
+    - Not checked by hand in the running app: the SIG controls and the redrawn views.
+
+## [2026-11-25 16:50:00 KST]
+- **Author:** Claude Opus 5.5
+- **Affected Files:**
+  - New: `source/app/chord_progression.d`, `tests/unit/chord_progression_test.d`, `tests/fuzz/chord_progression_fuzz.d`
+  - Modified: `source/platform/macos/appkit.d`, `source/app/studio_app.d`, `source/app/session.d`, `source/app/history.d`, `source/gui/views/studio_context.d`, `source/app/skeleton_gen.d`, `source/main.d`, `tests/unit/studio_backend_test.d`, `tests/unit/skeleton_gen_test.d`, `docs/manual.md`, `docs/todo.md`, `agents.md`
+- **Reason / Summary:** Skeleton project generator tasks T14, T15 and T28, plus a listening aid for T13 (`docs/todo.md`). Owner decision (Rule 5): logout quits without asking.
+  - **Chord model and parser (`app/chord_progression.d`, T14):**
+    - Types: `ChordQuality` (11 qualities), `ChordForm`, `Chord`, `ChordBlock` (`halfBars`, default one bar), `ProgressionError`, `ResolvedChord`.
+    - Functions: `parseChord()`, `parseProgression()`, `chordIntervals()`, `resolveChord()`, `romanLabel()`, `nameLabel()`, `chordLabel()` ("ii · Dm").
+    - Syntax follows T03. Also accepted: `♭`/`♯`, `°`, `+`, `ø`, `m7♭5`, and half-diminished and diminished-7 Roman numerals (`viiø7`, `vii°7`).
+    - Wrong case gets a hint: upper-case diminished, or lower-case major-family suffixes. Roman numerals have no slash form.
+    - Errors report the byte position, length and reason of the first bad chord.
+    - Roman chords follow the key; named chords keep the spelling the user typed.
+  - **Time signature and key in the session (`app/session.d`, `app/history.d`, `gui/views/studio_context.d`, T15):**
+    - Getters: `timeSignatureNumerator()`, `timeSignatureDenominator()`, `linesPerBeat()` (16 ÷ denominator), `linesPerBar()`, `songKey()`.
+    - Undoable `doSetTimeSignature()` and `doSetKey()`, with new `SetTimeSignatureCommand` and `SetKeyCommand`. Setting the current value adds no undo step.
+    - `StudioSession.LINES_PER_BEAT` is removed. The count-in is still 4 beats, but a beat now follows the project's time signature (4/4 unchanged); the count-in status uses the same value. Whether the count-in should be one bar instead is the new decision task T29.
+  - **Quit from outside the menu (`platform/macos/appkit.d`, `app/studio_app.d`, T28):**
+    - New `STAppDelegate` (NSApplicationDelegate), installed by `MacApplication.initialize()` and targeted by `setCommandTarget()`.
+    - `applicationShouldTerminate:` reads the quit Apple event's `kAEQuitReason`.
+      - Logout, restart or shutdown (`isSessionEndQuitReason()`): it runs the new `MacWindow.sessionEndHandler` and returns `NSTerminateNow`. Nothing is asked and unsaved changes are lost. The studio's handler cancels a running WAV export, waits for it, and closes the audio host.
+      - Any other quit (Dock icon menu, Apple events): it returns `NSTerminateCancel` and posts `closeRequested`, so the studio asks like for ⌘Q.
+    - New helpers `fourCharCode()` and `SESSION_END_QUIT_REASONS`.
+  - **Listening aid for T13 (`app/skeleton_gen.d`, `main.d`):**
+    - New `instrumentPreviewProject()` and the `dracker --sound-check=<file.wav>` option. It renders a 26 s WAV offline without an audio device: C major, 120 BPM, I–vi–ii–V7; bars 1–4 bass, 5–8 piano, 9–12 both.
+    - Preview wire gains are 0.3 (bass) and 0.22 (piano). At 0.6 and 0.4 the mixed section reached 0.99 and was shaped by the Master Output's soft limiter.
+    - Measured peaks: 0.38 / 0.48 / 0.71.
+    - T13 stays open until the owner has listened.
+  - **Tests:**
+    - `chord_progression_test.d`: every quality in both forms in C major and A minor; all 24 keys × 7 degrees × 3 accidentals × every suffix; error reasons and positions; separators; labels.
+    - `chord_progression_fuzz.d`: 60,000 inputs, none crash, errors point inside the text, accepted chords resolve.
+    - `studio_backend_test.d`: getters for seven time signatures, undo/redo, invalid values, keys, save/load, New Project, and the count-in start line in 4/4, 6/8 and 2/2.
+    - `skeleton_gen_test.d`: preview pattern layout, and each section renders without clipping.
+    - `appkit.d` unittest: quit-reason codes, delegate registration, and the delegate's answer without a window.
+  - **Docs:**
+    - `docs/manual.md`: §13.8 (Dock quit asks; logout, restart and shutdown quit without asking and cancel an export), Appendix C row 1, §8.11 count-in, Appendix D `--sound-check`.
+    - `docs/todo.md` and `agents.md` (package map) updated.
+  - **Verification:**
+    - `dub test --compiler=ldc2 --config=headless`: 29 of 30 modules pass. The failure is the existing `tests/unit/views_patchbay_test.d:824` failure.
+    - `dub test --compiler=ldc2 --config=app`: 4 of 4 modules pass.
+    - `dub build --config=app` succeeds, and `--sound-check` ran.
+    - All changed files compile with `ldc2 -w`.
+    - Not checked by hand: a real Dock quit and a real logout.
+
+## [2026-11-25 14:29:04 KST]
+- **Author:** Claude Opus 5.5
+- **Affected Files:**
+  - New: `source/app/music_theory.d`, `source/app/skeleton_gen.d`, `tests/unit/music_theory_test.d`, `tests/unit/skeleton_gen_test.d`
+  - Modified: `source/io/project_format.d`, `source/app/session.d`, `source/gui/views/studio_root.d`, `source/app/gui_shell.d`, `source/app/studio_app.d`, `tests/unit/persistence_test.d`, `tests/fuzz/project_format_fuzz.d`, `tests/unit/views_studio_root_test.d`, `docs/manual.md`, `docs/todo.md`, `agents.md`
+- **Reason / Summary:** Skeleton project generator tasks T11, T12, T13 and T27 (`docs/todo.md`). Also the owner decided that the generator panel (T20, not built yet) is modal; that is recorded in `docs/todo.md`.
+  - **Keys and scales (`app/music_theory.d`, T11):**
+    - New dependency-free module: `KeyMode`, `MusicalKey`, the 24 keys (`allKeys()`), names (`keyName()` "Bb major", `tonicName()`, `tonicChoices()`), flat preference (`usesFlats()`: F, Bb, Eb, Ab, Db major and relative minors), `relativeKey()`, scale pitch classes and degrees, `pitchClassOf()`.
+    - Spelling: `pitchClassName()` and `noteName()` ("Bb3"; middle C = C4). Scale tones are spelled diatonically (E# in F# major); other notes follow the key's sharp/flat preference.
+    - ASCII `#`/`b` are used like the pattern editor.
+  - **Time signature and key in `.msv` (`io/project_format.d`, `app/session.d`, T12):**
+    - `LoadedProject` gains `timeSigNumerator`, `timeSigDenominator`, `keyTonic` and `keyMode` (default 4/4, C major).
+    - New optional `MUSC` chunk (numerator, denominator, tonic, mode; one byte each) is written only when a value is not the default. `MSV_FORMAT_VERSION` stays 1; older builds skip the chunk.
+    - Loading: a missing chunk means 4/4, C major. A short or out-of-range chunk is refused. Bytes after the fourth are ignored.
+    - New validators `isValidTimeSignature()` (1–16 over 2/4/8/16) and `isValidKey()`, plus `hasNonDefaultMusicSettings()`. `validateProjectForSave()` checks both.
+    - `StudioSession.cloneLoadedProject` copies the new fields, so they survive load and save. Nothing in the session or GUI uses them yet (T15, T17, T18).
+  - **Instrument choices and default sounds (`app/skeleton_gen.d`, T13):**
+    - `InstrumentRole`, `InstrumentSource`, `InstrumentChoice` (`defaults()`, `ofType()`, `ofPreset()`, `label()`), `SELECTABLE_SYNTH_TYPES` (Analog Generator, FM Synth, SpectraVoice) and `instrumentChoices()`.
+    - `resolveInstrument()` gives the module for a role. It refuses unlisted types, id 0, presets that cannot play notes, and presets whose parameter count does not match their type.
+    - Defaults:
+      - `defaultBassModule()`: Analog Generator, saw, 900 Hz cutoff, short envelope.
+      - `defaultPianoModule()`: FM Synth electric piano, algorithm 2, op 5 at ratio 14 as the tine, long decay.
+    - Helpers: `moduleWithDefaults()`, `paramIndex()`, `eventInputPort()`, `audioOutputPort()`, `isPlayableInstrument()`.
+    - Registry lookups are `@system` like `ModuleRegistry.findByTypeId()`.
+    - The default sounds have not been heard by the owner. T13 stays open until they are approved.
+  - **Unsaved-changes question (`gui/views/studio_root.d`, `app/gui_shell.d`, `app/studio_app.d`, T27):**
+    - New Project, Open Project (asked before the file dialog), Quit Dracker and the window close button ask "Discard unsaved changes?" (a modal `ConfirmDialog`) when the project is modified. *Discard changes* proceeds; *Cancel*, Escape or an outside click keeps the project and shows "Kept the open project".
+    - New `StudioRoot.confirmDiscardThen(message, proceed)` (one question at a time; it runs `proceed` at once when the project is clean or the root is not attached), `requestClose()` and `unsavedPrompt()`.
+    - New `GuiShell.sceneHandlesClose`, set by the studio: a `closeRequested` event goes to `StudioScene`, which calls `requestClose()`, instead of ending the loop at once. The widget gallery keeps the old behaviour.
+    - Still not covered: a Quit that arrives as `terminate:` (Dock menu, logout, shutdown) ends the process without asking. This is recorded as T28 and in the manual.
+  - **Tests:**
+    - `music_theory_test.d`: every key, the spellings, the names, and that `KeyMode` values match the MUSC constants.
+    - `persistence_test.d`: MUSC round trips, the chunk is written only when needed, invalid values on save and load, extended and truncated chunks, session round trip.
+    - `project_format_fuzz.d`: the seed carries MUSC; the 100k run counts accepted projects with invalid values (must be 0); a sweep of all 256 values of each MUSC byte.
+    - `skeleton_gen_test.d`: choice list and labels, defaults within parameter ranges, every choice for both roles renders a non-silent note through `StudioSession`, preset and error cases.
+    - `views_studio_root_test.d`:
+      - The existing app-action test now confirms the question for ⌘O, ⌘N and ⌘Q, which it sends while the project is modified.
+      - New test covering: no question when clean; Escape, Cancel and outside-click cancel; Discard and Return confirm; requests ignored while a question is open; the question above the Appearance panel; `confirmDiscardThen()`; a detached root.
+  - **Docs:**
+    - `docs/manual.md`: Quit, New and Open rows; new §13.8 *Unsaved changes*; time signature and key added to §13.1; Appendix C row 1 now describes the Dock/logout limitation.
+    - `agents.md`: package map lists the new `app/` files.
+    - `docs/todo.md`: updated as described above.
+  - **Verification:**
+    - `dub test --compiler=ldc2 --config=headless`: 27 of 28 modules pass. The failure is `tests/unit/views_patchbay_test.d:824` ("menu should contain 'Add Core ▸'"), which also fails on the tree before these changes.
+    - `dub test --compiler=ldc2 --config=app`: 4 of 4 modules pass.
+    - `dub build --config=app` succeeds.
+    - All changed and new files compile with `ldc2 -w`, in both configurations.
+    - Not checked by hand in the running app: the window close button and Dracker ▸ Quit with a modified project.
+
+## [2026-11-25 14:14:57 KST]
+- **Author:** Claude Opus 5.5
+- **Affected Files:** `source/gui/widgets.d`, `source/app/session.d`, `tests/unit/gui_test.d`, `tests/unit/persistence_test.d`, `docs/todo.md` (new)
+- **Reason / Summary:** Stage 0 of the skeleton project generator plan (`docs/todo.md`). The owner accepted the proposed defaults of decision tasks T01–T08 (time signature model, keys, chord syntax, preset progressions, generated pattern layout, default instruments, menu item, scope of the unsaved-changes prompt); they are recorded in `docs/todo.md` → *Done* until the feature is built. Build tasks T09 and T10 are implemented:
+  - **Modal overlays (`gui/widgets.d`, T09):**
+    - New `Widget.isModalOverlay()` (false by default) and `UiContext.topModalIndex()`.
+    - `UiContext.hitTest()` stops at the topmost modal overlay, so hover, clicks and scrolling below it find nothing. A click outside a modal overlay closes only it and the overlays above it; overlays below it stay open. Before, a click outside the overlays always closed all of them. Behaviour without a modal overlay is unchanged.
+  - **Confirmation dialog (`gui/widgets.d`, T09):**
+    - New `ConfirmDialog` (modal) and `openConfirmDialog(ctx, title, message, confirmLabel, cancelLabel, onConfirm, onCancel)`: centred in the viewport, height fitted to the wrapped message, opened above any open overlay without closing it.
+    - Return or Enter confirms, Escape cancels, Tab moves focus between the two buttons (a focused button handles Return itself), and every other key, key release and typed character is consumed, so shortcuts and piano keys do not fire.
+    - It resolves once: confirm, cancel, an outside click or `closeAllOverlays()` closes it and calls exactly one handler. The overlay is closed before the handler runs, so a handler may open another dialog.
+    - New helper `wrapTextLines()` splits text at spaces and newlines to a width.
+    - Not used by any view yet; the generator panel (T24) and T27 will use it.
+  - **Open a project built in memory (`app/session.d`, T10):** New `StudioSession.openProjectFromMemory(proj, err)`. It serializes and re-parses the project so it passes the same checks as loading an .msv file, then activates it like a load. A project rejected by validation or by the trial materialization (unknown module type, bad wiring) leaves the open project untouched. Playback stops and undo history is cleared. The result has no file path and counts as unsaved.
+  - **Tests:**
+    - `gui_test.d`: dialog placement, modal hit-testing and blocked scrolling, outside clicks (on a lower overlay and on the root), Escape, Return, Tab then Return on Cancel, consumed keys, button clicks, single resolution, dismissal by `closeAllOverlays()`, a dialog opened from a confirm handler, height growing with the message, and `wrapTextLines()` cases.
+    - `persistence_test.d`: open, render, dirty/no path/no undo, and four rejected projects that keep the open one.
+  - **Verification:**
+    - `dub test --compiler=ldc2 --config=headless`: 25 of 26 modules pass. `tests/unit/views_patchbay_test.d:824` ("menu should contain 'Add Core ▸'") also fails on the unchanged tree; it predates this change.
+    - Changed files compile with `ldc2 -w`.
+    - `dub build --config=app` succeeds.
+
 ## [2026-11-25 13:38:05 KST]
 - **Author:** Claude Fable 5.2
 - **Affected Files:** `source/gui/widgets.d`, `source/app/session.d`, `source/app/keymap.d`, `source/platform/macos/appkit.d`, `source/gui/views/studio_context.d`, `source/gui/views/studio_root.d`, `source/gui/views/pattern_editor.d`, `source/gui/views/timeline_view.d`, `source/gui/views/scope_view.d`, `source/gui/views/patchbay_view.d`, `tests/unit/gui_test.d`, `tests/unit/keymap_test.d`, `tests/unit/views_pattern_editor_test.d`, `tests/unit/views_timeline_test.d`, `tests/unit/views_transport_test.d`, `tests/unit/views_studio_root_test.d`, `docs/manual.md`, `docs/changelog.md`

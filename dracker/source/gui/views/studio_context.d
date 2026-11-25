@@ -536,7 +536,7 @@ final class StudioContext {
             return false;
         }
         countInBeatShown_ = long.min;
-        setStatus(format("Count-in %d", StudioSession.COUNT_IN_BEATS));
+        setStatus(format("Count-in %d", session.countInBeats()));
         return true;
     }
 
@@ -756,7 +756,8 @@ final class StudioContext {
         }
         long beat = 0;
         if (telemetry.engine.countingIn && remaining > 0.0) {
-            beat = cast(long)((remaining + StudioSession.LINES_PER_BEAT - 1e-9) / StudioSession.LINES_PER_BEAT);
+            immutable double lpb = session.linesPerBeat();
+            beat = cast(long)((remaining + lpb - 1e-9) / lpb);
         }
         if (beat == countInBeatShown_) {
             return;

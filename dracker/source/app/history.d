@@ -10,14 +10,14 @@
  *   Executes strictly on UI/main thread; reversible actions dispatch RT mutations lock-free through StudioSession -> SpscRing!EngineCommand.
  *
  * Dependencies:
- *   Internal: app.session, foundation.types, io.project_format, sequencer.{note,timeline}
+ *   Internal: app.{music_theory,session}, foundation.types, io.project_format, sequencer.{note,timeline}
  *   External: core.time (Duration, MonoTime)
  *
  * Planned API (Types, Functions & Hooks):
  *   - interface IUndoCommand
  *   - class UndoHistory : pushAndExecute(), pushAndExecuteAt(), beginGroup(), endGroup(), inGroup(), setCoalesceWindow(), undo(), redo(), canUndo(), canRedo(), clear()
  *   - class CompoundCommand (atomic group) / class DelegateCommand (delegate-defined reversible step)
- *   - Reversible command classes: PatchCellCommand, ResizePatternCommand, AddModuleCommand, RemoveModuleCommand, ConnectWireCommand, DisconnectWireCommand, SetParamCommand, MoveModulePositionCommand, AddClipCommand, MoveClipCommand, CloneClipCommand, RemoveClipCommand, SetClipFlagsCommand, SetTempoCommand
+ *   - Reversible command classes: PatchCellCommand, ResizePatternCommand, AddModuleCommand, RemoveModuleCommand, ConnectWireCommand, DisconnectWireCommand, SetParamCommand, MoveModulePositionCommand, AddClipCommand, MoveClipCommand, CloneClipCommand, RemoveClipCommand, SetClipFlagsCommand, SetTempoCommand, SetTimeSignatureCommand, SetKeyCommand
  *
  * See_Also:
  *   architecture_proposal.md, dev_plan_proposal.md
@@ -26,6 +26,7 @@ module app.history;
 
 import core.time : dur, Duration, MonoTime;
 
+import app.music_theory : MusicalKey;
 import app.session : StudioSession;
 import io.project_format : SavedModule, SavedPattern, SavedWire;
 import sequencer.note : NoteCell;
@@ -978,6 +979,92 @@ class SetTempoCommand : IUndoCommand {
 
     override string label() const {
         return "Change Tempo";
+    }
+
+    override bool canMergeWith(IUndoCommand next) const {
+        return false;
+    }
+
+    override void mergeFrom(IUndoCommand next) {
+        cast(void) next;
+    }
+}
+
+/**
+ * Reversible project time-signature change.
+ */
+class SetTimeSignatureCommand : IUndoCommand {
+    private ubyte oldNum_;
+    private ubyte oldDen_;
+    private ubyte newNum_;
+    private ubyte newDen_;
+
+    /**
+     * Constructs a SetTimeSignatureCommand.
+     *
+     * Params:
+     *   oldNum = Prior numerator.
+     *   oldDen = Prior denominator.
+     *   newNum = New numerator.
+     *   newDen = New denominator.
+     */
+    this(ubyte oldNum, ubyte oldDen, ubyte newNum, ubyte newDen) {
+        oldNum_ = oldNum;
+        oldDen_ = oldDen;
+        newNum_ = newNum;
+        newDen_ = newDen;
+    }
+
+    override bool execute(StudioSession session) {
+        return session.setTimeSignatureDirect(newNum_, newDen_);
+    }
+
+    override bool undo(StudioSession session) {
+        return session.setTimeSignatureDirect(oldNum_, oldDen_);
+    }
+
+    override string label() const {
+        return "Change Time Signature";
+    }
+
+    override bool canMergeWith(IUndoCommand next) const {
+        return false;
+    }
+
+    override void mergeFrom(IUndoCommand next) {
+        cast(void) next;
+    }
+}
+
+/**
+ * Reversible change of the song key.
+ */
+class SetKeyCommand : IUndoCommand {
+    private MusicalKey old_;
+    private MusicalKey new_;
+
+    /**
+     * Constructs a SetKeyCommand.
+     *
+     * Params:
+     *   oldKey = Prior key.
+     *   newKey = New key.
+     */
+    this(MusicalKey oldKey, MusicalKey newKey) {
+        old_ = oldKey;
+        new_ = newKey;
+    }
+
+    override bool execute(StudioSession session) {
+        return session.setKeyDirect(new_);
+    }
+
+    override bool undo(StudioSession session) {
+        return session.setKeyDirect(old_);
+    }
+
+    override string label() const {
+        return "Change Key";
     }
 
     override bool canMergeWith(IUndoCommand next) const {

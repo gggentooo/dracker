@@ -137,16 +137,16 @@ All menu commands can also be triggered from the keyboard.
 |---|---|---|
 | Settings… | ⌘, | Opens the Appearance panel ([§14](#14-appearance-and-accessibility)) |
 | Hide Dracker | ⌘H | Hides the app |
-| Quit Dracker | ⌘Q | Quits immediately |
+| Quit Dracker | ⌘Q | Quits. If there are unsaved changes, asks first ([§13.8](#138-unsaved-changes)) |
 
-> **QA note:** Quit, New and Open do **not** ask you to save unsaved changes. Save first (⌘S).
+Closing the window with its close button works like **Quit Dracker**.
 
 ### File menu
 
 | Item | Shortcut | What it does |
 |---|---|---|
-| New Project | ⌘N | Replaces the current project with an empty one ([§1.3](#13-what-a-new-project-contains)). Undo history is cleared. |
-| Open Project… | ⌘O | Opens an `.msv` project. If the file is invalid, the current project is kept and the error is shown in the status bar. |
+| New Project | ⌘N | Replaces the current project with an empty one ([§1.3](#13-what-a-new-project-contains)). Undo history is cleared. If there are unsaved changes, asks first ([§13.8](#138-unsaved-changes)). |
+| Open Project… | ⌘O | Opens an `.msv` project. If the file is invalid, the current project is kept and the error is shown in the status bar. If there are unsaved changes, asks first, before the file dialog ([§13.8](#138-unsaved-changes)). |
 | Save Project | ⌘S | Saves to the current file, or asks for a name if the project has never been saved |
 | Save Project As… | ⇧⌘S | Saves under a new name |
 | Save Module Preset… | ⌥⌘S | Saves the selected module as a preset file ([§13.6](#136-module-presets-msym)) |
@@ -244,6 +244,7 @@ Controls from left to right. If the window is too narrow, controls on the right 
 | **LOOP** | Turns looping on or off (see below). Lit while a loop is set. |
 | **BPM** | Tempo, 20–999, adjustable in steps of 0.1. Default 125. |
 | **TPL** | Ticks per line, 1–255. Default 6. Fewer ticks means faster lines. |
+| **SIG** | Time signature: beats per bar (1–16; drag or double-click and type) **/** beat note value (dropdown: 2, 4, 8, 16). Default 4/4. A line is always a sixteenth note, so one beat is 16 ÷ the lower number lines (4 in 4/4, 2 in 6/8, 8 in 2/2) and one bar is that times the upper number (16 in 4/4, 12 in 3/4 and 6/8). Beat and bar shading in the pattern editor, the timeline grid, ruler and snapping, and the count-in follow it. BPM still counts quarter notes. |
 | **OCT** | Edit octave for the keyboard piano, −1 to 9. Default 4. |
 | **STEP** | Edit step, 0–16 lines. 0 means the cursor doesn't move after entry. |
 | **Device** | Audio output device: "System Default" or a specific device. The list is refreshed each time you open it. |
@@ -263,7 +264,7 @@ Controls from left to right. If the window is too narrow, controls on the right 
 - **MIDI**: lists connected MIDI sources, e.g. "MIDI: Keystep", or "MIDI: none". It refreshes when you open the device list.
 
 **Tempo editing**
-- Dragging BPM or TPL is one undo step.
+- Dragging BPM or TPL is one undo step; so is dragging the SIG number, and each choice in the SIG dropdown.
 - Tempo can also be changed by pattern effects ([§8.8](#88-effect-commands)), and the boxes follow those changes.
 
 ---
@@ -478,7 +479,7 @@ C-4 80 02 ..   ....
 Other things you'll see:
 - Rarely used commands appear in the note column as `AOF` (all notes off), `PIT` / `PRV` (pitch commands) and `STP` (stop song). They come from imported data; they can't be typed.
 - **Line numbers** are in hexadecimal.
-- **Row shading:** every 4th line (beat) is shaded, and every 16th line (bar) is shaded more strongly with a rule above it.
+- **Row shading:** lines on a beat are shaded, and lines that start a bar are shaded more strongly with a rule above them and a bold line number. Beats and bars follow the time signature (**SIG** in the transport bar, [§5](#5-the-transport-bar)): in 4/4 every 4th and every 16th line, in 3/4 every 4th and every 12th, in 6/8 every 2nd and every 12th.
 - The **playhead** row is tinted, with a red marker at its left edge.
 - The **cursor** row is lightly tinted, and the cursor field has a solid outline.
 - **Track headers** show the track number and a colored strip.
@@ -617,9 +618,9 @@ Live recording captures what you play on the computer keyboard, a MIDI keyboard 
 3. Press **⌘R** or the **Rec** button. Edit mode turns off.
 
 **Count-in**
-- Playback starts **four beats** (16 lines) before the record point, with a metronome click on every beat; the first click is higher.
+- Playback starts **one bar** before the record point, but at least **two beats**, with a metronome click on every beat; the first click is higher. Beats and bars follow the time signature (**SIG**, [§5](#5-the-transport-bar)): in 4/4 the count-in is 4 beats of 4 lines (16 lines), in 3/4 3 beats (12 lines), in 6/8 6 beats of 2 lines (12 lines), in 2/2 2 beats of 8 lines, and in 1/4 2 beats (8 lines).
 - Where those lines exist, the song plays under the count-in (pre-roll). Before line 0 there is only the click.
-- The status bar counts down ("Count-in 4" … "Count-in 1"), then shows "Recording". The **Rec** button blinks on the beat during the count-in.
+- The status bar counts down ("Count-in 4" … "Count-in 1" in 4/4; it starts from the number of count-in beats), then shows "Recording". The **Rec** button blinks on the beat during the count-in.
 - The song loop is ignored while recording, so the playhead keeps moving forward. The loop itself is not changed.
 
 **What is recorded**
@@ -681,7 +682,7 @@ The timeline (arranger) decides **when** each pattern plays. Time runs left to r
 | Delete | Delete / ⌫ |
 
 - A ghost preview shows during a drag; releasing commits one undo step.
-- **Snapping:** no modifier snaps to the beat (4 lines); **Shift** to 1 line; **⌘** to the bar (16 lines).
+- **Snapping:** no modifier snaps to the beat; **Shift** to 1 line; **⌘** to the bar. Beats and bars follow the time signature (in 4/4: 4 and 16 lines; in 3/4: 4 and 12; in 6/8: 2 and 12). The grid lines (bars stronger than beats) and the ruler follow it too; ruler labels are line numbers placed on beats or bars.
 
 **Clip context menu**
 - Mute / Unmute
@@ -824,7 +825,8 @@ A project file stores everything about the song:
 - every pattern;
 - every timeline clip;
 - MIDI mappings;
-- the loop range.
+- the loop range;
+- the time signature (set with **SIG** in the transport bar, [§5](#5-the-transport-bar)) and the key of the song. The key has no control yet: new projects are in C major, and a project that sets a key keeps it when saved again. New projects are 4/4.
 
 It does **not** store editor state: edit octave, edit step, edit/follow, selection or zoom.
 
@@ -873,6 +875,16 @@ Loading and applying are each one undo step. The Master Output can't be saved or
 
 ### 13.7 Preferences
 Appearance settings are saved separately from projects, in `~/Library/Application Support/Dracker/appearance.cfg`. If this file is damaged, the app uses the defaults and shows "Appearance settings ignored (…); using defaults".
+
+### 13.8 Unsaved changes
+**New Project**, **Open Project…**, **Quit Dracker**, the window's close button and **Quit** in the Dock icon's menu replace or close the open project. If it has unsaved changes (the window title shows "•"), Dracker first asks **Discard unsaved changes?**:
+
+- **Discard changes** (or **Return**) goes ahead; the changes are lost.
+- **Cancel** (or **Escape**, or a click outside the question) keeps the project; the status bar shows "Kept the open project". Save with ⌘S, then try again.
+
+While the question is shown, other shortcuts, piano keys and clicks elsewhere in the window do nothing. **Tab** moves between the two buttons. Open Project asks before the file dialog appears.
+
+**Logging out, restarting or shutting down** the Mac quits Dracker **without asking**, so that macOS is not held up: unsaved changes are lost, and a WAV export that is still running is cancelled. Save before you log out.
 
 ---
 
@@ -1115,7 +1127,7 @@ These are known limitations of the current build. Please report behavior that *d
 
 | # | Area | Behavior in this build |
 |---|---|---|
-| 1 | Files | No unsaved-changes prompt on New, Open or Quit |
+| 1 | Files | Logging out, restarting or shutting down quits without asking about unsaved changes (by design, [§13.8](#138-unsaved-changes)) |
 | 2 | Pattern editor | Patterns can't be renamed in the GUI |
 | 3 | Pattern editor | The context menu shows "Cmd+J" for Interpolate; the real shortcut is ⌘I |
 | 4 | Pattern editor | New patterns are named with a decimal number ("Pattern 10") but the dropdown shows the id in hex ("0A"), so the two disagree from pattern 10 on |
@@ -1175,9 +1187,11 @@ dracker --cli-demo [--duration=<sec>] [--sample-rate=<hz>] [--buffer-frames=<n>]
 dracker --studio-gui-selftest [--quick]  automated end-to-end GUI workflow (plays quiet audio)
 dracker --gui-selftest [--quick]         automated window/toolkit verification
 dracker --studio-selftest [--quick]      audio/MIDI backend verification (plays audio)
+dracker --sound-check=<file.wav>         render the default bass and piano sounds to a WAV file
 dracker --help
 ```
 
+- **Sound check:** `--sound-check` needs no audio device and writes a 26-second stereo WAV in C major at 120 BPM (I–vi–ii–V7, one chord per bar): bars 1–4 the default bass alone, bars 5–8 the default piano alone, bars 9–12 both. These are the sounds the planned skeleton project generator will use when no other instrument is chosen.
 - **Running self-tests:** run them with `caffeinate -dims` so the display doesn't sleep. They keep a floating window open, and you shouldn't use the mouse or keyboard while they run.
 - **Reading results:** each check prints `PASS` or `FAIL` with details, and the process exits with 0 when every check passed.
 - **Your files are safe:** self-tests use temporary folders and never touch your projects, clipboard or appearance preferences.

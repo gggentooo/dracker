@@ -440,7 +440,8 @@ version (unittest) {
         Rig rig = transportRig(null, bar);
         scope (exit) rig.dispose();
         foreach (wid; ["transport.play", "transport.stop", "transport.playPattern", "transport.record",
-                "transport.follow", "transport.loop", "transport.bpm", "transport.tpl", "transport.device",
+                "transport.follow", "transport.loop", "transport.bpm", "transport.tpl", "transport.sigNum",
+                "transport.sigDen", "transport.device",
                 "transport.octave", "transport.step", "transport.readout", "transport.dsp", "transport.meters",
                 "transport.clip", "transport.midi", "transport.dirty"]) {
             immutable RectF r = bar.controlRect(wid);
@@ -967,5 +968,60 @@ version (unittest) {
         pushSine(rig.ctx, 0, 441.0, 0.5f, 40);
         rig.frame();
         assert(view.drawnPointCount() > 0);
+    }
+
+    unittest {
+        TransportBarView bar;
+        Rig rig = transportRig(null, bar);
+        scope (exit) rig.dispose();
+        auto num = findChild!NumericDragBox(bar, "transport.sigNum");
+        auto den = findChild!Dropdown(bar, "transport.sigDen");
+        assert(num !is null && den !is null);
+        assert(near(num.value(), 4.0) && den.selectedText() == "4" && den.items == ["2", "4", "8", "16"]);
+        assert(bar.controlRect("transport.tpl").right() < bar.controlRect("transport.sigNum").x);
+        assert(bar.controlRect("transport.sigNum").right() < bar.controlRect("transport.sigDen").x);
+        assert(bar.controlRect("transport.sigDen").right() < bar.controlRect("transport.octave").x);
+
+        rig.drag(bar.controlRect("transport.sigNum"), -12.0f);
+        immutable uint n2 = rig.session.timeSignatureNumerator();
+        assert(n2 >= 1 && n2 < 4 && rig.session.timeSignatureDenominator() == 4);
+        assert(rig.session.undo() && rig.session.timeSignatureNumerator() == 4);
+        assert(!rig.session.history().canUndo());
+        rig.frame();
+        assert(near(num.value(), 4.0));
+
+        rig.drag(bar.controlRect("transport.sigNum"), 400.0f);
+        assert(rig.session.timeSignatureNumerator() == 16);
+        assert(rig.session.undo() && !rig.session.history().canUndo());
+        rig.frame();
+
+        den.select(2);
+        assert(rig.session.timeSignatureDenominator() == 8 && rig.session.linesPerBeat() == 2);
+        assert(rig.session.timeSignatureNumerator() == 4);
+        den.select(0);
+        assert(rig.session.timeSignatureDenominator() == 2);
+        assert(rig.session.undo() && rig.session.timeSignatureDenominator() == 8);
+        rig.frame();
+        assert(den.selectedText() == "8");
+        assert(rig.session.undo() && rig.session.timeSignatureDenominator() == 4);
+
+        assert(rig.session.doSetTimeSignature(7, 16));
+        rig.frame();
+        assert(near(num.value(), 7.0) && den.selectedText() == "16");
+        assert(rig.session.undo());
+        rig.frame();
+        assert(near(num.value(), 4.0) && den.selectedText() == "4");
+
+        rig.clock.t += 1.0;
+        immutable Point2F c = bar.controlRect("transport.sigNum").center();
+        rig.mouse(PlatformEventKind.mouseDown, c);
+        rig.mouse(PlatformEventKind.mouseUp, c);
+        rig.clock.t += 0.1;
+        rig.mouse(PlatformEventKind.mouseDown, c);
+        rig.mouse(PlatformEventKind.mouseUp, c);
+        assert(num.isEditing());
+        rig.type("6");
+        assert(!num.isEditing() && rig.session.timeSignatureNumerator() == 6);
+        assert(rig.session.undo());
     }
 }

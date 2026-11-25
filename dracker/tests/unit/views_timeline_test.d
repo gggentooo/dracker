@@ -1005,4 +1005,56 @@ version (unittest) {
         key(KeyCode.escape);
         assert(g.s.document().patterns[0].name == "Drums1");
     }
+
+    unittest {
+        auto g = new Rig();
+        scope (exit) g.dispose();
+        auto v = g.view;
+        enum float scale = 2.0f;
+        bool hasBarLine(ColorRGBA c, long line) {
+            immutable float x = v.lineToX(line) * scale;
+            foreach (ref inst; g.r.lastDrawList().instances) {
+                if (inst.kind == InstanceKind.shape && inst.colorA == [c.r, c.g, c.b, c.a]
+                        && abs(inst.rect[0] - x) < 0.01f && abs(inst.rect[2] - scale) < 0.01f
+                        && inst.rect[3] > TimelineView.laneHeight * scale) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        immutable ColorRGBA barC = g.ui.theme.border;
+        immutable ColorRGBA beatC = g.ui.theme.gridLine;
+
+        g.frame();
+        assert(v.linesPerBeat() == 4 && v.linesPerBar() == 16);
+        assert(v.gridFor(0) == 4 && v.gridFor(KeyModifiers.shift) == 1 && v.gridFor(KeyModifiers.command) == 16);
+        assert(v.pointsPerLine() == TimelineView.defaultPointsPerLine && v.majorStep() == 8);
+        assert(hasBarLine(barC, 16) && hasBarLine(beatC, 12) && !hasBarLine(barC, 12));
+
+        assert(g.s.doSetTimeSignature(3, 4));
+        g.frame();
+        assert(v.gridFor(0) == 4 && v.gridFor(KeyModifiers.command) == 12 && v.majorStep() == 12);
+        assert(hasBarLine(barC, 12) && hasBarLine(barC, 24) && hasBarLine(beatC, 16) && !hasBarLine(barC, 16));
+
+        assert(g.s.doSetTimeSignature(6, 8));
+        g.frame();
+        assert(v.gridFor(0) == 2 && v.gridFor(KeyModifiers.command) == 12 && v.majorStep() == 12);
+        assert(hasBarLine(barC, 12) && hasBarLine(beatC, 6) && !hasBarLine(barC, 16));
+        assert(v.gridFor(KeyModifiers.shift) == 1);
+
+        foreach (sig; [[4, 4], [3, 4], [6, 8], [7, 8], [5, 16], [2, 2]]) {
+            assert(g.s.doSetTimeSignature(sig[0], sig[1]));
+            immutable long bar = v.linesPerBar();
+            immutable long beat = v.linesPerBeat();
+            foreach (ppl; [0.25f, 1.0f, 3.0f, 6.0f, 12.0f, 24.0f, 48.0f]) {
+                v.setViewport(0.0, ppl, 0.0f);
+                immutable long step = v.majorStep();
+                assert(cast(double) step * v.pointsPerLine() >= 40.0 || step == 1);
+                assert(step >= bar ? step % bar == 0 : (bar % step == 0 && (step >= beat ? step % beat == 0 : beat % step == 0)));
+            }
+        }
+        v.setViewport(0.0, 48.0f, 0.0f);
+        assert(v.majorStep() == 1);
+        assert(g.s.undo());
+    }
 }

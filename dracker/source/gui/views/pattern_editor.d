@@ -5,7 +5,8 @@
  *
  * Purpose:
  *   Renders and edits the current pattern (StudioContext.currentPattern()) as a high-density tracker grid with a
- *   line-number gutter (hex or decimal, beat/bar rows highlighted), color-coded track headers and per-cell
+ *   line-number gutter (hex or decimal, beat/bar rows highlighted by the project's time signature: beatLines() /
+ *   barLines() read StudioSession.linesPerBeat() / linesPerBar()), color-coded track headers and per-cell
  *   `NNN VV MM CCEE XXYY` columns, plus a header strip (pattern dropdown, track/line drag boxes, Add/Duplicate/
  *   Delete pattern buttons). Supports keyboard/mouse cursor navigation over 13 sub-fields, rectangular block
  *   selection (mouse drag or Shift+arrows), QWERTY note entry with live audition, hex nibble editing, note-off and
@@ -496,8 +497,6 @@ final class PatternEditorView : Widget, StudioCommandSink {
     Button duplicateButton;
     Button deleteButton;
     bool hexLineNumbers = true;
-    uint beatLines = 4;
-    uint barLines = 16;
 
     private uint shownPattern_ = 0;
     private uint cursorTrack_ = 0;
@@ -531,6 +530,28 @@ final class PatternEditorView : Widget, StudioCommandSink {
     private long lastDrawnPlayLine_ = -1;
     private uint[uint] heldNotes_;
     private string localClipboard_;
+
+
+    /**
+     * Returns the number of rows in one beat of the project's time signature (rows on a beat are shaded).
+     *
+     * Returns:
+     *   StudioSession.linesPerBeat() (4 in 4/4).
+     */
+    uint beatLines() {
+        return ctx.session.linesPerBeat();
+    }
+
+    /**
+     * Returns the number of rows in one bar of the project's time signature (bar rows are shaded more strongly,
+     * get a top border and a bold line number).
+     *
+     * Returns:
+     *   StudioSession.linesPerBar() (16 in 4/4).
+     */
+    uint barLines() {
+        return ctx.session.linesPerBar();
+    }
 
     /**
      * Creates the editor and its header controls.
@@ -1984,6 +2005,8 @@ final class PatternEditorView : Widget, StudioCommandSink {
                 t == cursorTrack_ ? theme.text : theme.textDim);
         }
 
+        immutable uint rowsPerBar = barLines();
+        immutable uint rowsPerBeat = beatLines();
         foreach (l; firstLine .. lastLine) {
             immutable float y = g.y + (l - firstLine) * rowH_;
             immutable RectF row = RectF(g.x, y, rowRight - g.x, rowH_);
@@ -1993,10 +2016,10 @@ final class PatternEditorView : Widget, StudioCommandSink {
             } else if (l == cursorLine_) {
                 r.fillRect(row, theme.trackerBackground);
                 r.fillRect(row, theme.hover);
-            } else if (barLines > 0 && l % barLines == 0) {
+            } else if (rowsPerBar > 0 && l % rowsPerBar == 0) {
                 r.fillRect(row, theme.trackerRowBar);
                 r.fillRect(RectF(row.x, row.y, row.w, 1.0f), theme.border);
-            } else if (beatLines > 0 && l % beatLines == 0) {
+            } else if (rowsPerBeat > 0 && l % rowsPerBeat == 0) {
                 r.fillRect(row, theme.trackerRowBeat);
             }
             char[4] num;
@@ -2008,7 +2031,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
                 putDec(num[], l);
                 txt = num[];
             }
-            immutable bool strong = (barLines > 0 && l % barLines == 0) || l == cursorLine_;
+            immutable bool strong = (rowsPerBar > 0 && l % rowsPerBar == 0) || l == cursorLine_;
             r.drawText(Point2F(g.x + padX_, y + textDy), txt, FontId.mono, monoSize_,
                 strong ? theme.text : theme.textDim);
         }

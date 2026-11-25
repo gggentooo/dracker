@@ -7,7 +7,8 @@
  *   Headless verification of the pure-D UI stack: UTF-8 decoding, shelf atlas packing, glyph cache lookup /
  *   dirty rows / growth, clip stack nesting and scissor merging, Bezier tessellation bounds, theme tokens,
  *   rectangle/flex/split-pane layout math and splitter drags, UiContext hit-testing, bubbling, capture, hover,
- *   focus traversal, double-click detection, overlays, and every widget's interaction and drawing.
+ *   focus traversal, double-click detection, overlays (including modal overlays and ConfirmDialog), text wrapping,
+ *   and every widget's interaction and drawing.
  *
  * Real-Time & Safety Contract:
  *   UI-thread code exercised single-threaded through HeadlessRenderer; time is injected with a manual clock
@@ -2412,6 +2413,102 @@ version (unittest) {
         assert(dd.isOpen());
         h.click(5, 10);
         assert(!dd.isOpen() && dbl == 1);
+    }
+
+    unittest {
+        auto root = new Panel();
+        int behindClicks = 0;
+        auto behind = root.add(new Button("Behind", () { behindClicks++; }));
+        behind.bounds = RectF(0, 0, 60, 22);
+        auto h = new Harness(root, RectF(0, 0, 800, 600));
+        auto panel = new Panel();
+        panel.bounds = RectF(40, 40, 720, 520);
+        h.ctx.openOverlay(panel);
+        assert(h.ctx.topModalIndex() == -1 && !panel.isModalOverlay());
+
+        int oks = 0;
+        int cancels = 0;
+        ConfirmDialog open() {
+            return openConfirmDialog(h.ctx, "Discard changes?",
+                "The open project has unsaved changes. Creating a new project discards them.", "Discard changes",
+                "Cancel", () { oks++; }, () { cancels++; });
+        }
+
+        ConfirmDialog d = open();
+        assert(h.ctx.overlays().length == 2 && h.ctx.overlays()[1] is d && h.ctx.topModalIndex() == 1);
+        assert(d.bounds.w == ConfirmDialog.WIDTH && abs(d.bounds.x - (800.0f - ConfirmDialog.WIDTH) * 0.5f) < 0.01f);
+        assert(abs(d.bounds.y + d.bounds.h * 0.5f - 300.0f) < 0.01f);
+        assert(d.confirmButton.bounds.right() <= d.bounds.right() && d.cancelButton.bounds.right() < d.confirmButton.bounds.x);
+        assert(h.ctx.hitTest(Point2F(5, 5)) is null && h.ctx.hitTest(Point2F(60, 60)) is null);
+        assert(h.ctx.hitTest(Point2F(d.bounds.x + 4, d.bounds.y + 4)) is d);
+        h.ctx.renderFrame(h.renderer, 1.0f);
+
+        h.click(60, 60);
+        assert(cancels == 1 && oks == 0 && d.resolved());
+        assert(h.ctx.overlays().length == 1 && h.ctx.overlays()[0] is panel);
+
+        d = open();
+        h.click(5, 10);
+        assert(behindClicks == 0 && cancels == 2 && h.ctx.overlays().length == 1);
+
+        d = open();
+        assert(h.key(KeyCode.escape));
+        assert(cancels == 3 && oks == 0 && h.ctx.overlays().length == 1);
+
+        d = open();
+        assert(h.key(KeyCode.returnKey));
+        assert(oks == 1 && cancels == 3 && h.ctx.overlays().length == 1);
+
+        d = open();
+        assert(h.key(KeyCode.tab) && h.ctx.focused is d.confirmButton);
+        assert(h.key(KeyCode.tab) && h.ctx.focused is d.cancelButton);
+        assert(h.key(KeyCode.returnKey));
+        assert(oks == 1 && cancels == 4);
+
+        d = open();
+        assert(h.key(KeyCode.a, KeyModifiers.command) && h.key(KeyCode.space) && h.keyUp(KeyCode.space));
+        h.type("x"d);
+        assert(!h.scroll(60, 60, 0, 10));
+        assert(!d.resolved() && h.ctx.overlays().length == 2);
+        immutable RectF cb = d.confirmButton.bounds;
+        h.click(cb.x + cb.w * 0.5f, cb.y + cb.h * 0.5f);
+        assert(oks == 2 && cancels == 4 && h.ctx.overlays().length == 1);
+        d.confirm();
+        d.cancel();
+        assert(oks == 2 && cancels == 4);
+
+        d = open();
+        h.ctx.closeAllOverlays();
+        assert(cancels == 5 && oks == 2 && h.ctx.overlays().length == 0);
+        d.cancel();
+        assert(cancels == 5);
+
+        int chained = 0;
+        ConfirmDialog first = openConfirmDialog(h.ctx, "A", "First", "Yes", "No", () {
+            openConfirmDialog(h.ctx, "B", "Second", "Yes", "No", () { chained++; }, null);
+        }, null);
+        assert(first !is null);
+        h.key(KeyCode.returnKey);
+        assert(h.ctx.overlays().length == 1 && (cast(ConfirmDialog) h.ctx.overlays()[0]) !is null);
+        h.key(KeyCode.returnKey);
+        assert(chained == 1 && h.ctx.overlays().length == 0);
+        assert(openConfirmDialog(null, "t", "m", "y", "n", null, null) is null);
+
+        auto sizing = new ConfirmDialog("T", "short", "Yes", "No", null, null);
+        auto sizingLong = new ConfirmDialog("T", "word word word word word word word word word word word word word "
+            ~ "word word word word word word word word word word word word word word word word word word word", "Yes",
+            "No", null, null);
+        StudioTheme th;
+        assert(sizingLong.preferredHeight(null, th) > sizing.preferredHeight(null, th));
+    }
+
+    unittest {
+        assert(wrapTextLines(null, "aaa bbb ccc", FontId.ui, 10.0f, 45.0f) == ["aaa bbb", "ccc"]);
+        assert(wrapTextLines(null, "aaa bbb ccc", FontId.ui, 10.0f, 1000.0f) == ["aaa bbb ccc"]);
+        assert(wrapTextLines(null, "a\n\nb", FontId.ui, 10.0f, 100.0f) == ["a", "", "b"]);
+        assert(wrapTextLines(null, "abcdefghijklmnop q", FontId.ui, 10.0f, 30.0f) == ["abcdefghijklmnop", "q"]);
+        assert(wrapTextLines(null, "  x   y ", FontId.ui, 10.0f, 100.0f) == ["x y"]);
+        assert(wrapTextLines(null, "", FontId.ui, 10.0f, 100.0f) == [""]);
     }
 
     private enum float PI_F = 3.14159265358979f;

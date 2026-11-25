@@ -6,7 +6,9 @@
  * Purpose:
  *   Top studio toolbar hosting Play/Stop/Play-Pattern/Edit/Record/Follow/Loop controls (EDIT toggles edit mode;
  *   Rec starts/stops a live-record take and blinks on the beat during its count-in), BPM/TPL drag boxes (one undo
- *   step per drag gesture, reflecting external/undo changes), edit octave/step boxes, the playhead readout with
+ *   step per drag gesture, reflecting external/undo changes), the time signature (SIG: numerator drag box 1-16, one
+ *   undo step per drag; "/" denominator dropdown 2/4/8/16; both through StudioSession.doSetTimeSignature() and
+ *   reflecting undo), edit octave/step boxes, the playhead readout with
  *   engine tempo and dirty indicator, the DSP load meter with xrun counter, master stereo peak meters with decay and
  *   a held clip light, the audio output device picker and a MIDI sources indicator. Exposes stable widget ids and
  *   controlRect() geometry for automated GUI tests.
@@ -29,7 +31,8 @@
  *     controlRect(id), readoutText(), dspText(), xrunText(), midiText(), meterLevel(), clipLit(), resetClip(),
  *     isAnimating(), handleStudioAction(toggleFollow / stepUp / stepDown)
  *   - Widget ids: transport.play, transport.stop, transport.playPattern, transport.edit, transport.record, transport.follow,
- *     transport.loop, transport.bpm, transport.tpl, transport.octave, transport.step, transport.device;
+ *     transport.loop, transport.bpm, transport.tpl, transport.sigNum, transport.sigDen, transport.octave, transport.step,
+ *     transport.device;
  *     geometry-only ids: transport.readout, transport.dirty, transport.dsp, transport.meters, transport.clip,
  *     transport.midi
  *
@@ -298,6 +301,8 @@ private struct CaptionSlot {
 final class TransportBarView : Widget, StudioCommandSink {
     enum float BAR_HEIGHT = 40.0f;
     enum double CLIP_HOLD_SECONDS = 1.5;
+    static immutable uint[4] SIG_DENOMINATORS = [2, 4, 8, 16];
+    static immutable string[4] SIG_DENOMINATOR_TEXT = ["2", "4", "8", "16"];
     enum float METER_FLOOR_DB = -60.0f;
     enum float METER_DECAY_DB_PER_SEC = 20.0f;
 
@@ -313,10 +318,12 @@ final class TransportBarView : Widget, StudioCommandSink {
     private TransportButton loopBtn_;
     private GroupedDragBox bpmBox_;
     private GroupedDragBox tplBox_;
+    private GroupedDragBox sigNumBox_;
+    private Dropdown sigDenBox_;
     private NumericDragBox octaveBox_;
     private NumericDragBox stepBox_;
     private DeviceDropdown deviceBox_;
-    private CaptionSlot[4] captions_;
+    private CaptionSlot[6] captions_;
     private RectF readoutRect_;
     private RectF dirtyRect_;
     private RectF dspRect_;
@@ -371,6 +378,14 @@ final class TransportBarView : Widget, StudioCommandSink {
         tplBox_.onChange = &onTplChanged;
         tplBox_.onDragBegin = &beginTempoGesture;
         tplBox_.onDragEnd = &endTempoGesture;
+        sigNumBox_ = add(new GroupedDragBox(ValueRange(1.0f, 16.0f, 4.0f, false, 1.0f), 0));
+        sigNumBox_.id = "transport.sigNum";
+        sigNumBox_.pixelsPerStep = 8.0f;
+        sigNumBox_.onChange = &onSigNumChanged;
+        sigNumBox_.onDragBegin = &beginSignatureGesture;
+        sigNumBox_.onDragEnd = &endTempoGesture;
+        sigDenBox_ = add(new Dropdown(SIG_DENOMINATOR_TEXT.dup, 1, &onSigDenSelected));
+        sigDenBox_.id = "transport.sigDen";
         octaveBox_ = add(new NumericDragBox(ValueRange(-1.0f, 9.0f, 4.0f, false, 1.0f), 0));
         octaveBox_.id = "transport.octave";
         octaveBox_.pixelsPerStep = 8.0f;
@@ -435,7 +450,8 @@ final class TransportBarView : Widget, StudioCommandSink {
         patternBtn_.lit = auditioning;
         editBtn_.lit = ctx_.editMode;
         immutable long line = ctx_.telemetry.engine.currentLine;
-        immutable bool beatOn = ((line % 4) + 4) % 4 < 2;
+        immutable long lpb = ctx_.session.linesPerBeat();
+        immutable bool beatOn = 2 * (((line % lpb) + lpb) % lpb) < lpb || lpb == 1;
         recordBtn_.lit = ctx_.liveRecording() && (!ctx_.countingIn() || beatOn);
         followBtn_.lit = ctx_.followPlayhead;
         loopBtn_.lit = doc.loopEndLine > 0;
@@ -444,6 +460,12 @@ final class TransportBarView : Widget, StudioCommandSink {
         }
         if (!tplBox_.isDragging() && !tplBox_.isEditing()) {
             tplBox_.setValue(cast(float) doc.ticksPerLine, false);
+        }
+        if (!sigNumBox_.isDragging() && !sigNumBox_.isEditing()) {
+            sigNumBox_.setValue(cast(float) doc.timeSigNumerator, false);
+        }
+        if (!sigDenBox_.isOpen()) {
+            sigDenBox_.select(denominatorIndex(doc.timeSigDenominator), false);
         }
         if (!octaveBox_.isDragging() && !octaveBox_.isEditing()) {
             octaveBox_.setValue(cast(float) ctx_.editOctave, false);
@@ -673,9 +695,13 @@ final class TransportBarView : Widget, StudioCommandSink {
         place(bpmBox_, take(58.0f, boxY, boxH, gap));
         captions_[1] = CaptionSlot(take(26.0f, boxY, boxH, 2.0f), "TPL");
         place(tplBox_, take(38.0f, boxY, boxH, group));
-        captions_[2] = CaptionSlot(take(28.0f, boxY, boxH, 2.0f), "OCT");
+        captions_[2] = CaptionSlot(take(24.0f, boxY, boxH, 2.0f), "SIG");
+        place(sigNumBox_, take(30.0f, boxY, boxH, 0.0f));
+        captions_[3] = CaptionSlot(take(10.0f, boxY, boxH, 0.0f), "/");
+        place(sigDenBox_, take(44.0f, boxY, boxH, group));
+        captions_[4] = CaptionSlot(take(28.0f, boxY, boxH, 2.0f), "OCT");
         place(octaveBox_, take(32.0f, boxY, boxH, gap));
-        captions_[3] = CaptionSlot(take(34.0f, boxY, boxH, 2.0f), "STEP");
+        captions_[5] = CaptionSlot(take(34.0f, boxY, boxH, 2.0f), "STEP");
         place(stepBox_, take(32.0f, boxY, boxH, group));
         readoutRect_ = clipToBar(take(132.0f, y, h, 2.0f));
         dirtyRect_ = clipToBar(take(12.0f, y, h, group));
@@ -960,6 +986,38 @@ final class TransportBarView : Widget, StudioCommandSink {
     private void endTempoGesture() {
         ctx_.session.endEditGroup();
         refresh();
+    }
+
+    private void beginSignatureGesture() {
+        ctx_.session.beginEditGroup("Change Time Signature");
+    }
+
+    private void onSigNumChanged(float v) {
+        const doc = ctx_.session.document();
+        immutable uint num = cast(uint) round(v);
+        if (num != doc.timeSigNumerator && !ctx_.session.doSetTimeSignature(num, doc.timeSigDenominator)) {
+            sigNumBox_.setValue(cast(float) doc.timeSigNumerator, false);
+        }
+        invalidate();
+    }
+
+    private void onSigDenSelected(size_t index) {
+        const doc = ctx_.session.document();
+        if (index >= SIG_DENOMINATORS.length
+                || !ctx_.session.doSetTimeSignature(doc.timeSigNumerator, SIG_DENOMINATORS[index])) {
+            sigDenBox_.select(denominatorIndex(doc.timeSigDenominator), false);
+        }
+        refresh();
+        invalidate();
+    }
+
+    private static size_t denominatorIndex(uint den) {
+        foreach (i, d; SIG_DENOMINATORS) {
+            if (d == den) {
+                return i;
+            }
+        }
+        return 1;
     }
 
     private void onBpmChanged(float v) {

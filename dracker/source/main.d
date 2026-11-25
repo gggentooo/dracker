@@ -18,6 +18,8 @@
  *   - int runListDevices()
  *   - int runCliDemo(string[] args)
  *   - --studio-selftest -> app.studio_selftest.runStudioSelfTest() (macOS)
+ *   - --sound-check=<file.wav> -> runSoundCheck(): offline render of app.skeleton_gen.instrumentPreviewProject()
+ *     (default bass and piano of the skeleton project generator, for the owner's listening check)
  *   - StudioGUI builds: no arguments / --gui / <file.msv> -> app.studio_app.runStudioApp(), --gallery ->
  *     app.gui_shell.runStudioGui(), --gui-selftest -> runGuiSelfTest()
  *   - struct CliDemoPolySynth (live @nogc ModuleAdapter polyphonic synth)
@@ -852,6 +854,65 @@ private void printUsage() {
     writeln("  dracker --list-devices");
     writeln("  dracker --cli-demo [--duration=<sec>] [--sample-rate=<hz>] [--buffer-frames=<n>] [--auto-chord] [--duplex]");
     writeln("  dracker --studio-selftest [--quick]   live session audio/MIDI backend verification (plays audio)");
+    writeln("  dracker --sound-check=<file.wav>      render the skeleton generator's default bass and piano to a WAV");
+}
+
+/**
+ * Renders the skeleton generator's default bass and piano (app.skeleton_gen.instrumentPreviewProject()) offline
+ * at 44.1 kHz and writes a stereo WAV: bars 1-4 bass alone, 5-8 piano alone, 9-12 both, plus a 2 s tail.
+ * Needs no audio device.
+ *
+ * Params:
+ *   path = Destination .wav path.
+ *
+ * Returns:
+ *   0 on success, 1 on failure (reason on stderr).
+ */
+private int runSoundCheck(string path) {
+    import app.session : StudioSession;
+    import app.skeleton_gen : instrumentPreviewProject, PREVIEW_BARS;
+    import foundation.memory : OwnedBuffer;
+    import io.audio_io : writeWavFile;
+    import io.project_format : LoadedProject;
+
+    enum uint rate = 44_100;
+    StudioSession s = new StudioSession();
+    if (!s.initialize(cast(float) rate)) {
+        stderr.writeln("Session initialization failed");
+        return 1;
+    }
+    scope (exit) s.shutdown();
+    LoadedProject proj = instrumentPreviewProject();
+    string err;
+    if (!s.openProjectFromMemory(proj, err)) {
+        stderr.writeln("Could not build the preview project: ", err);
+        return 1;
+    }
+    s.engine().reset();
+    s.engine().setTempo(proj.bpm, proj.ticksPerLine);
+    s.engine().seekLine(0);
+    s.engine().setPlaying(true);
+    immutable double seconds = PREVIEW_BARS * 4 * 60.0 / proj.bpm + 2.0;
+    immutable size_t frames = (cast(size_t)(seconds * rate) / 64 + 1) * 64;
+    OwnedBuffer!float l;
+    OwnedBuffer!float r;
+    if (!s.engine().renderOfflineToBuffer(frames, 64, l, r)) {
+        stderr.writeln("Offline render failed");
+        return 1;
+    }
+    float peak = 0.0f;
+    foreach (i; 0 .. l.length) {
+        peak = fabs(l[i]) > peak ? fabs(l[i]) : peak;
+        peak = fabs(r[i]) > peak ? fabs(r[i]) : peak;
+    }
+    const(float)[][2] channels = [l[], r[]];
+    if (!writeWavFile(path, channels[], rate, err)) {
+        stderr.writeln("Could not write ", path, ": ", err);
+        return 1;
+    }
+    writefln("Wrote %s (%.1f s, peak %.2f): bars 1-4 bass, 5-8 piano, 9-12 both; I-vi-ii-V7 in C major at %.0f BPM",
+        path, seconds, peak, proj.bpm);
+    return 0;
 }
 
 /**
@@ -868,6 +929,9 @@ int main(string[] args) {
         if (arg == "--help" || arg == "-h") {
             printUsage();
             return 0;
+        }
+        if (arg.startsWith("--sound-check=")) {
+            return runSoundCheck(arg["--sound-check=".length .. $]);
         }
         version (StudioGUI) {
             if (arg == "--gui-selftest") {

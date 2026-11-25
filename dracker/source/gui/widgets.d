@@ -8,10 +8,11 @@
  *   measure/arrange hooks, IRenderer2D drawing, bubbling event handlers, hit-testing) driven by UiContext,
  *   which converts PlatformEvents into widget dispatch with topmost-first hit-testing, mouse capture during
  *   drags, hover tracking, double-click detection, keyboard focus with Tab/Shift+Tab traversal, an overlay
- *   layer for popups that closes on outside click/Escape, right-click context-menu providers, and a
+ *   layer for popups that closes on outside click/Escape (a modal overlay blocks everything below it and an
+ *   outside click closes only it and the overlays above it), right-click context-menu providers, and a
  *   needsRedraw/isAnimating pair so the host can sleep when idle. Controls: Panel, Label, Button, Toggle,
- *   Slider, RotaryKnob, NumericDragBox, Dropdown, ContextMenu, ScrollView (with ScrollBarModel), SplitView,
- *   CurveEditor and EnvelopeEditor.
+ *   Slider, RotaryKnob, NumericDragBox, Dropdown, ContextMenu, ConfirmDialog, ScrollView (with
+ *   ScrollBarModel), SplitView, CurveEditor and EnvelopeEditor.
  *
  * Real-Time & Safety Contract:
  *   UI thread only; GC allocation is permitted but kept off per-frame hot paths where practical. Widgets
@@ -26,13 +27,13 @@
  *   - enum KeyCode / enum MouseButton / struct MouseEvent / struct ScrollEvent / struct KeyEvent
  *   - class Widget : add/remove, measure(ITextMeasurer, theme), arrange(RectF), layoutChildren(), draw(IRenderer2D, theme),
  *       paint(), hitTest(Point2F), onMouseDown/Up/Move, onScroll, onMagnify, onKeyDown/Up, onTextInput, onMouseEnter/Leave,
- *       onFocusGained/Lost, onCaptureLost, onDismissed, isAnimating(), contextMenuProvider
+ *       onFocusGained/Lost, onCaptureLost, onDismissed, isModalOverlay(), isAnimating(), contextMenuProvider
  *   - final class UiContext : handleEvent(PlatformEvent), layout(RectF, ITextMeasurer), draw(IRenderer2D[, theme]),
  *       renderFrame(IRenderer2D, scale), needsRedraw, isAnimating(), setFocus/focusNext/focusPrevious, capture/releaseCapture,
- *       openOverlay/closeOverlay/closeAllOverlays, hitTest(Point2F), setTheme(StudioTheme)
+ *       openOverlay/closeOverlay/closeAllOverlays, topModalIndex(), hitTest(Point2F), setTheme(StudioTheme)
  *   - struct ValueRange; abstract class ValueWidget; class Panel / Label / Button / Toggle / Slider / RotaryKnob /
  *       NumericDragBox / TextField (openTextEditor()) / Dropdown (onDoubleClick) / DropdownList / ContextMenu
- *       (struct MenuItem) / ScrollView (struct ScrollBarModel) / SplitView / CurveEditor / EnvelopeEditor
+ *       (struct MenuItem) / ConfirmDialog (openConfirmDialog(), wrapTextLines()) / ScrollView (struct ScrollBarModel) / SplitView / CurveEditor / EnvelopeEditor
  *
  * See_Also:
  *   architecture_proposal.md, dev_plan_proposal.md
@@ -715,6 +716,19 @@ class Widget {
      */
     void onDismissed() {
     }
+
+    /**
+     * Reports whether this widget, when open as an overlay, blocks the overlays below it and the root.
+     *
+     * A modal overlay takes every key press; clicks, scrolls and hover below it do not reach other widgets,
+     * and a click outside it closes only it and the overlays above it.
+     *
+     * Returns:
+     *   False by default.
+     */
+    bool isModalOverlay() const {
+        return false;
+    }
 }
 
 /**
@@ -1048,8 +1062,26 @@ final class UiContext {
             if (auto h = o.hitTest(p)) {
                 return h;
             }
+            if (o.isModalOverlay()) {
+                return null;
+            }
         }
         return root_.hitTest(p);
+    }
+
+    /**
+     * Returns the index in overlays() of the topmost modal overlay.
+     *
+     * Returns:
+     *   Index, or -1 when no modal overlay is open.
+     */
+    ptrdiff_t topModalIndex() const {
+        foreach_reverse (i, o; overlays_) {
+            if (o.isModalOverlay()) {
+                return cast(ptrdiff_t) i;
+            }
+        }
+        return -1;
     }
 
     /**
@@ -1236,6 +1268,14 @@ final class UiContext {
         immutable MouseButton button = toButton(ev.mouseButton);
         immutable uint clicks = registerClick(p, button);
         Widget hit = hitTest(p);
+        immutable ptrdiff_t modal = topModalIndex();
+        if (modal >= 0 && overlayIndexOf(hit) < modal) {
+            while (cast(ptrdiff_t) overlays_.length > modal) {
+                closeOverlay(overlays_[$ - 1]);
+            }
+            updateHover(p);
+            return true;
+        }
         immutable bool inOverlay = hit !is null && overlayOf(hit) !is null;
         if (overlays_.length > 0 && !inOverlay) {
             Dropdown dd = cast(Dropdown) hit;
@@ -1453,6 +1493,19 @@ final class UiContext {
             }
         }
         return null;
+    }
+
+    private ptrdiff_t overlayIndexOf(Widget w) {
+        if (w is null) {
+            return -1;
+        }
+        Widget o = overlayOf(w);
+        foreach (i, x; overlays_) {
+            if (x is o) {
+                return cast(ptrdiff_t) i;
+            }
+        }
+        return -1;
     }
 
     private bool removeFromOverlayList(Widget w) {
@@ -3004,6 +3057,267 @@ TextField openTextEditor(UiContext ctx, RectF rect, string initial, void delegat
     field.bounds = vp.isEmpty() ? rect : clampRectInside(rect, vp);
     ctx.openOverlay(field);
     return field;
+}
+
+/**
+ * Splits text into lines no wider than maxWidth, breaking at spaces and at newlines.
+ *
+ * A single word wider than maxWidth is kept whole on its own line. Runs of spaces collapse to one.
+ *
+ * Params:
+ *   m = Text measurer (may be null for the 0.6 em fallback).
+ *   text = UTF-8 text.
+ *   font = Font family.
+ *   size = Font size in points.
+ *   maxWidth = Widest allowed line in points.
+ *
+ * Returns:
+ *   Lines in order; one empty line per empty paragraph.
+ */
+string[] wrapTextLines(ITextMeasurer m, string text, FontId font, float size, float maxWidth) {
+    string[] lines;
+    size_t paraStart = 0;
+    foreach (i; 0 .. text.length + 1) {
+        if (i == text.length || text[i] == '\n') {
+            appendWrappedParagraph(lines, m, text[paraStart .. i], font, size, maxWidth);
+            paraStart = i + 1;
+        }
+    }
+    return lines;
+}
+
+/**
+ * Appends the wrapped lines of one paragraph (text without newlines) to lines.
+ *
+ * Params:
+ *   lines = Output list.
+ *   m = Text measurer (may be null).
+ *   para = Paragraph text.
+ *   font = Font family.
+ *   size = Font size in points.
+ *   maxWidth = Widest allowed line in points.
+ */
+private void appendWrappedParagraph(ref string[] lines, ITextMeasurer m, string para, FontId font, float size,
+        float maxWidth) {
+    string line;
+    size_t wordStart = 0;
+    foreach (i; 0 .. para.length + 1) {
+        if (i < para.length && para[i] != ' ') {
+            continue;
+        }
+        string word = para[wordStart .. i];
+        wordStart = i + 1;
+        if (word.length == 0) {
+            continue;
+        }
+        string candidate = line.length == 0 ? word : line ~ " " ~ word;
+        if (line.length > 0 && measureTextOr(m, candidate, font, size) > maxWidth) {
+            lines ~= line;
+            line = word;
+        } else {
+            line = candidate;
+        }
+    }
+    lines ~= line;
+}
+
+/**
+ * Modal question in the overlay layer: a title, a wrapped message, and a confirm and a cancel button.
+ *
+ * Return (or Enter) confirms and Escape cancels, unless a focused button handles the key first; Tab moves
+ * focus between the buttons. Every other key press is consumed. A click outside the dialog cancels it
+ * without closing the overlays below it. Each dialog resolves once: the first of confirm, cancel or
+ * dismissal closes it and calls its handler; later calls do nothing.
+ */
+class ConfirmDialog : Widget {
+    enum float WIDTH = 420.0f;
+    enum float PAD = 16.0f;
+    enum float BUTTON_W = 140.0f;
+    enum float BUTTON_H = 24.0f;
+    enum float GAP = 8.0f;
+
+    string title;
+    string message;
+    Button confirmButton;
+    Button cancelButton;
+    void delegate() onConfirm;
+    void delegate() onCancel;
+    private bool resolved_ = false;
+
+    /**
+     * Builds the dialog; open it with openConfirmDialog() or UiContext.openOverlay().
+     *
+     * Params:
+     *   title = Heading.
+     *   message = Body text (wrapped to the dialog width).
+     *   confirmLabel = Caption of the confirm button.
+     *   cancelLabel = Caption of the cancel button.
+     *   confirmHandler = Called once after the dialog closed by confirming.
+     *   cancelHandler = Called once after the dialog closed by cancelling or dismissal.
+     */
+    this(string title, string message, string confirmLabel, string cancelLabel, void delegate() confirmHandler,
+            void delegate() cancelHandler) {
+        id = "confirm.dialog";
+        this.title = title;
+        this.message = message;
+        onConfirm = confirmHandler;
+        onCancel = cancelHandler;
+        cancelButton = add(new Button(cancelLabel, &cancel));
+        cancelButton.id = "confirm.cancel";
+        confirmButton = add(new Button(confirmLabel, &confirm));
+        confirmButton.id = "confirm.ok";
+    }
+
+    /**
+     * Reports whether the dialog was confirmed, cancelled or dismissed.
+     *
+     * Returns:
+     *   True once resolved.
+     */
+    bool resolved() const {
+        return resolved_;
+    }
+
+    /**
+     * Closes the dialog and calls onConfirm.
+     */
+    void confirm() {
+        resolve(true);
+    }
+
+    /**
+     * Closes the dialog and calls onCancel.
+     */
+    void cancel() {
+        resolve(false);
+    }
+
+    /**
+     * Computes the dialog height for its message at a width of WIDTH.
+     *
+     * Params:
+     *   m = Text measurer (may be null).
+     *   theme = Theme.
+     *
+     * Returns:
+     *   Height in points.
+     */
+    float preferredHeight(ITextMeasurer m, const ref StudioTheme theme) const {
+        immutable float body = theme.fontSizeBody;
+        immutable size_t n = wrapTextLines(m, message, FontId.ui, body, WIDTH - 2.0f * PAD).length;
+        return PAD + lineHeightOr(m, FontId.ui, theme.fontSizeTitle) + GAP + n * lineHeightOr(m, FontId.ui, body)
+            + 2.0f * GAP + BUTTON_H + PAD;
+    }
+
+    override bool isModalOverlay() const {
+        return true;
+    }
+
+    override void onDismissed() {
+        if (!resolved_) {
+            resolved_ = true;
+            if (onCancel !is null) {
+                onCancel();
+            }
+        }
+    }
+
+    override bool onKeyDown(const ref KeyEvent e) {
+        if (e.keyCode == KeyCode.escape) {
+            cancel();
+        } else if (e.keyCode == KeyCode.returnKey || e.keyCode == KeyCode.keypadEnter) {
+            confirm();
+        } else if (e.keyCode == KeyCode.tab) {
+            if (auto c = context()) {
+                c.setFocus(c.focused is confirmButton ? cancelButton : confirmButton);
+            }
+        }
+        return true;
+    }
+
+    override bool onKeyUp(const ref KeyEvent e) {
+        return true;
+    }
+
+    override bool onTextInput(dchar c) {
+        return true;
+    }
+
+    override bool onMouseDown(const ref MouseEvent e) {
+        return true;
+    }
+
+    override bool onScroll(const ref ScrollEvent e) {
+        return true;
+    }
+
+    override void layoutChildren() {
+        immutable float y = bounds.bottom() - PAD - BUTTON_H;
+        confirmButton.arrange(RectF(bounds.right() - PAD - BUTTON_W, y, BUTTON_W, BUTTON_H));
+        cancelButton.arrange(RectF(bounds.right() - PAD - 2.0f * BUTTON_W - GAP, y, BUTTON_W, BUTTON_H));
+    }
+
+    override void paint(IRenderer2D r, const ref StudioTheme theme) {
+        r.fillRoundedRect(bounds.translate(0.0f, 4.0f), theme.radiusLg, theme.shadow);
+        r.fillRoundedRect(bounds, theme.radiusLg, theme.panel);
+        r.strokeRoundedRect(bounds, theme.radiusLg, 2.0f, theme.borderStrong);
+        immutable float x0 = bounds.x + PAD;
+        float y = bounds.y + PAD;
+        r.drawText(Point2F(x0, y), title, FontId.ui, theme.fontSizeTitle, theme.text);
+        y += r.lineHeight(FontId.ui, theme.fontSizeTitle) + GAP;
+        immutable float body = theme.fontSizeBody;
+        immutable float lh = r.lineHeight(FontId.ui, body);
+        foreach (line; wrapTextLines(r, message, FontId.ui, body, bounds.w - 2.0f * PAD)) {
+            r.drawText(Point2F(x0, y), line, FontId.ui, body, theme.text);
+            y += lh;
+        }
+    }
+
+    private void resolve(bool confirmed) {
+        if (resolved_) {
+            return;
+        }
+        resolved_ = true;
+        if (auto c = context()) {
+            if (parent is null) {
+                c.closeOverlay(this);
+            }
+        }
+        void delegate() handler = confirmed ? onConfirm : onCancel;
+        if (handler !is null) {
+            handler();
+        }
+    }
+}
+
+/**
+ * Opens a ConfirmDialog centred in the viewport, above any overlays already open (they stay open).
+ *
+ * Params:
+ *   ctx = UI context that will host the overlay.
+ *   title = Heading.
+ *   message = Body text.
+ *   confirmLabel = Caption of the confirm button.
+ *   cancelLabel = Caption of the cancel button.
+ *   onConfirm = Called once after the dialog closed by confirming.
+ *   onCancel = Called once after the dialog closed by cancelling, Escape or a click outside.
+ *
+ * Returns:
+ *   The open dialog, or null when ctx is null.
+ */
+ConfirmDialog openConfirmDialog(UiContext ctx, string title, string message, string confirmLabel,
+        string cancelLabel, void delegate() onConfirm, void delegate() onCancel) {
+    if (ctx is null) {
+        return null;
+    }
+    auto dlg = new ConfirmDialog(title, message, confirmLabel, cancelLabel, onConfirm, onCancel);
+    immutable float h = dlg.preferredHeight(ctx.measurer(), ctx.theme);
+    immutable RectF vp = ctx.viewport();
+    immutable RectF want = RectF(vp.x + (vp.w - ConfirmDialog.WIDTH) * 0.5f, vp.y + (vp.h - h) * 0.5f,
+        ConfirmDialog.WIDTH, h);
+    dlg.bounds = vp.isEmpty() ? RectF(0.0f, 0.0f, ConfirmDialog.WIDTH, h) : clampRectInside(want, vp);
+    ctx.openOverlay(dlg);
+    return dlg;
 }
 
 /**

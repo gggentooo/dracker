@@ -17,13 +17,15 @@
  *   separate Engine materialized from a document snapshot.
  *
  * Dependencies:
- *   Internal: app.{history,keymap}, foundation.types, graph.{module_api,plan,registry}, io.importers.*, io.project_format, modules.control.metamodule, platform.interfaces, sequencer.{engine,note,pattern,timeline}
+ *   Internal: app.{history,keymap,live_take,music_theory}, foundation.types, graph.{module_api,plan,registry}, io.importers.*, io.project_format, modules.control.metamodule, platform.interfaces, sequencer.{engine,note,pattern,timeline}
  *   External: core.thread (Thread.sleep), core.time (Duration, MonoTime), std.math (isFinite)
  *
  * Planned API (Types, Functions & Hooks):
  *   - class StudioSession : initialize(), shutdown(), dispose(), documentRevision(), setCurrentOctave(), attachAudioDriver(), synchronizeEngine(),
  *     setEngineSyncTimeout(), pendingRetiredModuleCount(), sampleRate(), changeSampleRate(), newEmptyProject(),
  *     compileAndSwapGraph(), doAddModule(), doRemoveModule(), doConnectWire(), doDisconnectWire(), doSetParam(),
+ *     timeSignatureNumerator()/timeSignatureDenominator()/linesPerBeat()/linesPerBar()/countInBeats()/songKey(),
+ *     doSetTimeSignature(), doSetKey(),
  *     doPatchCell(), doResizePattern(), doReplacePatternCells(), doAddClip(), doMoveClip(), doCloneClip(),
  *     doRemoveClip(), doSetClipFlags(), doSetTempo(), doSetLoop(), doAddPattern(), doDuplicatePattern(),
  *     doRemovePattern(), doRenamePattern(), doSetModuleMuted(), doSetModuleBypassed(), doRenameModule(),
@@ -33,7 +35,7 @@
  *     cancelExport()/waitForExport(), undo(), redo(), save/open/preset/import APIs, handleKeyEvent(),
  *     triggerLiveNote(), releaseLiveNote(), pollRetiredAndTelemetry(), live record takes (beginLiveTake(),
  *     liveTakeActive(), liveTakeStartLine(), liveTakeNoteCount(), liveSongPosition(), liveTakeNoteOn()/Off(),
- *     liveTakeShouldEnd(), endLiveTake()), uniquePatternName(), loadModulePresetFromFile(),
+ *     liveTakeShouldEnd(), endLiveTake()), uniquePatternName(), openProjectFromMemory(), loadModulePresetFromFile(),
  *     doApplyModulePresetBytes(), doApplyModulePresetFile()
  *   - struct MidiNoteEvent / SamplePeaks / ExportOptions / ExportStatus; enum ExportState; class ExportJob
  *   - SamplePeaks computeSamplePeaks(...) / float denormalizeParam(...)
@@ -56,6 +58,7 @@ import std.string : strip;
 import app.history;
 import app.keymap : Keymap, StudioAction;
 import app.live_take : LiveTakeRecorder, LiveTakeResult;
+import app.music_theory : KeyMode, MusicalKey;
 import foundation.types : ModuleId;
 import graph.audio_graph : RetiredKind, RetiredResource;
 import graph.module_api : AssetSwap, ModuleCategory, ModuleDescriptor, ModuleInstance, ModuleVTable, ParamDescriptor,
@@ -66,7 +69,7 @@ import io.importers.smf_importer : importMidiFile;
 import io.importers.sunvox_importer : ImportReport, importSunvoxFile;
 import io.importers.xm_importer : importXmFile;
 import io.project_format : LoadedPreset, LoadedProject, loadPreset, loadProject, loadProjectFile,
-    isValidMidiMapping, isValidPatternShape, isValidTempo, materializeProjectToEngine, MAX_EXTRA_BLOB_BYTES,
+    isValidKey, isValidMidiMapping, isValidPatternShape, isValidTempo, isValidTimeSignature, materializeProjectToEngine, MAX_EXTRA_BLOB_BYTES,
     MAX_LINES, MAX_MIDI_MAPPINGS, MAX_PATTERNS, MAX_STRING_LEN, SavedMidiMapping, savePreset, saveProject, SavedModule, SavedPattern, SavedWire,
     serializePreset, serializeProject;
 import modules.control.metamodule : MetaMacroBinding, MetaModuleAsset;
@@ -461,8 +464,8 @@ private struct PendingModuleRetire {
  * down Engine state and can distinguish RT-owned from UI-owned engine phases.
  */
 class StudioSession {
-    enum uint COUNT_IN_BEATS = 4;
-    enum uint LINES_PER_BEAT = 4;
+    enum uint MIN_COUNT_IN_BEATS = 2;
+    enum uint LINES_PER_WHOLE_NOTE = 16;
     enum uint MAX_TAKE_LANE = 255;
 
     private Engine* engine_;
@@ -1270,6 +1273,112 @@ class StudioSession {
     }
 
     /**
+     * Returns the numerator of the project's time signature (beats per bar).
+     *
+     * Returns:
+     *   1..16 (4 by default).
+     */
+    uint timeSignatureNumerator() const {
+        return doc_.timeSigNumerator;
+    }
+
+    /**
+     * Returns the denominator of the project's time signature (the note value of one beat).
+     *
+     * Returns:
+     *   2, 4, 8 or 16 (4 by default).
+     */
+    uint timeSignatureDenominator() const {
+        return doc_.timeSigDenominator;
+    }
+
+    /**
+     * Returns the number of pattern lines in one beat. A line is a sixteenth note, so this is 16 divided by the
+     * time-signature denominator (4 in 4/4, 2 in 6/8, 8 in 2/2).
+     *
+     * Returns:
+     *   Lines per beat (at least 1).
+     */
+    uint linesPerBeat() const {
+        immutable uint den = doc_.timeSigDenominator;
+        return den == 0 || den > LINES_PER_WHOLE_NOTE ? 4 : LINES_PER_WHOLE_NOTE / den;
+    }
+
+    /**
+     * Returns the number of pattern lines in one bar: numerator times linesPerBeat() (16 in 4/4, 12 in 3/4 and
+     * 6/8, 14 in 7/8).
+     *
+     * Returns:
+     *   Lines per bar (at least 1).
+     */
+    uint linesPerBar() const {
+        immutable uint num = doc_.timeSigNumerator == 0 ? 4 : doc_.timeSigNumerator;
+        return num * linesPerBeat();
+    }
+
+    /**
+     * Returns the length of the live-record count-in in beats: one bar of the project's time signature, but at
+     * least MIN_COUNT_IN_BEATS (4 in 4/4, 3 in 3/4, 6 in 6/8, 2 in 1/4 and 2/2).
+     *
+     * Returns:
+     *   Beats.
+     */
+    uint countInBeats() const {
+        immutable uint num = doc_.timeSigNumerator == 0 ? 4 : doc_.timeSigNumerator;
+        return num < MIN_COUNT_IN_BEATS ? MIN_COUNT_IN_BEATS : num;
+    }
+
+    /**
+     * Returns the key of the song.
+     *
+     * Returns:
+     *   Key (C major by default).
+     */
+    MusicalKey songKey() const {
+        return MusicalKey(doc_.keyTonic, doc_.keyMode == KeyMode.minor ? KeyMode.minor : KeyMode.major);
+    }
+
+    /**
+     * Undoable time-signature change. Setting the current value does nothing and adds no undo step.
+     *
+     * Params:
+     *   numerator = Beats per bar [1..16].
+     *   denominator = Beat note value: 2, 4, 8 or 16.
+     *
+     * Returns:
+     *   True if the time signature is valid and is now the project's.
+     */
+    bool doSetTimeSignature(uint numerator, uint denominator) {
+        if (!isValidTimeSignature(numerator, denominator)) {
+            return false;
+        }
+        if (numerator == doc_.timeSigNumerator && denominator == doc_.timeSigDenominator) {
+            return true;
+        }
+        return history_.pushAndExecute(new SetTimeSignatureCommand(doc_.timeSigNumerator, doc_.timeSigDenominator,
+            cast(ubyte) numerator, cast(ubyte) denominator), this);
+    }
+
+    /**
+     * Undoable change of the song key. Setting the current key does nothing and adds no undo step.
+     *
+     * Params:
+     *   key = New key.
+     *
+     * Returns:
+     *   True if the key is valid and is now the project's.
+     */
+    bool doSetKey(MusicalKey key) {
+        if (!isValidKey(key.tonic, key.mode)) {
+            return false;
+        }
+        if (key == songKey()) {
+            return true;
+        }
+        return history_.pushAndExecute(new SetKeyCommand(songKey(), key), this);
+    }
+
+    /**
      * Undoes the most recent action on UndoHistory.
      *
      * Returns:
@@ -1391,6 +1500,38 @@ class StudioSession {
             return false;
         }
         return activateLoadedProject(parsed, null, err);
+    }
+
+    /**
+     * Makes a project built in memory (for example by a generator) the open project, as a new unsaved document.
+     *
+     * The project is serialized and parsed again before activation, so it passes exactly the checks of loading
+     * an .msv file; a project that fails them, or whose modules or wiring are rejected by a trial
+     * materialization, leaves the open project untouched (as with a load, only running out of memory during the
+     * final activation leaves an empty project instead). Like a load, activation stops playback, rewinds to line 0 and clears the undo history. The
+     * result has no file path and counts as modified (isDirty() is true) until it is saved.
+     *
+     * Params:
+     *   proj = Complete project; not modified.
+     *   err = Error message populated on validation, parse, or GraphCompiler error.
+     *
+     * Returns:
+     *   True when proj is now the open project.
+     */
+    bool openProjectFromMemory(const ref LoadedProject proj, out string err) {
+        ubyte[] bytes;
+        if (!serializeProject(proj, bytes, err)) {
+            return false;
+        }
+        LoadedProject parsed;
+        if (!loadProject(bytes, parsed, err)) {
+            return false;
+        }
+        if (!activateLoadedProject(parsed, null, err)) {
+            return false;
+        }
+        dirty_ = true;
+        return true;
     }
 
     /**
@@ -2017,7 +2158,8 @@ class StudioSession {
     }
 
     /**
-     * Starts a live-record take: plays a COUNT_IN_BEATS-beat count-in (the song pre-rolls from startLine minus the
+     * Starts a live-record take: plays a count-in of countInBeats() beats (one bar, at least two beats), each beat
+     * linesPerBeat() lines of the project's time signature (the song pre-rolls from startLine minus the
      * count-in, with a metronome click on every beat), then keeps playing while notes are captured. The song loop
      * is suspended in the Engine until the take ends (the document loop is not changed).
      *
@@ -2036,7 +2178,7 @@ class StudioSession {
             return false;
         }
         if (!sendCommand(EngineCommand.makeSetLoop(0, 0))
-                || !sendCommand(EngineCommand.makePlayCountIn(start, COUNT_IN_BEATS * LINES_PER_BEAT, LINES_PER_BEAT))) {
+                || !sendCommand(EngineCommand.makePlayCountIn(start, countInBeats() * linesPerBeat(), linesPerBeat()))) {
             cast(void) sendCommand(EngineCommand.makeSetLoop(doc_.loopStartLine, doc_.loopEndLine));
             return false;
         }
@@ -3344,6 +3486,26 @@ class StudioSession {
         return true;
     }
 
+    package bool setTimeSignatureDirect(ubyte numerator, ubyte denominator) {
+        if (!isValidTimeSignature(numerator, denominator)) {
+            return false;
+        }
+        doc_.timeSigNumerator = numerator;
+        doc_.timeSigDenominator = denominator;
+        markDirty();
+        return true;
+    }
+
+    package bool setKeyDirect(MusicalKey key) {
+        if (!isValidKey(key.tonic, key.mode)) {
+            return false;
+        }
+        doc_.keyTonic = key.tonic;
+        doc_.keyMode = cast(ubyte) key.mode;
+        markDirty();
+        return true;
+    }
+
     package bool setTempoDirect(double bpmVal, uint tplVal) {
         if (!isValidTempo(bpmVal, tplVal)) {
             return false;
@@ -3723,6 +3885,10 @@ class StudioSession {
         dst.ticksPerLine = src.ticksPerLine;
         dst.loopStartLine = src.loopStartLine;
         dst.loopEndLine = src.loopEndLine;
+        dst.timeSigNumerator = src.timeSigNumerator;
+        dst.timeSigDenominator = src.timeSigDenominator;
+        dst.keyTonic = src.keyTonic;
+        dst.keyMode = src.keyMode;
         dst.modules = new SavedModule[src.modules.length];
         foreach (i, ref sm; src.modules) {
             dst.modules[i] = cloneSavedModule(sm);

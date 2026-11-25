@@ -7,7 +7,8 @@
  *   Headless integration tests of the assembled studio: every view is constructed over one StudioContext, laid
  *   out and drawn at Retina scale; keyboard shortcuts resolved through the Keymap route document-level actions to
  *   the session/root (undo/redo, record, octave, loop, play) and to the app command handler (save/open/export/
- *   quit), and context-dependent actions to the focused or last-used view (pattern copy/paste, patchbay zoom);
+ *   quit; New, Open and Quit ask "Discard unsaved changes?" first when the project is modified, also for
+ *   requestClose()), and context-dependent actions to the focused or last-used view (pattern copy/paste, patchbay zoom);
  *   unhandled piano keys play live notes on the selected module; the context keeps selections valid. Phase 8.5:
  *   appearance switches keep every pane rectangle and theme metric identical, bump themeRevision and redraw every
  *   view in the new colors; Cmd+, opens the Appearance panel, Cmd+Option+C toggles contrast; panel edits preview
@@ -47,7 +48,7 @@ version (unittest) {
     import gui.renderer;
     import gui.views.studio_context : IStudioClipboard, StudioContext;
     import gui.views.studio_root : StudioRoot;
-    import gui.widgets : MenuItem, UiContext;
+    import gui.widgets : ConfirmDialog, MenuItem, UiContext;
     import platform.interfaces : FileDialogFilter, IFileDialog, KeyModifiers, PlatformEvent, PlatformEventKind;
     import sequencer.note : NoteCell, NoteCmd;
 
@@ -230,14 +231,20 @@ version (unittest) {
 
         StudioAction[] appActions;
         r.root.appCommandHandler = (StudioAction a) { appActions ~= a; return true; };
+        assert(r.session.isDirty());
         r.press(1, KeyModifiers.command);
         r.press(1, KeyModifiers.command | KeyModifiers.shift);
         r.press(31, KeyModifiers.command);
+        assert(r.root.unsavedPrompt() !is null && appActions.length == 2);
+        r.press(36);
         r.press(45, KeyModifiers.command);
+        r.press(36);
         r.press(14, KeyModifiers.command);
         r.press(12, KeyModifiers.command);
+        r.press(36);
         assert(appActions == [StudioAction.saveProject, StudioAction.saveProjectAs, StudioAction.openProject,
             StudioAction.newProject, StudioAction.exportWav, StudioAction.quit]);
+        assert(r.root.unsavedPrompt() is null && r.ui.overlays().length == 0);
 
         r.press(49);
         float[256] l = 0.0f;
@@ -837,5 +844,95 @@ version (unittest) {
         foreach (ref m; s.document().modules) {
             assert(at[0] >= m.posX + 150.0f);
         }
+    }
+
+    private Point2F centerOf(RectF b) {
+        return Point2F(b.x + b.w * 0.5f, b.y + b.h * 0.5f);
+    }
+
+    unittest {
+        Rig r = makeRig();
+        scope (exit) r.session.dispose();
+        StudioAction[] acts;
+        r.root.appCommandHandler = (StudioAction a) { acts ~= a; return true; };
+
+        assert(!r.session.isDirty());
+        r.press(45, KeyModifiers.command);
+        r.press(31, KeyModifiers.command);
+        assert(r.root.requestClose());
+        assert(acts == [StudioAction.newProject, StudioAction.openProject, StudioAction.quit]);
+        assert(r.root.unsavedPrompt() is null && r.ui.overlays().length == 0);
+        acts = null;
+
+        assert(r.session.doAddModule("synth.fm_synth", "Lead", 0.0f, 0.0f) != 0);
+        assert(r.session.isDirty());
+        r.press(45, KeyModifiers.command);
+        ConfirmDialog q = r.root.unsavedPrompt();
+        assert(q !is null && acts.length == 0 && r.ui.overlays().length == 1 && r.ui.overlays()[0] is q);
+        assert(q.title == "Discard unsaved changes?");
+        assert(q.message == "The open project has unsaved changes. Starting a new project discards them.");
+        r.press(31, KeyModifiers.command);
+        r.press(49);
+        assert(r.root.requestClose());
+        assert(r.root.unsavedPrompt() is q && r.ui.overlays().length == 1 && acts.length == 0);
+        assert(!r.session.isPlaying());
+        r.press(53);
+        assert(r.root.unsavedPrompt() is null && r.ui.overlays().length == 0 && acts.length == 0);
+        assert(r.ctx.status == "Kept the open project");
+
+        r.press(31, KeyModifiers.command);
+        q = r.root.unsavedPrompt();
+        assert(q.message == "The open project has unsaved changes. Opening another project discards them.");
+        r.click(centerOf(q.cancelButton.bounds));
+        assert(r.root.unsavedPrompt() is null && acts.length == 0);
+
+        r.press(12, KeyModifiers.command);
+        q = r.root.unsavedPrompt();
+        assert(q.message == "The open project has unsaved changes. Quitting Dracker discards them.");
+        r.click(Point2F(5.0f, 5.0f));
+        assert(r.root.unsavedPrompt() is null && acts.length == 0);
+        r.press(12, KeyModifiers.command);
+        r.click(centerOf(r.root.unsavedPrompt().confirmButton.bounds));
+        assert(acts == [StudioAction.quit] && r.root.unsavedPrompt() is null);
+
+        assert(r.root.requestClose() && r.root.unsavedPrompt() !is null);
+        r.press(36);
+        assert(acts == [StudioAction.quit, StudioAction.quit]);
+
+        auto panel = r.root.openAppearancePanel();
+        r.frame();
+        assert(panel !is null && r.ui.overlays().length == 1);
+        r.press(45, KeyModifiers.command);
+        assert(r.ui.overlays().length == 2 && r.root.unsavedPrompt() !is null);
+        r.press(53);
+        assert(r.ui.overlays().length == 1 && r.ui.overlays()[0] is panel && acts.length == 2);
+        r.ui.closeAllOverlays();
+
+        int ran = 0;
+        assert(!r.root.confirmDiscardThen("Testing discards them.", () { ran++; }));
+        assert(!r.root.confirmDiscardThen("Second request.", () { ran += 10; }));
+        assert(r.root.unsavedPrompt().message == "The open project has unsaved changes. Testing discards them.");
+        r.press(36);
+        assert(ran == 1);
+
+        r.root.appCommandHandler = (StudioAction a) {
+            acts ~= a;
+            if (a == StudioAction.newProject) {
+                r.session.newEmptyProject(true);
+            }
+            return true;
+        };
+        r.press(45, KeyModifiers.command);
+        r.press(36);
+        assert(!r.session.isDirty() && r.session.document().modules.length == 1);
+        r.press(45, KeyModifiers.command);
+        assert(r.root.unsavedPrompt() is null && acts[$ - 2 .. $] == [StudioAction.newProject, StudioAction.newProject]);
+
+        assert(r.session.doAddModule("synth.fm_synth", "Lead", 0.0f, 0.0f) != 0);
+        auto detached = new StudioRoot(r.ctx);
+        int ranDetached = 0;
+        assert(detached.confirmDiscardThen("x", () { ranDetached++; }) && ranDetached == 1);
+        detached.appCommandHandler = null;
+        assert(!detached.executeAction(StudioAction.quit));
     }
 }

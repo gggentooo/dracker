@@ -11,7 +11,10 @@
  *   NSTextInputClient IME text commit and marked text, NSPasteboard text), and MacFileDialog : IFileDialog
  *   (NSOpenPanel/NSSavePanel window-modal sheets via objc_blocks_shim.m). Menu commands are delivered as the
  *   same keyDown events (macOS virtual key code + KeyModifiers) the app keymap binds, so menus and shortcuts
- *   share one path; Quit and the window close button deliver closeRequested. Diagnostics helpers (synthetic
+ *   share one path; Quit and the window close button deliver closeRequested. An NSApplicationDelegate
+ *   (STAppDelegate) handles quits from outside the menu: a session end (logout, restart, shutdown; read from the
+ *   quit Apple event's kAEQuitReason) calls MacWindow.sessionEndHandler and terminates at once without asking,
+ *   and any other quit (Dock icon menu, Apple events) is cancelled and delivered as closeRequested. Diagnostics helpers (synthetic
  *   NSEvent injection, process footprint and CPU time) support the automated GUI self-test.
  *
  * Real-Time & Safety Contract:
@@ -25,8 +28,9 @@
  *             CoreGraphics.framework (CGEventCreateScrollWheelEvent2), libproc (proc_pid_rusage)
  *
  * Planned API (Types, Functions & Hooks):
- *   - struct MacApplication : initialize(), mainMenu(), menuKeyEquivalent(), setMenuItemChecked(), menuItemChecked()
- *   - class MacWindow : IPlatformWindow (+ waitEvents(), wake(), setContentSize(), usePrivatePasteboard(), isVisibleOnScreen(), setFloating(), markedText(), windowNumber(), liveResizeHandler)
+ *   - struct MacApplication : initialize(), setCommandTarget(), mainMenu(), menuKeyEquivalent(), setMenuItemChecked(), menuItemChecked()
+ *   - fourCharCode(), SESSION_END_QUIT_REASONS, isSessionEndQuitReason() (applicationShouldTerminate: policy)
+ *   - class MacWindow : IPlatformWindow (+ waitEvents(), wake(), setContentSize(), usePrivatePasteboard(), isVisibleOnScreen(), setFloating(), markedText(), windowNumber(), liveResizeHandler, sessionEndHandler)
  *   - class MacFileDialog : IFileDialog (+ selfTestAutoDismissSeconds, lastSheetWasAttached)
  *   - uint translateModifierFlags(ulong) / postSyntheticKey() / postSyntheticFlags() / postSyntheticMouse()
  *     / postSyntheticScroll() / processFootprintBytes() / mallocBytesInUse() / processCpuSeconds()
@@ -206,6 +210,7 @@ private immutable string[] MENU_TITLES = ["Dracker", "File", "Edit", "Transport"
 struct MacApplication {
     private id app_ = null;
     private id menuTarget_ = null;
+    private id appDelegate_ = null;
 
     /**
      * Creates the shared NSApplication as a regular foreground app and installs the menu bar.
@@ -224,6 +229,8 @@ struct MacApplication {
             return false;
         }
         menuTarget_ = send(send(cast(id) cls("STMenuTarget"), sel("alloc")), sel("init"));
+        appDelegate_ = send(send(cast(id) cls("STAppDelegate"), sel("alloc")), sel("init"));
+        send!void(app_, sel("setDelegate:"), appDelegate_);
         buildMenuBar();
         send!void(app_, sel("finishLaunching"));
         if (send!bool(app_, sel("respondsToSelector:"), sel("activate"))) {
@@ -235,13 +242,16 @@ struct MacApplication {
     }
 
     /**
-     * Routes menu commands to window (the key window of this single-window app).
+     * Routes menu commands and application quit requests to window (the key window of this single-window app).
      *
      * Params:
      *   window = Target window, or null.
      */
     void setCommandTarget(MacWindow window) {
         setIvarPointer(menuTarget_, "dctx", window is null ? null : cast(void*) window);
+        if (appDelegate_ !is null) {
+            setIvarPointer(appDelegate_, "dctx", window is null ? null : cast(void*) window);
+        }
     }
 
     /**
@@ -387,6 +397,13 @@ final class MacWindow : IPlatformWindow {
      * inside AppKit's tracking loop then); the app should lay out and render one frame.
      */
     void delegate() nothrow liveResizeHandler;
+
+    /**
+     * Optional callback invoked synchronously when macOS ends the user session (logout, restart, shutdown). The
+     * process exits right after it returns, without another pass of the main loop, so it must only release
+     * resources quickly (stop audio, cancel background work); nothing is asked.
+     */
+    void delegate() nothrow sessionEndHandler;
 
     override bool create(const ref WindowDesc desc) {
         if (open_) {
@@ -814,6 +831,12 @@ final class MacWindow : IPlatformWindow {
         push(ev);
     }
 
+    package void handleSessionEnd() nothrow {
+        if (sessionEndHandler !is null) {
+            sessionEndHandler();
+        }
+    }
+
     package void handleMenu(long tag) nothrow {
         immutable size_t mi = cast(size_t)(tag / 100);
         immutable size_t ii = cast(size_t)(tag % 100);
@@ -1138,6 +1161,96 @@ private extern (C) void imp_menuAction(id self, SEL cmd, id sender) nothrow {
     if (auto w = windowOf(self)) w.handleMenu(send!long(sender, sel("tag")));
 }
 
+/**
+ * NSApplicationDelegate applicationShouldTerminate: for quits that do not come from Dracker's own menu (Dock
+ * icon menu, Apple events, logout). A session end (logout, restart, shutdown) runs the window's
+ * sessionEndHandler and lets AppKit terminate at once; any other quit is cancelled and delivered to the window
+ * as closeRequested, so the app decides (and may ask about unsaved changes) like for Dracker ▸ Quit.
+ *
+ * Params:
+ *   self = STAppDelegate instance.
+ *   cmd = Selector.
+ *   sender = NSApplication.
+ *
+ * Returns:
+ *   NSTerminateNow or NSTerminateCancel.
+ */
+private extern (C) ulong imp_applicationShouldTerminate(id self, SEL cmd, id sender) nothrow {
+    auto w = windowOf(self);
+    if (w is null) {
+        return NS_TERMINATE_NOW;
+    }
+    if (isSessionEndQuitReason(currentQuitReason())) {
+        w.handleSessionEnd();
+        return NS_TERMINATE_NOW;
+    }
+    w.handleClose();
+    return NS_TERMINATE_CANCEL;
+}
+
+/**
+ * Packs a four-character Apple-event code ("logo") into its 32-bit value, first character in the high byte.
+ *
+ * Params:
+ *   code = Exactly four ASCII characters.
+ *
+ * Returns:
+ *   OSType value.
+ */
+uint fourCharCode(string code) @safe pure nothrow @nogc {
+    assert(code.length == 4);
+    return (cast(uint) code[0] << 24) | (cast(uint) code[1] << 16) | (cast(uint) code[2] << 8) | cast(uint) code[3];
+}
+
+private enum ulong NS_TERMINATE_CANCEL = 0;
+private enum ulong NS_TERMINATE_NOW = 1;
+private enum uint AE_QUIT_REASON_KEYWORD = fourCharCode("why?");
+
+/**
+ * Quit reasons (kAEQuitReason values) that mean the user session is ending: log out (with and without the
+ * confirmation dialog), restart and shut down (both forms each).
+ */
+immutable uint[6] SESSION_END_QUIT_REASONS = [fourCharCode("logo"), fourCharCode("rlgo"), fourCharCode("rrst"),
+    fourCharCode("rest"), fourCharCode("rsdn"), fourCharCode("shut")];
+
+/**
+ * Reports whether an Apple-event quit reason means logout, restart or shutdown.
+ *
+ * Params:
+ *   reason = kAEQuitReason value of the quit event, or 0 when the event has none.
+ *
+ * Returns:
+ *   True for a session end; false for a plain quit (Dock menu, another app, no event).
+ */
+bool isSessionEndQuitReason(uint reason) @safe pure nothrow @nogc {
+    foreach (r; SESSION_END_QUIT_REASONS) {
+        if (r == reason) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Reads the kAEQuitReason attribute of the Apple event being handled (the quit event during
+ * applicationShouldTerminate:).
+ *
+ * Returns:
+ *   Reason code, or 0 when there is no current event or it has no reason.
+ */
+private uint currentQuitReason() nothrow {
+    id manager = send(cast(id) cls("NSAppleEventManager"), sel("sharedAppleEventManager"));
+    id event = manager is null ? null : send(manager, sel("currentAppleEvent"));
+    if (event is null) {
+        return 0;
+    }
+    id reason = send(event, sel("attributeDescriptorForKeyword:"), AE_QUIT_REASON_KEYWORD);
+    if (reason is null) {
+        reason = send(event, sel("paramDescriptorForKeyword:"), AE_QUIT_REASON_KEYWORD);
+    }
+    return reason is null ? 0 : send!uint(reason, sel("typeCodeValue"));
+}
+
 private bool registerRuntimeClasses() {
     RuntimeClassBuilder view;
     if (!view.begin("STHostView", "NSView")) {
@@ -1210,7 +1323,20 @@ private bool registerRuntimeClasses() {
         menu.addPointerIvar("dctx");
         menu.addMethod("stMenuAction:", cast(IMP) &imp_menuAction, "v@:@");
     }
-    return menu.register() !is null;
+    if (menu.register() is null) {
+        return false;
+    }
+
+    RuntimeClassBuilder appDel;
+    if (!appDel.begin("STAppDelegate", "NSObject")) {
+        return false;
+    }
+    if (!appDel.reused()) {
+        appDel.addPointerIvar("dctx");
+        appDel.addProtocol("NSApplicationDelegate");
+        appDel.addMethod("applicationShouldTerminate:", cast(IMP) &imp_applicationShouldTerminate, "Q@:@");
+    }
+    return appDel.register() !is null;
 }
 
 /**
@@ -1381,4 +1507,15 @@ unittest {
     assert(spin > 0.0 && processCpuSeconds() >= cpu0);
     assert(registerRuntimeClasses());
     assert(cls("STHostView") !is null && cls("STWindowDelegate") !is null && cls("STMenuTarget") !is null);
+    assert(cls("STAppDelegate") !is null);
+    assert(fourCharCode("why?") == 0x7768_793F && fourCharCode("logo") == 0x6C6F_676F);
+    foreach (r; ["logo", "rlgo", "rrst", "rest", "rsdn", "shut"]) {
+        assert(isSessionEndQuitReason(fourCharCode(r)), r);
+    }
+    assert(!isSessionEndQuitReason(0) && !isSessionEndQuitReason(fourCharCode("quit")));
+    assert(!isSessionEndQuitReason(fourCharCode("aevt")));
+    id probe = send(send(cast(id) cls("STAppDelegate"), sel("alloc")), sel("init"));
+    assert(probe !is null && send!bool(probe, sel("respondsToSelector:"), sel("applicationShouldTerminate:")));
+    assert(imp_applicationShouldTerminate(probe, sel("applicationShouldTerminate:"), null) == NS_TERMINATE_NOW);
+    send!void(probe, sel("release"));
 }

@@ -15,7 +15,9 @@
  *   pattern (on the clip's name label it instead opens a TextField renaming the pattern), double-click on an empty lane adds a clip of the current pattern, right-click menus (clip: Mute,
  *   Solo, Supertrack, Make Unique, Set Loop To Clip, Delete; empty lane: Add Clip of each pattern), Delete key,
  *   horizontal scroll pans, vertical scroll moves lanes, Cmd+scroll / pinch / zoom actions zoom around a point.
- *   Snapping: no modifier snaps to beats (4 lines), Shift snaps to single lines, Cmd snaps to bars (16 lines).
+ *   Snapping: no modifier snaps to beats, Shift snaps to single lines, Cmd snaps to bars. Beats and bars follow the
+ *   project's time signature (linesPerBeat() / linesPerBar(): 4 and 16 lines in 4/4, 2 and 12 in 6/8); the beat and
+ *   bar grid lines and the ruler ticks and labels use the same values.
  *   Resizing is right-edge only because no session API changes a clip's patternOffset.
  *   Phase 8.5 (Accessible Appearance): clip fills use the eight categorical theme clip colors; each pattern's
  *   color slot also selects its letter label (A-H) and bottom stripe pattern; dimmed clips are hatched; all clip
@@ -34,7 +36,8 @@
  * Planned API (Types, Functions & Hooks):
  *   - final class TimelineView : Widget, StudioCommandSink — this(StudioContext), handleStudioAction(StudioAction)
  *     (deleteCell, deleteBlock, zoomIn, zoomOut, zoomReset, toggleFollow), setViewport(), zoomAround(),
- *     scrollLine(), pointsPerLine(), laneScroll(), maxScrollLine(), laneCount(), lastDrawnClipCount()
+ *     scrollLine(), pointsPerLine(), laneScroll(), maxScrollLine(), laneCount(), lastDrawnClipCount(),
+ *     linesPerBeat(), linesPerBar(), gridFor(mods), majorStep()
  *   - Automation hooks: clipRect(uint), lineToX(long), xToLine(float), laneToY(uint), yToLane(float), rulerRect(),
  *     loopStripRect(), contentRect(), headerRect(), laneMuteRect(uint), laneSoloRect(uint),
  *     laneSupertrackRect(uint), hitClip(Point2F, out bool), selectedClip(), selectClip(uint); child ids "timeline.ruler", "timeline.loop"
@@ -166,8 +169,6 @@ final class TimelineView : Widget, StudioCommandSink {
     enum float defaultPointsPerLine = 6.0f;
     enum uint maxLane = 255;
     enum float RENAME_FIELD_WIDTH = 180.0f;
-    enum uint linesPerBeat = 4;
-    enum uint linesPerBar = 16;
     enum float dragThreshold = 3.0f;
     enum size_t miniatureBudget = 6000;
 
@@ -1701,13 +1702,28 @@ final class TimelineView : Widget, StudioCommandSink {
     }
 
     /**
-     * Returns the ruler label spacing in lines for the current zoom.
+     * Returns the ruler label spacing in lines for the current zoom: the smallest step at least 40 points wide out of
+     * the power-of-two divisions of a beat, the beat multiples that divide a bar, then a bar and its doublings, so
+     * labels always fall on beats or bars (in 4/4 this is 1, 2, 4, 8, 16, 32, ... as before).
      *
      * Returns:
-     *   Step (power of two).
+     *   Step in lines.
      */
-    private long majorStep() const {
-        long step = 1;
+    long majorStep() {
+        immutable long beat = linesPerBeat();
+        immutable long bar = linesPerBar();
+        for (long step = 1; step < beat; step *= 2) {
+            if (beat % step == 0 && cast(double) step * ppl_ >= 40.0) {
+                return step;
+            }
+        }
+        immutable long beats = bar / beat;
+        foreach (m; 1 .. beats) {
+            if (beats % m == 0 && cast(double)(m * beat) * ppl_ >= 40.0) {
+                return m * beat;
+            }
+        }
+        long step = bar;
         while (cast(double) step * ppl_ < 40.0 && step < (1L << 40)) {
             step *= 2;
         }
@@ -1720,7 +1736,7 @@ final class TimelineView : Widget, StudioCommandSink {
      * Returns:
      *   Step.
      */
-    private long minorStep() const {
+    private long minorStep() {
         if (ppl_ >= 5.0f) {
             return 1;
         }
@@ -2089,7 +2105,28 @@ final class TimelineView : Widget, StudioCommandSink {
     }
 
     /**
-     * Returns the snap grid for a modifier mask (none = beat, Shift = line, Cmd = bar).
+     * Returns the number of lines in one beat of the project's time signature (snap grid and beat grid lines).
+     *
+     * Returns:
+     *   StudioSession.linesPerBeat() (4 in 4/4).
+     */
+    uint linesPerBeat() {
+        return ctx.session.linesPerBeat();
+    }
+
+    /**
+     * Returns the number of lines in one bar of the project's time signature (bar lines, ruler and Cmd snapping).
+     *
+     * Returns:
+     *   StudioSession.linesPerBar() (16 in 4/4).
+     */
+    uint linesPerBar() {
+        return ctx.session.linesPerBar();
+    }
+
+    /**
+     * Returns the snap grid for a modifier mask (none = beat, Shift = line, Cmd = bar) in the project's time
+     * signature.
      *
      * Params:
      *   mods = KeyModifiers mask.
@@ -2097,7 +2134,7 @@ final class TimelineView : Widget, StudioCommandSink {
      * Returns:
      *   Grid in lines.
      */
-    static long gridFor(uint mods) @safe nothrow pure @nogc {
+    long gridFor(uint mods) {
         if (hasModifier(mods, KeyModifiers.shift)) {
             return 1;
         }

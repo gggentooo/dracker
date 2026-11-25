@@ -1306,4 +1306,34 @@ version (unittest) {
         assert(s.undo() && nameOf(p3) == "Drums2");
         assert(s.undo() && nameOf(p3) == "Bass");
     }
+
+    unittest {
+        auto rig = new PeRig();
+        auto v = rig.v;
+        auto s = rig.s;
+        v.setCursor(0, 30, 0);
+        immutable ColorRGBA bar = rig.ui.theme.trackerRowBar;
+        immutable ColorRGBA beat = rig.ui.theme.trackerRowBeat;
+        bool shaded(ColorRGBA c, uint line) {
+            return rig.hasShapeAt(c, v.cellRect(0, line).y);
+        }
+
+        rig.frame();
+        assert(v.beatLines() == 4 && v.barLines() == 16);
+        assert(shaded(bar, 16) && shaded(beat, 12) && shaded(beat, 4) && !shaded(beat, 6) && !shaded(bar, 12));
+
+        assert(s.doSetTimeSignature(3, 4));
+        rig.frame();
+        assert(v.beatLines() == 4 && v.barLines() == 12);
+        assert(shaded(bar, 12) && shaded(bar, 24) && shaded(beat, 16) && !shaded(bar, 16) && shaded(beat, 4));
+
+        assert(s.doSetTimeSignature(6, 8));
+        rig.frame();
+        assert(v.beatLines() == 2 && v.barLines() == 12);
+        assert(shaded(beat, 2) && shaded(beat, 6) && shaded(bar, 12) && !shaded(beat, 3) && !shaded(bar, 16));
+
+        assert(s.undo() && s.undo());
+        rig.frame();
+        assert(v.barLines() == 16 && shaded(bar, 16) && !shaded(bar, 12));
+    }
 }

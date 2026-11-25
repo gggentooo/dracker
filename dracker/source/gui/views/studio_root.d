@@ -12,7 +12,9 @@
  *   export/quit); context-dependent actions go to the StudioCommandSink view that holds focus (or was used last);
  *   unhandled piano keys play live notes on the selected module. ⌘R starts/stops a live-record take and ⇧⌘R
  *   toggles edit mode. ⌥⌘S saves the selected module as an .msym preset and ⌥⌘O loads one as a new module
- *   (File menu items). Esc (no modifiers) ends a running take, else leaves edit mode, before the keymap's
+ *   (File menu items). New Project, Open Project and Quit (also the window close button, via requestClose()) ask
+ *   "Discard unsaved changes?" first when the project has unsaved changes (confirmDiscardThen(), a modal
+ *   ConfirmDialog); Cancel keeps the project. Esc (no modifiers) ends a running take, else leaves edit mode, before the keymap's
  *   Esc = Stop binding is consulted; Play, Stop and Play Pattern during a take end the take. Phase 8.5: openAppearance opens the Appearance
  *   panel overlay, toggleContrast flips High/Low contrast, and every StudioContext appearance switch is pushed
  *   into the UiContext (theme + relayout) through a theme listener.
@@ -26,7 +28,8 @@
  *
  * Planned API (Types, Functions & Hooks):
  *   - class StudioRoot : Widget (views, appCommandHandler, executeAction(), activeSink(), noteInteraction(),
- *     openAppearancePanel(), appearancePanel(), onAppearanceChanged)
+ *     openAppearancePanel(), appearancePanel(), onAppearanceChanged, requestClose(), confirmDiscardThen(),
+ *     unsavedPrompt())
  *
  * See_Also:
  *   architecture.md, dev_plan.md (Phase 8.6)
@@ -48,7 +51,7 @@ import gui.views.scope_view : ScopeView;
 import gui.views.studio_context : StudioContext;
 import gui.views.timeline_view : TimelineView;
 import gui.views.transport_bar : TransportBarView;
-import gui.widgets : KeyCode, KeyEvent, SplitView, Widget;
+import gui.widgets : ConfirmDialog, KeyCode, KeyEvent, openConfirmDialog, SplitView, Widget;
 import platform.interfaces : PlatformEvent, PlatformEventKind;
 
 /**
@@ -82,6 +85,7 @@ final class StudioRoot : Widget {
 
     private Widget lastSink_;
     private AppearancePanel appearancePanel_;
+    private ConfirmDialog unsavedPrompt_;
     private uint[uint] heldPianoKeys_;
 
     /**
@@ -226,6 +230,60 @@ final class StudioRoot : Widget {
     }
 
     /**
+     * Handles a request from the platform to close the window or quit (window close button, Dracker ▸ Quit):
+     * asks first when the project has unsaved changes, then sends quit to appCommandHandler.
+     *
+     * Returns:
+     *   True if handled (also while the question is open).
+     */
+    bool requestClose() {
+        return executeAction(StudioAction.quit);
+    }
+
+    /**
+     * Runs proceed now when the open project has no unsaved changes; otherwise asks "Discard unsaved changes?"
+     * with a ConfirmDialog and runs proceed only if the user confirms. While one such question is open, further
+     * requests are ignored. When the root is not attached to a UiContext there is no one to ask and proceed runs.
+     *
+     * Params:
+     *   message = Sentence describing what discards the changes, e.g. "Quitting Dracker discards them.".
+     *   proceed = Action that discards the open project.
+     *
+     * Returns:
+     *   True if proceed ran now; false if the question is open (or was already open).
+     */
+    bool confirmDiscardThen(string message, void delegate() proceed) {
+        auto c = context;
+        if (!ctx.session.isDirty() || c is null) {
+            proceed();
+            return true;
+        }
+        if (unsavedPrompt_ !is null) {
+            return false;
+        }
+        unsavedPrompt_ = openConfirmDialog(c, "Discard unsaved changes?",
+            "The open project has unsaved changes. " ~ message, "Discard changes", "Cancel", () {
+                unsavedPrompt_ = null;
+                proceed();
+                invalidate();
+            }, () {
+                unsavedPrompt_ = null;
+                ctx.setStatus("Kept the open project");
+            });
+        return false;
+    }
+
+    /**
+     * Returns the open unsaved-changes question, if any.
+     *
+     * Returns:
+     *   Dialog or null.
+     */
+    ConfirmDialog unsavedPrompt() {
+        return unsavedPrompt_;
+    }
+
+    /**
      * Executes an action as if its shortcut was pressed.
      *
      * Params:
@@ -307,11 +365,36 @@ final class StudioRoot : Widget {
                 ctx.loadModulePreset(at[0], at[1]);
                 break;
             }
+            case StudioAction.newProject:
+            case StudioAction.openProject:
+            case StudioAction.quit:
+                return runDiscardingAction(action);
             default:
                 return appCommandHandler !is null && appCommandHandler(action);
         }
         invalidate();
         return true;
+    }
+
+    private bool runDiscardingAction(StudioAction action) {
+        if (appCommandHandler is null) {
+            return false;
+        }
+        string message;
+        switch (action) {
+            case StudioAction.newProject:
+                message = "Starting a new project discards them.";
+                break;
+            case StudioAction.openProject:
+                message = "Opening another project discards them.";
+                break;
+            default:
+                message = "Quitting Dracker discards them.";
+                break;
+        }
+        bool handled = true;
+        confirmDiscardThen(message, () { handled = appCommandHandler(action); });
+        return handled;
     }
 
     override bool onKeyDown(const ref KeyEvent e) {

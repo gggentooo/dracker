@@ -5,6 +5,10 @@
  *
  * Purpose:
  *   Reads and writes versioned IFF-style 4CC chunked .msv (project) and .msym (module/MetaModule preset) files, skipping unknown chunks gracefully for forward compatibility.
+ *   Optional chunks are written only when they carry non-default data: MIDI (MIDI-learn mappings) and MUSC (time
+ *   signature and song key, four bytes: numerator, denominator, tonic pitch class, mode; bytes after the fourth
+ *   are ignored so later builds can append fields). A file without MUSC is 4/4, C major. Neither chunk raised
+ *   MSV_FORMAT_VERSION; older builds skip them.
  *
  * Real-Time & Safety Contract:
  *   Off-RT @safe parser/serializer; fuzz-hardened against truncated, overflowing, or deeply nested chunk payloads.
@@ -18,7 +22,8 @@
  *   - struct SavedModule / SavedWire / SavedPattern / SavedMidiMapping / LoadedProject / LoadedPreset
  *   - serializeProject(), saveProject(), loadProject(), loadProjectFile()
  *   - serializePreset(), savePreset(), loadPreset(), loadPresetFile()
- *   - isValidTempo(), isValidPatternShape(), isValidMidiMapping(), validateModuleForSave(), validateProjectForSave()
+ *   - isValidTempo(), isValidTimeSignature(), isValidKey(), hasNonDefaultMusicSettings(), isValidPatternShape(),
+ *     isValidMidiMapping(), validateModuleForSave(), validateProjectForSave()
  *   - materializeProjectToEngine()
  *
  * See_Also:
@@ -55,6 +60,13 @@ enum uint MAX_PROJECT_TPL = 255;
 enum size_t MAX_CLIPS = 4096;
 enum size_t MAX_MIDI_MAPPINGS = 256;
 enum size_t MAX_EXTRA_BLOB_BYTES = 64u * 1024u * 1024u;
+enum ubyte DEFAULT_TIME_SIG_NUMERATOR = 4;
+enum ubyte DEFAULT_TIME_SIG_DENOMINATOR = 4;
+enum ubyte MAX_TIME_SIG_NUMERATOR = 16;
+enum ubyte KEY_MODE_MAJOR = 0;
+enum ubyte KEY_MODE_MINOR = 1;
+enum ubyte DEFAULT_KEY_TONIC = 0;
+enum ubyte DEFAULT_KEY_MODE = KEY_MODE_MAJOR;
 
 /**
  * Serializable representation of one modular node, its @Param floats, optional extraBlob, and optional child MetaModule project.
@@ -121,6 +133,10 @@ struct LoadedProject {
     uint ticksPerLine = 6;
     long loopStartLine = 0;
     long loopEndLine = 0;
+    ubyte timeSigNumerator = DEFAULT_TIME_SIG_NUMERATOR;
+    ubyte timeSigDenominator = DEFAULT_TIME_SIG_DENOMINATOR;
+    ubyte keyTonic = DEFAULT_KEY_TONIC;
+    ubyte keyMode = DEFAULT_KEY_MODE;
     SavedModule[] modules;
     SavedWire[] wires;
     SavedPattern[] patterns;
@@ -149,6 +165,50 @@ struct LoadedPreset {
  */
 bool isValidTempo(double bpm, uint tpl) @safe nothrow pure @nogc {
     return isFinite(bpm) && bpm >= MIN_PROJECT_BPM && bpm <= MAX_PROJECT_BPM && tpl >= 1 && tpl <= MAX_PROJECT_TPL;
+}
+
+/**
+ * Reports whether a time signature is accepted by the .msv loader.
+ *
+ * Params:
+ *   numerator = Beats per bar.
+ *   denominator = Note value of one beat.
+ *
+ * Returns:
+ *   True if numerator is in [1, MAX_TIME_SIG_NUMERATOR] and denominator is 2, 4, 8, or 16.
+ */
+bool isValidTimeSignature(uint numerator, uint denominator) @safe nothrow pure @nogc {
+    return numerator >= 1 && numerator <= MAX_TIME_SIG_NUMERATOR
+        && (denominator == 2 || denominator == 4 || denominator == 8 || denominator == 16);
+}
+
+/**
+ * Reports whether a song key is accepted by the .msv loader.
+ *
+ * Params:
+ *   tonic = Pitch class of the tonic (0 = C, 1 = C sharp or D flat, ... 11 = B).
+ *   mode = KEY_MODE_MAJOR or KEY_MODE_MINOR (natural minor).
+ *
+ * Returns:
+ *   True if tonic < 12 and mode is one of the two modes.
+ */
+bool isValidKey(uint tonic, uint mode) @safe nothrow pure @nogc {
+    return tonic < 12 && (mode == KEY_MODE_MAJOR || mode == KEY_MODE_MINOR);
+}
+
+/**
+ * Reports whether a project's time signature and key differ from the defaults (4/4, C major), so the
+ * optional MUSC chunk must be written.
+ *
+ * Params:
+ *   proj = Project.
+ *
+ * Returns:
+ *   True if any of the four fields is not its default.
+ */
+bool hasNonDefaultMusicSettings(scope const ref LoadedProject proj) @safe nothrow pure @nogc {
+    return proj.timeSigNumerator != DEFAULT_TIME_SIG_NUMERATOR || proj.timeSigDenominator != DEFAULT_TIME_SIG_DENOMINATOR
+        || proj.keyTonic != DEFAULT_KEY_TONIC || proj.keyMode != DEFAULT_KEY_MODE;
 }
 
 /**
@@ -250,6 +310,14 @@ bool validateProjectForSave(scope const ref LoadedProject proj, out string err, 
     }
     if (!isValidTempo(proj.bpm, proj.ticksPerLine)) {
         err = "Out-of-range BPM or TPL";
+        return false;
+    }
+    if (!isValidTimeSignature(proj.timeSigNumerator, proj.timeSigDenominator)) {
+        err = "Invalid time signature";
+        return false;
+    }
+    if (!isValidKey(proj.keyTonic, proj.keyMode)) {
+        err = "Invalid song key";
         return false;
     }
     foreach (i, ref m; proj.modules) {
@@ -533,6 +601,15 @@ bool serializeProject(const ref LoadedProject proj, out ubyte[] bytes, out strin
         }
     });
 
+    if (hasNonDefaultMusicSettings(proj)) {
+        w.writeChunk(['M', 'U', 'S', 'C'], (ref BinaryWriter cw) @safe nothrow {
+            cw.writeU8(proj.timeSigNumerator);
+            cw.writeU8(proj.timeSigDenominator);
+            cw.writeU8(proj.keyTonic);
+            cw.writeU8(proj.keyMode);
+        });
+    }
+
     if (proj.midiMappings.length > 0) {
         w.writeChunk(['M', 'I', 'D', 'I'], (ref BinaryWriter cw) @safe nothrow {
             cw.writeU32(cast(uint) proj.midiMappings.length);
@@ -762,6 +839,27 @@ bool loadProject(
                     proj.patterns[i] = pat;
                 }
             }
+        } else if (chunkId == ['M', 'U', 'S', 'C']) {
+            ubyte num = 0;
+            ubyte den = 0;
+            ubyte tonic = 0;
+            ubyte mode = 0;
+            if (!sub.readU8(num) || !sub.readU8(den) || !sub.readU8(tonic) || !sub.readU8(mode)) {
+                err = "Truncated MUSC chunk";
+                return false;
+            }
+            if (!isValidTimeSignature(num, den)) {
+                err = "Invalid time signature in MUSC chunk";
+                return false;
+            }
+            if (!isValidKey(tonic, mode)) {
+                err = "Invalid song key in MUSC chunk";
+                return false;
+            }
+            proj.timeSigNumerator = num;
+            proj.timeSigDenominator = den;
+            proj.keyTonic = tonic;
+            proj.keyMode = mode;
         } else if (chunkId == ['M', 'I', 'D', 'I']) {
             uint mapCount = 0;
             if (!sub.readU32(mapCount) || mapCount > MAX_MIDI_MAPPINGS) {

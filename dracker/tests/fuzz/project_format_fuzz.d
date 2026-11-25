@@ -4,7 +4,7 @@
  * Phase:        Phase 6.4 — Project, Preset & Importer Fuzz Harness
  *
  * Purpose:
- *   Exercises 100,000+ seeded mutated, truncated, corrupted-length, non-finite-float, and deeply nested inputs across .msv (including the MIDI-mapping chunk), .msym, .mid, .xm, and .sunvox parsers to guarantee zero panics or OOB reads, then materializes and renders every accepted project to prove parser acceptance implies Engine-loadability.
+ *   Exercises 100,000+ seeded mutated, truncated, corrupted-length, non-finite-float, and deeply nested inputs across .msv (including the MIDI-mapping and MUSC time-signature/key chunks, whose four MUSC bytes are also swept through every value), .msym, .mid, .xm, and .sunvox parsers to guarantee zero panics or OOB reads, then materializes and renders every accepted project to prove parser acceptance implies Engine-loadability.
  *
  * Real-Time & Safety Contract:
  *   Off-RT verification harness (parsers under test are @safe nothrow) reusing bounded scratch buffers for fast 100k+ execution in Debug and Release/O3 builds.
@@ -31,8 +31,9 @@ import io.importers.sunvox_importer : ImportReport, importSunvoxFile;
 import io.importers.xm_importer : importXmFile;
 import foundation.types : FIXED_BLOCK_FRAMES;
 import graph.module_api : ModuleInstance;
-import io.project_format : LoadedPreset, LoadedProject, loadPreset, loadProject, materializeProjectToEngine,
-    MSV_FORMAT_VERSION, SavedMidiMapping, SavedModule, SavedPattern, SavedWire, serializePreset, serializeProject;
+import io.project_format : isValidKey, isValidTimeSignature, KEY_MODE_MINOR, LoadedPreset, LoadedProject, loadPreset,
+    loadProject, materializeProjectToEngine, MSV_FORMAT_VERSION, SavedMidiMapping, SavedModule, SavedPattern,
+    SavedWire, serializePreset, serializeProject;
 import modules.control.metamodule : MAX_METAMODULE_DEPTH, MetaModuleAsset;
 import sequencer.engine : Engine;
 import sequencer.note : NoteCell;
@@ -53,6 +54,7 @@ struct FuzzStats {
     size_t mutatedAccepted = 0;
     size_t materializedOk = 0;
     size_t materializedRejected = 0;
+    size_t invalidMusicAccepted = 0;
     bool deepMetaAccepted = false;
 }
 
@@ -81,6 +83,10 @@ private ubyte[] buildSeedMsv() @safe nothrow {
     p.author = "Fuzz";
     p.bpm = 128.0;
     p.ticksPerLine = 6;
+    p.timeSigNumerator = 7;
+    p.timeSigDenominator = 8;
+    p.keyTonic = 9;
+    p.keyMode = KEY_MODE_MINOR;
 
     SavedModule outMod;
     outMod.id = 1;
@@ -466,6 +472,10 @@ FuzzStats runProjectFormatFuzz(ulong seed, size_t iterations = 100_000) {
             case 0:
                 mutateBuffer(rng, msvSeed, scratch, activeLen, mode);
                 ok = loadProject(scratch[0 .. activeLen], tmpProj, tmpErr);
+                if (ok && (!isValidTimeSignature(tmpProj.timeSigNumerator, tmpProj.timeSigDenominator)
+                        || !isValidKey(tmpProj.keyTonic, tmpProj.keyMode))) {
+                    stats.invalidMusicAccepted++;
+                }
                 stats.msvRuns++;
                 break;
             case 1:
@@ -521,6 +531,43 @@ version (unittest) {
         assert(!stats.deepMetaAccepted);
         assert(stats.mutatedAccepted > 0);
         assert(stats.materializedOk > 0);
+        assert(stats.invalidMusicAccepted == 0);
+    }
+
+    unittest {
+        const(ubyte)[] seed = buildSeedMsv();
+        size_t at = size_t.max;
+        foreach (i; 0 .. seed.length - 3) {
+            if (seed[i .. i + 4] == cast(const(ubyte)[]) "MUSC") {
+                at = i;
+            }
+        }
+        assert(at != size_t.max);
+        immutable size_t payload = at + 8;
+        LoadedProject p;
+        string err;
+        assert(loadProject(seed, p, err) && p.timeSigNumerator == 7 && p.timeSigDenominator == 8);
+        assert(p.keyTonic == 9 && p.keyMode == KEY_MODE_MINOR);
+        ubyte[] buf = seed.dup;
+        size_t accepted = 0;
+        foreach (field; 0 .. 4) {
+            foreach (v; 0 .. 256) {
+                buf[] = seed[];
+                buf[payload + field] = cast(ubyte) v;
+                immutable bool ok = loadProject(buf, p, err);
+                ubyte[4] f = [7, 8, 9, KEY_MODE_MINOR];
+                f[field] = cast(ubyte) v;
+                assert(ok == (isValidTimeSignature(f[0], f[1]) && isValidKey(f[2], f[3])));
+                if (ok) {
+                    accepted++;
+                    assert(p.timeSigNumerator == f[0] && p.timeSigDenominator == f[1]);
+                    assert(p.keyTonic == f[2] && p.keyMode == f[3]);
+                } else {
+                    assert(err.length > 0);
+                }
+            }
+        }
+        assert(accepted == 16 + 4 + 12 + 2);
     }
 
     unittest {

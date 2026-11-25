@@ -15,7 +15,7 @@
  *   RT paths run inside verifyZeroRtAllocationsNothrow; temporary files are removed via scope(exit).
  *
  * Dependencies:
- *   Internal: app.{audio_host,history,session,telemetry}, foundation.types, io.*, platform.interfaces,
+ *   Internal: app.{audio_host,history,music_theory,session,telemetry}, foundation.types, io.*, platform.interfaces,
  *             sequencer.{engine,note,timeline}, tests.rt_malloc_trap
  *   External: core.thread, std.file, std.math, std.path
  *
@@ -37,6 +37,7 @@ version (unittest) {
     import app.audio_host : AudioLoadTelemetry, createEngineRtContext, destroyEngineRtContext, EngineRtContext,
         renderHostBufferRt, RtMidiSource;
     import app.history : DelegateCommand;
+    import app.music_theory : KeyMode, MusicalKey;
     import app.session : ExportOptions, ExportState, MidiNoteEvent, SamplePeaks, StudioSession;
     import app.telemetry : ScopeHistory;
     import foundation.memory : OwnedBuffer;
@@ -626,4 +627,77 @@ version (unittest) {
     }
 
     import std.conv : to;
+
+    unittest {
+        StudioSession s = new StudioSession();
+        assert(s.initialize(44_100.0f));
+        scope (exit) s.shutdown();
+        assert(s.timeSignatureNumerator() == 4 && s.timeSignatureDenominator() == 4);
+        assert(s.linesPerBeat() == 4 && s.linesPerBar() == 16);
+        assert(s.songKey() == MusicalKey.init && !s.isDirty() && !s.history().canUndo());
+
+        assert(s.doSetTimeSignature(4, 4) && !s.history().canUndo() && !s.isDirty());
+        assert(s.doSetKey(MusicalKey.init) && !s.history().canUndo());
+
+        static immutable uint[4][] shapes = [[3, 4, 4, 12], [6, 8, 2, 12], [7, 8, 2, 14], [2, 2, 8, 16],
+            [5, 16, 1, 5], [16, 4, 4, 64], [1, 4, 4, 4]];
+        foreach (sh; shapes) {
+            assert(s.doSetTimeSignature(sh[0], sh[1]));
+            assert(s.timeSignatureNumerator() == sh[0] && s.timeSignatureDenominator() == sh[1]);
+            assert(s.linesPerBeat() == sh[2] && s.linesPerBar() == sh[3]);
+        }
+        assert(s.isDirty());
+        foreach_reverse (i; 0 .. shapes.length - 1) {
+            assert(s.undo());
+            assert(s.timeSignatureNumerator() == shapes[i][0] && s.timeSignatureDenominator() == shapes[i][1]);
+        }
+        assert(s.undo() && s.timeSignatureNumerator() == 4 && s.timeSignatureDenominator() == 4);
+        assert(s.redo() && s.timeSignatureNumerator() == 3);
+
+        immutable size_t beforeBad = s.document().timeSigNumerator;
+        foreach (bad; [[0, 4], [17, 4], [4, 0], [4, 3], [4, 32], [4, 1]]) {
+            assert(!s.doSetTimeSignature(bad[0], bad[1]));
+        }
+        assert(s.timeSignatureNumerator() == beforeBad && s.timeSignatureDenominator() == 4);
+
+        immutable MusicalKey aMinor = MusicalKey(9, KeyMode.minor);
+        assert(s.doSetKey(aMinor) && s.songKey() == aMinor);
+        assert(s.document().keyTonic == 9 && s.document().keyMode == 1);
+        assert(s.doSetKey(MusicalKey(10, KeyMode.major)) && s.songKey().tonic == 10);
+        assert(!s.doSetKey(MusicalKey(12, KeyMode.major)) && !s.doSetKey(MusicalKey(0, cast(KeyMode) 2)));
+        assert(s.songKey().tonic == 10);
+        assert(s.undo() && s.songKey() == aMinor);
+        assert(s.undo() && s.songKey() == MusicalKey.init);
+        assert(s.redo() && s.songKey() == aMinor);
+
+        string err;
+        ubyte[] bytes;
+        assert(s.saveProjectToBytes(bytes, err), err);
+        StudioSession t = new StudioSession();
+        assert(t.initialize(44_100.0f));
+        scope (exit) t.shutdown();
+        assert(t.loadProjectFromBytes(bytes, err), err);
+        assert(t.timeSignatureNumerator() == 3 && t.timeSignatureDenominator() == 4 && t.linesPerBar() == 12);
+        assert(t.songKey() == aMinor);
+        t.newEmptyProject(true);
+        assert(t.linesPerBeat() == 4 && t.songKey() == MusicalKey.init);
+
+        float[256] l = 0.0f;
+        float[256] r = 0.0f;
+        float[][2] outs = [l[], r[]];
+        const(float[])[2] ins = [null, null];
+        foreach (sig; [[4, 4, 16, 4], [6, 8, 12, 6], [2, 2, 16, 2], [3, 4, 12, 3], [1, 4, 8, 2], [7, 8, 14, 7]]) {
+            StudioSession c = new StudioSession();
+            assert(c.initialize(44_100.0f));
+            scope (exit) c.shutdown();
+            assert(c.doSetTimeSignature(sig[0], sig[1]));
+            assert(c.countInBeats() == sig[3]);
+            assert(c.beginLiveTake(40));
+            c.engine().processHostBuffer(outs, ins, 256);
+            EngineTelemetry tel;
+            assert(c.engine().readTelemetry(tel) && tel.countingIn);
+            assert(tel.currentLine == 40 - sig[2], to!string(tel.currentLine));
+            c.endLiveTake();
+        }
+    }
 }

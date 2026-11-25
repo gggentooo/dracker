@@ -14,6 +14,8 @@
  *   idle CPU, and zero autorelease/malloc and GC heap growth across 100,000 presented Metal frames. Phase 8.5:
  *   create() registers bundled fonts at process scope (bundledFontDirectories()) and selects the default
  *   Atkinson Hyperlegible Next / Fira Code families before the first frame.
+ *   A closeRequested event (window close button, Dracker ▸ Quit) ends the loop unless sceneHandlesClose is set,
+ *   in which case the scene decides (the studio asks before discarding unsaved changes).
  *
  * Real-Time & Safety Contract:
  *   Main UI thread only; never touches the audio thread. All Objective-C work is delegated to
@@ -124,6 +126,12 @@ final class GuiShell {
     MetalRenderer renderer;
     IGuiScene scene;
     bool quitRequested = false;
+
+    /**
+     * When true, a closeRequested event (window close button, Dracker ▸ Quit) only reaches the scene, which
+     * decides whether to quit; when false (default) the shell quits at once.
+     */
+    bool sceneHandlesClose = false;
     bool forceRedraw = true;
     ulong framesRendered = 0;
     ulong occludedTicks = 0;
@@ -283,7 +291,7 @@ final class GuiShell {
             if (eventObserver_ !is null) {
                 eventObserver_(ev);
             }
-            if (ev.kind == PlatformEventKind.closeRequested) {
+            if (ev.kind == PlatformEventKind.closeRequested && !sceneHandlesClose) {
                 quitRequested = true;
             }
             if (ev.kind == PlatformEventKind.resize || ev.kind == PlatformEventKind.focusChanged) {

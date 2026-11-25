@@ -4,7 +4,7 @@
  * Phase:        Phase 6 — Persistence, Undo/Redo, Keymap, Session & Importer Tests
  *
  * Purpose:
- *   Verifies bounds-checked BinaryReader/BinaryWriter, bit-exact .msv/.msym WAV round-trips (including Sampler PCM, WaveShaper custom curve, unknown chunks, and MetaModule child projects), UndoHistory + StudioSession bridge, Keymap, and SMF/XM/SunVox importers.
+ *   Verifies bounds-checked BinaryReader/BinaryWriter, bit-exact .msv/.msym WAV round-trips (including Sampler PCM, WaveShaper custom curve, unknown chunks, and MetaModule child projects), UndoHistory + StudioSession bridge, opening a project built in memory (StudioSession.openProjectFromMemory), time signature and key storage (MUSC chunk), Keymap, and SMF/XM/SunVox importers.
  *
  * Real-Time & Safety Contract:
  *   Executes RT audio quantum verification inside verifyZeroRtAllocationsNothrow and cleans up all temporary files via scope(exit).
@@ -35,8 +35,9 @@ version (unittest) {
     import io.audio_io : writeWavMemory;
     import io.binary_stream : BinaryReader, BinaryWriter;
     import io.importers.sunvox_importer : ImportReport;
-    import io.project_format : LoadedPreset, LoadedProject, loadPreset, loadProject, SavedModule,
-        SavedPattern, SavedWire, serializePreset, serializeProject;
+    import io.project_format : hasNonDefaultMusicSettings, KEY_MODE_MAJOR, KEY_MODE_MINOR, LoadedPreset,
+        LoadedProject, loadPreset, loadProject, SavedModule, SavedPattern, SavedWire, serializePreset,
+        serializeProject;
     import modules.control.metamodule : MetaMacroBinding, MetaModuleAsset;
     import modules.effects.waveshaper : WaveShaperCurveAsset;
     import modules.synths.sampler : createSamplerAssetFromMemory, SamplerSlotAsset;
@@ -756,5 +757,184 @@ version (unittest) {
         OwnedBuffer!float svR;
         assert(sSv.engine().renderOfflineToBuffer(2048, 64, svL, svR));
         assert(maxPeakStereo(svL[], svR[]) > 0.01f);
+    }
+
+    private LoadedProject makeMemoryProject() {
+        LoadedProject proj;
+        proj.title = "Skeleton";
+        proj.bpm = 96.0;
+        proj.ticksPerLine = 6;
+        SavedModule master;
+        master.id = 1;
+        master.typeId = "core.output";
+        master.name = "Master Output";
+        master.paramValues = [1.0f, 1.0f];
+        SavedModule synth;
+        synth.id = 2;
+        synth.typeId = "synth.analog_gen";
+        synth.name = "Bass";
+        proj.modules = [master, synth];
+        proj.wires = [SavedWire(2, 2, 1, 0, 1.0f)];
+        SavedPattern pat;
+        pat.patternId = 1;
+        pat.tracks = 1;
+        pat.lines = 16;
+        pat.name = "Bass";
+        pat.cells = new NoteCell[16];
+        pat.cells[0] = NoteCell.makeNote(48, 0.9f, 2);
+        proj.patterns = [pat];
+        proj.clips = [TimelineClip(1, 1, 0, 0, 16, 0, 0, false, false, false)];
+        return proj;
+    }
+
+    unittest {
+        StudioSession s = new StudioSession();
+        assert(s.initialize(44_100.0f));
+        scope (exit) s.shutdown();
+        string err;
+        immutable uint old = s.doAddModule("synth.fm_synth", "Old", 0.0f, 0.0f);
+        assert(old != 0 && s.history().canUndo());
+
+        LoadedProject proj = makeMemoryProject();
+        assert(s.openProjectFromMemory(proj, err), err);
+        assert(err.length == 0);
+        assert(s.document().title == "Skeleton" && s.document().bpm == 96.0);
+        assert(s.document().modules.length == 2 && s.document().modules[1].name == "Bass");
+        assert(s.document().wires.length == 1 && s.document().clips.length == 1);
+        assert(s.document().patterns[0].cells[0].note == NoteCell.makeNote(48, 0.9f, 2).note);
+        assert(s.isDirty() && s.currentPath().length == 0);
+        assert(!s.history().canUndo() && !s.history().canRedo());
+        assert(proj.title == "Skeleton" && proj.modules.length == 2);
+
+        immutable uint added = s.doAddModule("synth.fm_synth", "Next", 0.0f, 0.0f);
+        assert(added == 3);
+        assert(s.undo());
+
+        OwnedBuffer!float l;
+        OwnedBuffer!float r;
+        s.engine().reset();
+        s.engine().setTempo(96.0, 6);
+        s.engine().seekLine(0);
+        s.engine().setPlaying(true);
+        assert(s.engine().renderOfflineToBuffer(4096, 64, l, r));
+        assert(maxPeakStereo(l[], r[]) > 0.01f);
+
+        LoadedProject badTempo = makeMemoryProject();
+        badTempo.title = "Bad tempo";
+        badTempo.bpm = 5.0;
+        assert(!s.openProjectFromMemory(badTempo, err) && err.length > 0);
+        assert(s.document().title == "Skeleton" && s.document().modules.length == 2);
+
+        LoadedProject badType = makeMemoryProject();
+        badType.title = "Bad type";
+        badType.modules[1].typeId = "synth.does_not_exist";
+        assert(!s.openProjectFromMemory(badType, err) && err.length > 0);
+        assert(s.document().title == "Skeleton" && s.document().modules.length == 2);
+
+        LoadedProject badShape = makeMemoryProject();
+        badShape.title = "Bad shape";
+        badShape.patterns[0].lines = 0;
+        assert(!s.openProjectFromMemory(badShape, err) && err.length > 0);
+        assert(s.document().title == "Skeleton");
+
+        LoadedProject dupIds = makeMemoryProject();
+        dupIds.title = "Duplicate ids";
+        dupIds.modules[1].id = 1;
+        assert(!s.openProjectFromMemory(dupIds, err) && err.length > 0);
+        assert(s.document().title == "Skeleton" && s.isDirty());
+    }
+
+    private bool hasChunk(const(ubyte)[] bytes, string id) {
+        foreach (i; 0 .. bytes.length >= 4 ? bytes.length - 3 : 0) {
+            if (bytes[i .. i + 4] == cast(const(ubyte)[]) id) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    unittest {
+        string err;
+        LoadedProject plain = makeMemoryProject();
+        assert(plain.timeSigNumerator == 4 && plain.timeSigDenominator == 4);
+        assert(plain.keyTonic == 0 && plain.keyMode == KEY_MODE_MAJOR && !hasNonDefaultMusicSettings(plain));
+        ubyte[] plainBytes;
+        assert(serializeProject(plain, plainBytes, err));
+        assert(!hasChunk(plainBytes, "MUSC"));
+        LoadedProject back;
+        assert(loadProject(plainBytes, back, err));
+        assert(back.timeSigNumerator == 4 && back.timeSigDenominator == 4 && back.keyTonic == 0
+            && back.keyMode == KEY_MODE_MAJOR);
+
+        LoadedProject waltz = makeMemoryProject();
+        waltz.timeSigNumerator = 3;
+        waltz.keyTonic = 9;
+        waltz.keyMode = KEY_MODE_MINOR;
+        assert(hasNonDefaultMusicSettings(waltz));
+        ubyte[] waltzBytes;
+        assert(serializeProject(waltz, waltzBytes, err));
+        assert(hasChunk(waltzBytes, "MUSC") && waltzBytes.length == plainBytes.length + 12);
+        assert(loadProject(waltzBytes, back, err));
+        assert(back.timeSigNumerator == 3 && back.timeSigDenominator == 4 && back.keyTonic == 9
+            && back.keyMode == KEY_MODE_MINOR);
+
+        foreach (sig; [[1, 2], [16, 16], [6, 8], [7, 8]]) {
+            LoadedProject t = makeMemoryProject();
+            t.timeSigNumerator = cast(ubyte) sig[0];
+            t.timeSigDenominator = cast(ubyte) sig[1];
+            ubyte[] b;
+            assert(serializeProject(t, b, err) && loadProject(b, back, err));
+            assert(back.timeSigNumerator == sig[0] && back.timeSigDenominator == sig[1]);
+        }
+        foreach (bad; [[0, 4], [17, 4], [4, 0], [4, 1], [4, 3], [4, 32]]) {
+            LoadedProject t = makeMemoryProject();
+            t.timeSigNumerator = cast(ubyte) bad[0];
+            t.timeSigDenominator = cast(ubyte) bad[1];
+            ubyte[] b;
+            assert(!serializeProject(t, b, err) && err == "Invalid time signature");
+        }
+        foreach (bad; [[12, 0], [255, 0], [0, 2]]) {
+            LoadedProject t = makeMemoryProject();
+            t.keyTonic = cast(ubyte) bad[0];
+            t.keyMode = cast(ubyte) bad[1];
+            ubyte[] b;
+            assert(!serializeProject(t, b, err) && err == "Invalid song key");
+        }
+
+        BinaryWriter extended;
+        extended.writeBytes(plainBytes);
+        extended.writeChunk(['M', 'U', 'S', 'C'], cast(const(ubyte)[]) [cast(ubyte) 6, 8, 2, 1, 0xAA, 0xBB]);
+        assert(loadProject(extended.bytes(), back, err));
+        assert(back.timeSigNumerator == 6 && back.timeSigDenominator == 8 && back.keyTonic == 2 && back.keyMode == 1);
+
+        BinaryWriter truncated;
+        truncated.writeBytes(plainBytes);
+        truncated.writeChunk(['M', 'U', 'S', 'C'], cast(const(ubyte)[]) [cast(ubyte) 3, 4, 0]);
+        assert(!loadProject(truncated.bytes(), back, err) && err == "Truncated MUSC chunk");
+
+        BinaryWriter badSig;
+        badSig.writeBytes(plainBytes);
+        badSig.writeChunk(['M', 'U', 'S', 'C'], cast(const(ubyte)[]) [cast(ubyte) 3, 5, 0, 0]);
+        assert(!loadProject(badSig.bytes(), back, err) && err == "Invalid time signature in MUSC chunk");
+
+        BinaryWriter badKey;
+        badKey.writeBytes(plainBytes);
+        badKey.writeChunk(['M', 'U', 'S', 'C'], cast(const(ubyte)[]) [cast(ubyte) 3, 4, 12, 0]);
+        assert(!loadProject(badKey.bytes(), back, err) && err == "Invalid song key in MUSC chunk");
+
+        StudioSession s = new StudioSession();
+        assert(s.initialize(44_100.0f));
+        scope (exit) s.shutdown();
+        assert(s.document().timeSigNumerator == 4 && s.document().keyMode == KEY_MODE_MAJOR);
+        assert(s.loadProjectFromBytes(waltzBytes, err), err);
+        assert(s.document().timeSigNumerator == 3 && s.document().keyTonic == 9);
+        ubyte[] saved;
+        assert(s.saveProjectToBytes(saved, err));
+        assert(loadProject(saved, back, err));
+        assert(back.timeSigNumerator == 3 && back.timeSigDenominator == 4 && back.keyTonic == 9
+            && back.keyMode == KEY_MODE_MINOR);
+        assert(s.openProjectFromMemory(waltz, err) && s.document().keyMode == KEY_MODE_MINOR);
+        s.newEmptyProject(true);
+        assert(s.document().timeSigNumerator == 4 && s.document().keyTonic == 0);
     }
 }

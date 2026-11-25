@@ -14,6 +14,11 @@
  *   clear color / glyph gamma as IAppearanceBackend; the scene loads the persisted appearance
  *   (~/Library/Application Support/Dracker/appearance.cfg) before the first frame and keeps the native
  *   View ▸ High Contrast checkmark in sync; the GUI self-test also drives the Appearance menu and panel.
+ *   The studio sets GuiShell.sceneHandlesClose, so the window close button and Dracker ▸ Quit go through
+ *   StudioRoot.requestClose(), which asks before discarding unsaved changes (New and Open ask the same way).
+ *   A Dock-menu quit arrives the same way (closeRequested). Logout, restart and shutdown quit without asking:
+ *   MacWindow.sessionEndHandler cancels a running export (and waits for it to stop) and closes the audio host, then macOS ends the process
+ *   and unsaved changes are lost (owner decision, T28).
  *
  * Real-Time & Safety Contract:
  *   UI thread only; audio is reached exclusively through AudioHost and StudioSession.
@@ -272,6 +277,10 @@ final class StudioScene : IGuiScene {
     }
 
     override void handleEvent(const ref PlatformEvent ev) {
+        if (ev.kind == PlatformEventKind.closeRequested) {
+            root_.requestClose();
+            return;
+        }
         if (ev.kind == PlatformEventKind.mouseDown) {
             import gui.renderer : Point2F;
 
@@ -484,6 +493,17 @@ int runStudioApp(string[] args) {
         scene.context().setStatus("Audio unavailable: " ~ audioErr);
     }
     shell.scene = scene;
+    shell.sceneHandlesClose = true;
+    shell.window.sessionEndHandler = () nothrow {
+        try {
+            session.cancelExport();
+            session.waitForExport();
+            if (host !is null) {
+                host.close();
+            }
+        } catch (Exception) {
+        }
+    };
     while (shell.window.isOpen() && !shell.quitRequested && !scene.quitRequested) {
         shell.tick();
     }
