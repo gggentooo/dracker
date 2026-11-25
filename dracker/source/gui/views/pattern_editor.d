@@ -40,7 +40,17 @@
  *             gui.views.studio_context, io.project_format, platform.interfaces, sequencer.note
  *   External: std.format (format), std.math (ceil, floor)
  *
+ *   T43 (pattern editor views): a view bar above the header offers Tracker, Piano roll and Drumpad. The tracker
+ *   grid is built into this class; the other views are widgets registered with registerView() that fill
+ *   viewRect() while current. A view is enabled when the pattern's type offers it (normal: Tracker + Piano roll;
+ *   drum: Drumpad + Tracker) and, for the two others, a widget is registered. The chosen view is remembered per
+ *   pattern for this run. While another view is current the tracker ignores mouse, keys, MIDI step entry and its
+ *   context menu, and studio actions go to the view when it implements StudioCommandSink. The Trk box is shown
+ *   in the Tracker view only.
+ *
  * Planned API (Types, Functions & Hooks):
+ *   - enum PatternViewKind; class ViewTabButton : Button (lit); PatternEditorView.registerView(), viewOffered(),
+ *     viewAvailable(), currentView(), setView(), viewRect(), viewButtons
  *   - enum PatternField / PATTERN_FIELD_COUNT / CELL_TEXT_COLUMNS
  *   - struct CellText; CellText formatCell(NoteCell); string formatCellText(NoteCell); formatNoteName()
  *   - uint velocityToDisplay(ubyte) / ubyte velocityFromDisplay(uint)
@@ -68,10 +78,12 @@ import app.session : MidiNoteEvent;
 import foundation.types : ModuleId;
 import gui.renderer : ColorRGBA, FontId, IRenderer2D, ITextMeasurer, Point2F, RectF;
 import gui.theme : StudioTheme;
+import gui.views.drumpad_view : DrumpadView;
+import gui.views.piano_roll_view : PianoRollView;
 import gui.views.studio_context : StudioContext;
 import gui.widgets : Button, Dropdown, KeyCode, KeyEvent, lineHeightOr, measureTextOr, MenuItem, MouseButton,
     MouseEvent, NumericDragBox, openTextEditor, ScrollEvent, TextField, ValueRange, Widget;
-import io.project_format : MAX_PATTERNS, SavedPattern;
+import io.project_format : MAX_PATTERNS, PATTERN_KIND_DRUM, SavedPattern;
 import platform.interfaces : KeyModifiers, PlatformEvent, PlatformEventKind;
 import sequencer.note : NoteCell, NoteCmd;
 
@@ -485,7 +497,48 @@ final class PatternDimensionBox : NumericDragBox {
 /**
  * Tracker pattern grid editor for ctx.currentPattern().
  */
+/**
+ * The views the pattern editor can show (T30). Tracker is built into PatternEditorView; the other two are
+ * widgets registered with PatternEditorView.registerView().
+ */
+enum PatternViewKind : ubyte {
+    tracker = 0,
+    pianoRoll = 1,
+    drumpad = 2
+}
+
+/**
+ * Button of the pattern editor's view bar; the current view's button is lit: a 2-point outline and a bar under
+ * the caption, so the state does not rely on color.
+ */
+final class ViewTabButton : Button {
+    bool lit = false;
+
+    /**
+     * Creates a view button.
+     *
+     * Params:
+     *   caption = Text.
+     *   handler = Click handler.
+     */
+    this(string caption, void delegate() handler) {
+        super(caption, handler);
+    }
+
+    override void paint(IRenderer2D r, const ref StudioTheme theme) {
+        super.paint(r, theme);
+        if (lit) {
+            r.strokeRoundedRect(bounds.inset(1.0f), theme.radiusMd, 2.0f, theme.borderStrong);
+            r.fillRect(RectF(bounds.x + 6.0f, bounds.bottom() - 4.0f, bounds.w - 12.0f, 2.0f), theme.text);
+        }
+    }
+}
+
 final class PatternEditorView : Widget, StudioCommandSink {
+    enum float VIEW_BAR_H = 28.0f;
+    static immutable string[3] VIEW_NAMES = ["Tracker", "Piano roll", "Drumpad"];
+    static immutable string[3] VIEW_IDS = ["pattern.view.tracker", "pattern.view.pianoRoll", "pattern.view.drumpad"];
+
     enum uint MAX_EDIT_STEP = 64;
     enum uint PAGE_LINES = 16;
 
@@ -494,9 +547,12 @@ final class PatternEditorView : Widget, StudioCommandSink {
     PatternDimensionBox tracksBox;
     PatternDimensionBox linesBox;
     Button addButton;
+    Button addDrumButton;
     Button duplicateButton;
     Button deleteButton;
+    Button patternMenuButton;
     bool hexLineNumbers = true;
+    ViewTabButton[3] viewButtons;
 
     private uint shownPattern_ = 0;
     private uint cursorTrack_ = 0;
@@ -521,6 +577,8 @@ final class PatternEditorView : Widget, StudioCommandSink {
     private float cellW_ = 145.0f;
     private float gutterW_ = 37.0f;
     private float headerH_ = 30.0f;
+    private Widget[3] viewWidgets_;
+    private PatternViewKind[uint] viewByPattern_;
     private float monoSize_ = 12.0f;
     private float labelTracksX_ = 0.0f;
     private float labelLinesX_ = 0.0f;
@@ -554,32 +612,177 @@ final class PatternEditorView : Widget, StudioCommandSink {
     }
 
     /**
-     * Creates the editor and its header controls.
+     * Creates the editor, its header controls, and optionally registers the built-in Piano roll and Drumpad views.
      *
      * Params:
      *   ctx = Shared studio context.
+     *   registerBuiltInViews = True to register PianoRollView and DrumpadView automatically.
      */
-    this(StudioContext ctx) {
+    this(StudioContext ctx, bool registerBuiltInViews = true) {
         this.ctx = ctx;
         id = "pattern.editor";
         focusable = true;
         patternSelect = add(new Dropdown(null, 0, &onPatternChosen));
         patternSelect.id = "pattern.select";
         patternSelect.onDoubleClick = () { beginRenamePattern(); };
+        patternSelect.contextMenuProvider = (Point2F _) { return patternMenuItems(); };
         tracksBox = add(new PatternDimensionBox("pattern.tracks", ValueRange(1.0f, 64.0f, 4.0f, false, 1.0f)));
         tracksBox.onCommit = (uint n) { resizeCurrent(n, 0); };
         linesBox = add(new PatternDimensionBox("pattern.lines", ValueRange(1.0f, 4096.0f, 64.0f, false, 1.0f)));
         linesBox.onCommit = (uint n) { resizeCurrent(0, n); };
         addButton = add(new Button("Add", &addPattern));
         addButton.id = "pattern.add";
+        addDrumButton = add(new Button("+Drum", &addDrumPattern));
+        addDrumButton.id = "pattern.addDrum";
         duplicateButton = add(new Button("Dup", &duplicatePattern));
         duplicateButton.id = "pattern.duplicate";
         deleteButton = add(new Button("Del", &deletePattern));
         deleteButton.id = "pattern.delete";
+        patternMenuButton = add(new Button("...", &openPatternMenu));
+        patternMenuButton.id = "pattern.menu";
+        foreach (i; 0 .. 3) {
+            viewButtons[i] = add(new ViewTabButton(VIEW_NAMES[i], viewHandler(cast(PatternViewKind) i)));
+            viewButtons[i].id = VIEW_IDS[i];
+        }
         contextMenuProvider = &buildContextMenu;
+        if (registerBuiltInViews) {
+            registerView(PatternViewKind.pianoRoll, new PianoRollView(ctx));
+            registerView(PatternViewKind.drumpad, new DrumpadView(ctx));
+        }
         updateMetrics(null, ctx.theme);
         syncPatternSelection();
         syncHeaderWidgets();
+    }
+
+    /**
+     * Returns the registered Piano roll view, or null if none is registered.
+     *
+     * Returns:
+     *   PianoRollView or null.
+     */
+    PianoRollView pianoRollView() {
+        return cast(PianoRollView) viewWidgets_[PatternViewKind.pianoRoll];
+    }
+
+    /**
+     * Returns the registered Drumpad view, or null if none is registered.
+     *
+     * Returns:
+     *   DrumpadView or null.
+     */
+    DrumpadView drumpadView() {
+        return cast(DrumpadView) viewWidgets_[PatternViewKind.drumpad];
+    }
+
+    /**
+     * Registers the widget that shows a view other than the tracker (the piano roll or the drumpad). It becomes a
+     * child of the editor, fills the area below the shared header while its view is current, and receives studio
+     * actions when it implements StudioCommandSink. Until a view is registered its button stays disabled.
+     *
+     * Params:
+     *   kind = pianoRoll or drumpad.
+     *   w = View widget (parentless).
+     */
+    void registerView(PatternViewKind kind, Widget w) {
+        if (kind == PatternViewKind.tracker || w is null) {
+            return;
+        }
+        if (viewWidgets_[kind] !is null) {
+            remove(viewWidgets_[kind]);
+        }
+        viewWidgets_[kind] = add(w);
+        w.visible = false;
+        syncView();
+    }
+
+    /**
+     * Reports whether the current pattern's type offers a view (T30): normal patterns offer Tracker and Piano
+     * roll, drum patterns offer Drumpad and Tracker.
+     *
+     * Params:
+     *   kind = View.
+     *
+     * Returns:
+     *   True if offered.
+     */
+    bool viewOffered(PatternViewKind kind) {
+        immutable bool drum = ctx.session.patternKind(ctx.currentPattern()) == PATTERN_KIND_DRUM;
+        final switch (kind) {
+            case PatternViewKind.tracker:
+                return true;
+            case PatternViewKind.pianoRoll:
+                return !drum;
+            case PatternViewKind.drumpad:
+                return drum;
+        }
+    }
+
+    /**
+     * Reports whether a view can be shown now: it is offered for the pattern and, unless it is the tracker, a
+     * widget is registered for it.
+     *
+     * Params:
+     *   kind = View.
+     *
+     * Returns:
+     *   True if its button is enabled.
+     */
+    bool viewAvailable(PatternViewKind kind) {
+        return viewOffered(kind) && (kind == PatternViewKind.tracker || viewWidgets_[kind] !is null);
+    }
+
+    /**
+     * Returns the view shown for the current pattern: the one chosen for it earlier in this run when still
+     * available, else Drumpad for a drum pattern (when registered), else Tracker.
+     *
+     * Returns:
+     *   Current view.
+     */
+    PatternViewKind currentView() {
+        immutable uint pid = ctx.currentPattern();
+        if (auto chosen = pid in viewByPattern_) {
+            if (viewAvailable(*chosen)) {
+                return *chosen;
+            }
+        }
+        return viewAvailable(PatternViewKind.drumpad) ? PatternViewKind.drumpad : PatternViewKind.tracker;
+    }
+
+    /**
+     * Shows a view for the current pattern and remembers it for that pattern until the app quits (it is not
+     * saved in the project). Keyboard focus moves to the view.
+     *
+     * Params:
+     *   kind = View.
+     *
+     * Returns:
+     *   False when the view is not available.
+     */
+    bool setView(PatternViewKind kind) {
+        if (!viewAvailable(kind)) {
+            return false;
+        }
+        viewByPattern_[ctx.currentPattern()] = kind;
+        syncView();
+        if (auto ui = context()) {
+            Widget target = kind == PatternViewKind.tracker ? this : viewWidgets_[kind];
+            ui.setFocus(target.focusable ? target : this);
+            layoutChildren();
+        }
+        invalidate();
+        return true;
+    }
+
+    /**
+     * Returns the rectangle a non-tracker view fills: everything below the view bar and the shared header.
+     *
+     * Returns:
+     *   Rectangle in window coordinates.
+     */
+    RectF viewRect() const {
+        immutable float top = originY() + headerH_;
+        immutable float h = bounds.bottom() - top;
+        return RectF(bounds.x, top, bounds.w, h > 0.0f ? h : 0.0f);
     }
 
     /**
@@ -779,6 +982,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
      */
     void update() {
         syncPatternSelection();
+        syncView();
         clampState();
         syncHeaderWidgets();
         consumeMidi();
@@ -796,6 +1000,10 @@ final class PatternEditorView : Widget, StudioCommandSink {
      *   True while playing with follow enabled or when the playhead line changed since the last frame.
      */
     override bool isAnimating() {
+        immutable PatternViewKind view = currentView();
+        if (view != PatternViewKind.tracker && viewWidgets_[view] !is null) {
+            return viewWidgets_[view].isAnimating();
+        }
         if (ctx.telemetry.engine.playing && ctx.followPlayhead) {
             return true;
         }
@@ -812,6 +1020,11 @@ final class PatternEditorView : Widget, StudioCommandSink {
      *   True if handled (noteOffEntry is always consumed but only writes in edit mode).
      */
     bool handleStudioAction(StudioAction action) {
+        immutable PatternViewKind view = currentView();
+        if (view != PatternViewKind.tracker) {
+            auto sink = cast(StudioCommandSink) viewWidgets_[view];
+            return sink !is null && sink.handleStudioAction(action);
+        }
         switch (action) {
             case StudioAction.noteOffEntry:
                 if (ctx.editMode) {
@@ -893,24 +1106,39 @@ final class PatternEditorView : Widget, StudioCommandSink {
         }
         immutable float gap = ctx.theme.spacingSm;
         immutable float ch = ctx.theme.controlHeight;
-        immutable float y = bounds.y + (headerH_ - ch) * 0.5f;
+        float vx = bounds.x + gap;
+        static immutable float[3] tabW = [78.0f, 92.0f, 86.0f];
+        foreach (i; 0 .. 3) {
+            viewButtons[i].arrange(RectF(vx, bounds.y + 3.0f, tabW[i], VIEW_BAR_H - 6.0f));
+            vx += tabW[i] + gap;
+        }
+        foreach (i; 1 .. 3) {
+            if (viewWidgets_[i] !is null) {
+                viewWidgets_[i].arrange(viewRect());
+            }
+        }
+        immutable float y = originY() + (headerH_ - ch) * 0.5f;
         float x = bounds.x + gap;
-        patternSelect.arrange(RectF(x, y, 150.0f, ch));
-        x += 150.0f + gap * 2.0f;
+        patternSelect.arrange(RectF(x, y, 138.0f, ch));
+        x += 138.0f + gap;
+        patternMenuButton.arrange(RectF(x, y, 26.0f, ch));
+        x += 26.0f + gap * 2.0f;
         labelTracksX_ = x;
-        x += 28.0f;
-        tracksBox.arrange(RectF(x, y, 44.0f, ch));
-        x += 44.0f + gap * 2.0f;
+        x += 24.0f;
+        tracksBox.arrange(RectF(x, y, 42.0f, ch));
+        x += 42.0f + gap * 2.0f;
         labelLinesX_ = x;
-        x += 28.0f;
-        linesBox.arrange(RectF(x, y, 56.0f, ch));
-        x += 56.0f + gap * 2.0f;
-        addButton.arrange(RectF(x, y, 44.0f, ch));
-        x += 44.0f + gap;
-        duplicateButton.arrange(RectF(x, y, 44.0f, ch));
-        x += 44.0f + gap;
-        deleteButton.arrange(RectF(x, y, 44.0f, ch));
-        infoX_ = x + 44.0f + gap * 3.0f;
+        x += 24.0f;
+        linesBox.arrange(RectF(x, y, 52.0f, ch));
+        x += 52.0f + gap * 2.0f;
+        addButton.arrange(RectF(x, y, 38.0f, ch));
+        x += 38.0f + gap;
+        addDrumButton.arrange(RectF(x, y, 52.0f, ch));
+        x += 52.0f + gap;
+        duplicateButton.arrange(RectF(x, y, 38.0f, ch));
+        x += 38.0f + gap;
+        deleteButton.arrange(RectF(x, y, 38.0f, ch));
+        infoX_ = x + 38.0f + gap * 2.0f;
     }
 
     /**
@@ -924,8 +1152,13 @@ final class PatternEditorView : Widget, StudioCommandSink {
         updateMetrics(r, theme);
         update();
         r.fillRect(bounds, theme.panel);
+        r.fillRect(RectF(bounds.x, bounds.y, bounds.w, VIEW_BAR_H), theme.panel);
+        r.fillRect(RectF(bounds.x, bounds.y + VIEW_BAR_H - 1.0f, bounds.w, 1.0f), theme.border);
         paintHeader(r, theme);
-        r.pushClip(RectF(bounds.x, bounds.y + headerH_, bounds.w, bounds.h - headerH_ > 0.0f ? bounds.h - headerH_ : 0.0f));
+        if (currentView() != PatternViewKind.tracker) {
+            return;
+        }
+        r.pushClip(viewRect());
         paintGrid(r, theme);
         r.popClip();
         if (isFocused()) {
@@ -947,7 +1180,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
      *   True if the press hit the grid.
      */
     override bool onMouseDown(const ref MouseEvent e) {
-        if (e.button != MouseButton.left) {
+        if (e.button != MouseButton.left || currentView() != PatternViewKind.tracker) {
             return false;
         }
         uint t, l, f;
@@ -1042,7 +1275,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
      *   True if the event was inside the view.
      */
     override bool onScroll(const ref ScrollEvent e) {
-        if (!bounds.contains(e.pos)) {
+        if (!bounds.contains(e.pos) || currentView() != PatternViewKind.tracker) {
             return false;
         }
         const sp = currentPatternDoc();
@@ -1079,6 +1312,9 @@ final class PatternEditorView : Widget, StudioCommandSink {
      *   True if handled (document-level actions bubble to the studio root).
      */
     override bool onKeyDown(const ref KeyEvent e) {
+        if (currentView() != PatternViewKind.tracker) {
+            return false;
+        }
         immutable StudioAction act = ctx.session.keymap().resolveAction(e.keyCode, e.modifiers);
         if (act != StudioAction.none) {
             if (isDocumentLevel(act)) {
@@ -1154,8 +1390,29 @@ final class PatternEditorView : Widget, StudioCommandSink {
         return sp.cells.length >= cells.length && sp.cells[0 .. cells.length] == cells;
     }
 
+    private float originY() const {
+        return bounds.y + VIEW_BAR_H;
+    }
+
+    private void delegate() viewHandler(PatternViewKind kind) {
+        return () { setView(kind); };
+    }
+
+    private void syncView() {
+        immutable PatternViewKind view = currentView();
+        foreach (i; 0 .. 3) {
+            immutable PatternViewKind k = cast(PatternViewKind) i;
+            viewButtons[i].enabled = viewAvailable(k);
+            viewButtons[i].lit = k == view;
+            if (viewWidgets_[i] !is null) {
+                viewWidgets_[i].visible = k == view;
+            }
+        }
+        tracksBox.visible = view == PatternViewKind.tracker;
+    }
+
     private RectF gridRect() const {
-        immutable float top = bounds.y + headerH_ + rowH_;
+        immutable float top = originY() + headerH_ + rowH_;
         immutable float h = bounds.bottom() - top;
         return RectF(bounds.x, top, bounds.w, h > 0.0f ? h : 0.0f);
     }
@@ -1219,6 +1476,11 @@ final class PatternEditorView : Widget, StudioCommandSink {
         scrollTrack_ = scrollTrack_ > st ? st : scrollTrack_;
     }
 
+    private static string formatPatternListEntry(const ref SavedPattern p) {
+        return p.kind == PATTERN_KIND_DRUM ? format("%02X [D] %s", p.patternId, p.name)
+            : format("%02X %s", p.patternId, p.name);
+    }
+
     private void syncHeaderWidgets() {
         const doc = ctx.session.document();
         immutable ulong rev = ctx.documentRevision();
@@ -1228,15 +1490,17 @@ final class PatternEditorView : Widget, StudioCommandSink {
             itemsSelectionRevision_ = selRev;
             string[] names = new string[doc.patterns.length];
             foreach (i, ref p; doc.patterns) {
-                names[i] = format("%02X %s", p.patternId, p.name);
+                names[i] = formatPatternListEntry(p);
             }
             patternSelect.items = names;
             immutable ptrdiff_t idx = currentPatternIndex();
             patternSelect.selectedIndex = idx >= 0 ? cast(size_t) idx : 0;
             immutable bool room = doc.patterns.length < MAX_PATTERNS;
             addButton.enabled = room;
+            addDrumButton.enabled = room;
             duplicateButton.enabled = room && idx >= 0;
             deleteButton.enabled = doc.patterns.length > 1 && idx >= 0;
+            patternMenuButton.enabled = idx >= 0;
             invalidate();
         }
         const sp = currentPatternDoc();
@@ -1551,7 +1815,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
 
     private void consumeMidi() {
         MidiNoteEvent[] notes = ctx.takeMidiNotes();
-        if (notes.length == 0 || !ctx.editMode) {
+        if (notes.length == 0 || !ctx.editMode || currentView() != PatternViewKind.tracker) {
             return;
         }
         const sp = currentPatternDoc();
@@ -1798,6 +2062,88 @@ final class PatternEditorView : Widget, StudioCommandSink {
         invalidate();
     }
 
+    /**
+     * Builds the pattern menu entries (rename, new drum pattern, convert pattern type, duplicate, delete).
+     *
+     * Returns:
+     *   Menu entries for the current pattern.
+     */
+    MenuItem[] patternMenuItems() {
+        const doc = ctx.session.document();
+        const sp = currentPatternDoc();
+        immutable bool hasPat = sp !is null;
+        immutable bool drum = hasPat && sp.kind == PATTERN_KIND_DRUM;
+        immutable bool room = doc.patterns.length < MAX_PATTERNS;
+        MenuItem[] items;
+        items ~= MenuItem("Rename Pattern…", () { beginRenamePattern(); }, hasPat);
+        items ~= MenuItem("New Drum Pattern", () { addDrumPattern(); }, room);
+        items ~= MenuItem.makeSeparator();
+        items ~= MenuItem(drum ? "Convert to normal pattern" : "Convert to drum pattern",
+            () { convertCurrentPattern(); }, hasPat);
+        items ~= MenuItem.makeSeparator();
+        items ~= MenuItem("Duplicate Pattern", () { duplicatePattern(); }, room && hasPat);
+        items ~= MenuItem("Delete Pattern", () { deletePattern(); }, doc.patterns.length > 1 && hasPat);
+        return items;
+    }
+
+    /**
+     * Adds a new drum pattern with the default kit and selects it (which opens in Drumpad view).
+     */
+    void addDrumPattern() {
+        immutable uint id = ctx.session.doAddDrumPattern();
+        if (id == 0) {
+            ctx.setStatus("Could not add drum pattern");
+            return;
+        }
+        ctx.selectPattern(id);
+        syncPatternSelection();
+        syncView();
+        if (auto ui = context()) {
+            layoutChildren();
+        }
+        ctx.setStatus("Added drum pattern");
+        invalidate();
+    }
+
+    /**
+     * Converts the current pattern between normal and drum pattern in one undo step, switching to Drumpad or
+     * Tracker view accordingly.
+     *
+     * Returns:
+     *   True if converted.
+     */
+    bool convertCurrentPattern() {
+        const sp = currentPatternDoc();
+        if (sp is null) {
+            return false;
+        }
+        immutable uint pid = sp.patternId;
+        if (sp.kind == PATTERN_KIND_DRUM) {
+            if (!ctx.session.doConvertToNormalPattern(pid)) {
+                return false;
+            }
+            viewByPattern_[pid] = PatternViewKind.tracker;
+            syncView();
+            ctx.setStatus("Converted to normal pattern");
+        } else {
+            if (!ctx.session.doConvertToDrumPattern(pid)) {
+                return false;
+            }
+            viewByPattern_[pid] = PatternViewKind.drumpad;
+            syncView();
+            ctx.setStatus("Converted to drum pattern");
+        }
+        invalidate();
+        return true;
+    }
+
+    private void openPatternMenu() {
+        if (auto ui = context()) {
+            ui.openContextMenu(patternMenuItems(),
+                Point2F(patternMenuButton.bounds.x, patternMenuButton.bounds.bottom()));
+        }
+    }
+
     private void addPattern() {
         const sp = currentPatternDoc();
         immutable uint t = sp !is null ? sp.tracks : 4;
@@ -1842,6 +2188,9 @@ final class PatternEditorView : Widget, StudioCommandSink {
     }
 
     private MenuItem[] buildContextMenu(Point2F p) {
+        if (currentView() != PatternViewKind.tracker) {
+            return null;
+        }
         uint t, l, f;
         if (hitCell(p, false, t, l, f)) {
             immutable uint[4] s = selection();
@@ -1863,6 +2212,11 @@ final class PatternEditorView : Widget, StudioCommandSink {
         items ~= MenuItem("Transpose -12", () { handleStudioAction(StudioAction.transposeOctaveDown); });
         items ~= MenuItem("Interpolate", () { handleStudioAction(StudioAction.interpolate); }, hasSel_, false,
             "Cmd+J");
+        if (const sp = currentPatternDoc()) {
+            items ~= MenuItem.makeSeparator();
+            items ~= MenuItem(sp.kind == PATTERN_KIND_DRUM ? "Convert to normal pattern" : "Convert to drum pattern",
+                () { convertCurrentPattern(); });
+        }
         return items;
     }
 
@@ -1925,12 +2279,14 @@ final class PatternEditorView : Widget, StudioCommandSink {
     }
 
     private void paintHeader(IRenderer2D r, const ref StudioTheme theme) {
-        immutable RectF h = RectF(bounds.x, bounds.y, bounds.w, headerH_);
+        immutable RectF h = RectF(bounds.x, originY(), bounds.w, headerH_);
         r.fillRect(h, theme.panelRaised);
         r.fillRect(RectF(h.x, h.bottom() - 1.0f, h.w, 1.0f), theme.border);
         immutable float size = theme.fontSizeSmall;
         immutable float ty = h.y + (headerH_ - r.lineHeight(FontId.ui, size)) * 0.5f;
-        r.drawText(Point2F(labelTracksX_, ty), "Trk", FontId.ui, size, theme.textDim);
+        if (tracksBox.visible) {
+            r.drawText(Point2F(labelTracksX_, ty), "Trk", FontId.ui, size, theme.textDim);
+        }
         r.drawText(Point2F(labelLinesX_, ty), "Lin", FontId.ui, size, theme.textDim);
         if (infoX_ < h.right()) {
             char[48] buf;

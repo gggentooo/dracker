@@ -89,7 +89,8 @@ struct AdsrEnvelope {
     }
 
     /**
-     * Sets segment curvature exponents (1.0 = linear, > 1.0 = concave/exponential, < 1.0 = convex).
+     * Sets segment curvature exponents (1.0 = linear; > 1.0 bends toward exponential with a slower start in
+     * attack and a faster initial drop in decay and release; < 1.0 bends the opposite way).
      *
      * Params:
      *   attackCurve = Attack curve exponent clamped to [0.1f, 8.0f].
@@ -207,7 +208,7 @@ struct AdsrEnvelope {
                     stage_ = EnvStage.sustain;
                     return cast(float) current_;
                 }
-                immutable double shaped = decayCurve_ == 1.0 ? phase_ : pow(phase_, decayCurve_);
+                immutable double shaped = decayCurve_ == 1.0 ? phase_ : 1.0 - pow(1.0 - phase_, decayCurve_);
                 current_ = 1.0 + (sustainLevel_ - 1.0) * shaped;
                 return cast(float) current_;
             }
@@ -225,7 +226,7 @@ struct AdsrEnvelope {
                     stage_ = EnvStage.idle;
                     return 0.0f;
                 }
-                immutable double shaped = releaseCurve_ == 1.0 ? phase_ : pow(phase_, releaseCurve_);
+                immutable double shaped = releaseCurve_ == 1.0 ? phase_ : 1.0 - pow(1.0 - phase_, releaseCurve_);
                 current_ = startVal_ * (1.0 - shaped);
                 return cast(float) current_;
             }

@@ -31,7 +31,7 @@ version (unittest) {
     import std.format : format;
     import std.math : abs, ceil, fabs, isFinite;
 
-    import app.keymap : StudioAction;
+    import app.keymap : StudioAction, StudioCommandSink;
     import app.pattern_ops : BLOCK_TEXT_MAGIC, encodeBlockText, PatternBlock;
     import app.session : MidiNoteEvent, StudioSession;
     import gui.renderer;
@@ -141,7 +141,7 @@ version (unittest) {
          *   w = Viewport width.
          *   h = Viewport height.
          */
-        this(bool withSynth = false, float w = 900.0f, float h = 600.0f) {
+        this(bool withSynth = false, float w = 900.0f, float h = 600.0f, bool registerViews = true) {
             s = new StudioSession();
             assert(s.initialize(44_100.0f));
             if (withSynth) {
@@ -151,7 +151,7 @@ version (unittest) {
             }
             clip = new PeClipboard();
             ctx = new StudioContext(s, null, null, clip);
-            v = new PatternEditorView(ctx);
+            v = new PatternEditorView(ctx, registerViews);
             r = new HeadlessRenderer(new GlyphCache(new PeRasterizer()));
             ui = new UiContext(v, () => clock);
             ui.layout(RectF(0, 0, w, h), r);
@@ -1308,7 +1308,7 @@ version (unittest) {
     }
 
     unittest {
-        auto rig = new PeRig();
+        auto rig = new PeRig(false, 900.0f, 600.0f, false);
         auto v = rig.v;
         auto s = rig.s;
         v.setCursor(0, 30, 0);
@@ -1335,5 +1335,122 @@ version (unittest) {
         assert(s.undo() && s.undo());
         rig.frame();
         assert(v.barLines() == 16 && shaded(bar, 16) && !shaded(bar, 12));
+    }
+
+    private final class DummyView : Widget, StudioCommandSink {
+        StudioAction[] actions;
+        int keys = 0;
+        bool accept = true;
+
+        this() {
+            focusable = true;
+        }
+
+        bool handleStudioAction(StudioAction action) {
+            actions ~= action;
+            return accept;
+        }
+
+        override bool onKeyDown(const ref KeyEvent e) {
+            keys++;
+            return false;
+        }
+    }
+
+    unittest {
+        auto rig = new PeRig(false, 900.0f, 600.0f, false);
+        auto v = rig.v;
+        auto s = rig.s;
+        rig.frame();
+        assert(v.viewButtons[0].id == "pattern.view.tracker" && v.viewButtons[1].id == "pattern.view.pianoRoll"
+            && v.viewButtons[2].id == "pattern.view.drumpad");
+        assert(v.currentView() == PatternViewKind.tracker && v.viewButtons[0].lit && !v.viewButtons[1].lit);
+        assert(v.viewButtons[0].enabled && !v.viewButtons[1].enabled && !v.viewButtons[2].enabled);
+        assert(v.viewOffered(PatternViewKind.pianoRoll) && !v.viewOffered(PatternViewKind.drumpad));
+        assert(!v.viewAvailable(PatternViewKind.pianoRoll) && !v.setView(PatternViewKind.pianoRoll));
+        assert(v.viewButtons[0].bounds.y >= v.bounds.y && v.viewButtons[0].bounds.bottom() <= v.bounds.y + PatternEditorView.VIEW_BAR_H);
+        assert(v.patternSelect.bounds.y >= v.bounds.y + PatternEditorView.VIEW_BAR_H);
+        assert(v.cellRect(0, 0).y > v.viewRect().y && v.tracksBox.visible);
+
+        auto roll = new DummyView();
+        v.registerView(PatternViewKind.pianoRoll, roll);
+        rig.frame();
+        assert(v.viewButtons[1].enabled && !roll.visible && v.currentView() == PatternViewKind.tracker);
+        immutable RectF b1 = v.viewButtons[1].bounds;
+        rig.mouse(PlatformEventKind.mouseDown, b1.center());
+        rig.mouse(PlatformEventKind.mouseUp, b1.center());
+        rig.frame();
+        assert(v.currentView() == PatternViewKind.pianoRoll && v.viewButtons[1].lit && !v.viewButtons[0].lit);
+        assert(roll.visible && roll.bounds == v.viewRect() && !v.tracksBox.visible && rig.ui.focused is roll);
+        assert(v.handleStudioAction(StudioAction.copy) && roll.actions == [StudioAction.copy]);
+        roll.accept = false;
+        assert(!v.handleStudioAction(StudioAction.selectAll) && roll.actions.length == 2);
+        immutable NoteCell before = s.document().patterns[0].cells[0];
+        rig.ctx.setEditMode(true);
+        rig.ui.setFocus(v);
+        PlatformEvent k;
+        k.kind = PlatformEventKind.keyDown;
+        k.keyCode = 6;
+        rig.ui.handleEvent(k);
+        assert(s.document().patterns[0].cells[0] == before);
+        rig.ctx.setEditMode(false);
+        rig.mouse(PlatformEventKind.mouseDown, v.viewRect().center());
+        rig.mouse(PlatformEventKind.mouseUp, v.viewRect().center());
+        assert(!v.hasSelection());
+
+        immutable uint p2 = s.doAddPattern(4, 32, "Second");
+        rig.ctx.selectPattern(p2);
+        rig.frame();
+        assert(v.currentView() == PatternViewKind.tracker && !roll.visible && v.tracksBox.visible);
+        rig.ctx.selectPattern(1);
+        rig.frame();
+        assert(v.currentView() == PatternViewKind.pianoRoll && roll.visible);
+        assert(v.setView(PatternViewKind.tracker) && v.currentView() == PatternViewKind.tracker && rig.ui.focused is v);
+
+        immutable uint drums = s.doAddDrumPattern();
+        rig.ctx.selectPattern(drums);
+        rig.frame();
+        assert(v.viewOffered(PatternViewKind.drumpad) && !v.viewOffered(PatternViewKind.pianoRoll));
+        assert(v.currentView() == PatternViewKind.tracker && !v.viewButtons[1].enabled && !v.viewButtons[2].enabled);
+        auto pads = new DummyView();
+        v.registerView(PatternViewKind.drumpad, pads);
+        rig.frame();
+        assert(v.currentView() == PatternViewKind.drumpad && pads.visible && v.viewButtons[2].lit && v.viewButtons[2].enabled);
+        assert(!v.setView(PatternViewKind.pianoRoll));
+        assert(v.setView(PatternViewKind.tracker));
+        rig.ctx.selectPattern(1);
+        rig.frame();
+        rig.ctx.selectPattern(drums);
+        rig.frame();
+        assert(v.currentView() == PatternViewKind.tracker && !pads.visible);
+        assert(s.doConvertToNormalPattern(drums));
+        rig.frame();
+        assert(v.viewButtons[1].enabled && !v.viewButtons[2].enabled && v.currentView() == PatternViewKind.tracker);
+    }
+
+    @("pattern editor: registers built-in Piano roll and Drumpad views and marks drum patterns in dropdown")
+    unittest {
+        auto rig = new PeRig();
+        auto v = rig.v;
+        auto s = rig.s;
+        rig.frame();
+        assert(v.pianoRollView() !is null && v.drumpadView() !is null);
+        assert(v.viewAvailable(PatternViewKind.pianoRoll));
+        assert(v.patternSelect.items[0] == "01 Pattern 01");
+
+        immutable uint drums = s.doAddDrumPattern("Kit");
+        assert(drums != 0);
+        rig.ctx.selectPattern(drums);
+        rig.frame();
+        assert(v.currentView() == PatternViewKind.drumpad);
+        assert(v.drumpadView().visible && v.drumpadView().bounds == v.viewRect());
+        assert(v.patternSelect.items[1] == "02 [D] Kit");
+
+        assert(s.doConvertToNormalPattern(drums));
+        rig.frame();
+        assert(v.patternSelect.items[1] == "02 Kit");
+        assert(s.undo());
+        rig.frame();
+        assert(v.patternSelect.items[1] == "02 [D] Kit");
     }
 }

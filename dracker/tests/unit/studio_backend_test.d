@@ -44,7 +44,8 @@ version (unittest) {
     import foundation.types : FIXED_BLOCK_FRAMES, ModuleId;
     import graph.event : ModEvent;
     import io.audio_io : DecodedAudio, decodeAudioFile, deinterleaveToPlanar, writeWavMemory;
-    import io.project_format : LoadedProject, loadProject, SavedMidiMapping, serializeProject;
+    import io.project_format : LoadedProject, loadProject, PATTERN_KIND_DRUM, PATTERN_KIND_NORMAL, SavedDrumLane,
+        SavedMidiMapping, serializeProject;
     import platform.interfaces : MidiPacket;
     import sequencer.engine : Engine, EngineTelemetry, ScopeBlock;
     import sequencer.note : NoteCell;
@@ -699,5 +700,135 @@ version (unittest) {
             assert(tel.currentLine == 40 - sig[2], to!string(tel.currentLine));
             c.endLiveTake();
         }
+    }
+
+    unittest {
+        StudioSession s = new StudioSession();
+        assert(s.initialize(44_100.0f));
+        scope (exit) s.shutdown();
+        assert(s.patternKind(1) == PATTERN_KIND_NORMAL && s.patternLanes(1).length == 0 && s.patternKind(99) == PATTERN_KIND_NORMAL);
+        assert(s.document().modules.length == 1);
+
+        immutable uint pid = s.doAddDrumPattern();
+        assert(pid == 2 && s.patternKind(pid) == PATTERN_KIND_DRUM);
+        assert(s.document().modules.length == 2 && s.document().modules[1].typeId == "synth.drumsynth");
+        immutable uint kit = s.document().modules[1].id;
+        assert(s.document().wires.length == 1 && s.document().wires[0].srcMod == kit && s.document().wires[0].dstMod == 1);
+        const(SavedDrumLane)[] lanes = s.patternLanes(pid);
+        assert(lanes.length == 4 && lanes[0] == SavedDrumLane("Kick", kit, 36) && lanes[1] == SavedDrumLane("Snare", kit, 38));
+        assert(lanes[2] == SavedDrumLane("Closed Hat", kit, 42) && lanes[3] == SavedDrumLane("Open Hat", kit, 46));
+        assert(s.document().patterns[1].tracks == 4 && s.document().patterns[1].lines == 16);
+        assert(s.document().patterns[1].name == "Drums 02" && s.isDrumLaneAssigned(pid, 0) && !s.isDrumLaneAssigned(pid, 4));
+        assert(s.undo());
+        assert(s.document().patterns.length == 1 && s.document().modules.length == 1 && s.document().wires.length == 0);
+        assert(!s.history().canUndo());
+        assert(s.redo() && s.document().patterns.length == 2 && s.document().modules.length == 2);
+
+        assert(s.doSetTimeSignature(3, 4));
+        immutable uint pid2 = s.doAddDrumPattern("Waltz kit");
+        assert(pid2 == 3 && s.document().modules.length == 2 && s.document().patterns[2].lines == 12);
+        assert(s.document().patterns[2].name == "Waltz kit" && s.patternLanes(pid2)[0].moduleId == kit);
+        assert(s.undo() && s.document().patterns.length == 2 && s.document().modules.length == 2);
+        assert(s.undo() && s.timeSignatureNumerator() == 4);
+
+        float vel;
+        bool custom;
+        assert(!s.drumHitAt(pid, 0, 0, vel, custom));
+        assert(s.doToggleDrumHit(pid, 0, 0) && s.drumHitAt(pid, 0, 0, vel, custom) && !custom && fabs(vel - 0.8f) < 0.01f);
+        immutable NoteCell kick = s.document().patterns[1].cells[0];
+        assert(kick.note == 37 && kick.moduleId == kit);
+        assert(s.doSetDrumHit(pid, 1, 4, true, 0.5f) && s.drumHitAt(pid, 1, 4, vel, custom) && fabs(vel - 0.5f) < 0.01f);
+        immutable bool couldUndoBefore = s.history().canUndo();
+        assert(s.doSetDrumHit(pid, 1, 4, true, 0.5f) && couldUndoBefore);
+        assert(s.doSetDrumHit(pid, 1, 4, true, 1.0f) && s.drumHitAt(pid, 1, 4, vel, custom) && vel > 0.99f);
+        assert(s.undo() && s.drumHitAt(pid, 1, 4, vel, custom) && fabs(vel - 0.5f) < 0.01f);
+        assert(s.doToggleDrumHit(pid, 1, 4) && !s.drumHitAt(pid, 1, 4, vel, custom));
+        assert(s.undo() && s.drumHitAt(pid, 1, 4, vel, custom));
+        assert(s.doSetDrumHit(pid, 2, 2, false) && !s.doSetDrumHit(pid, 9, 0, true) && !s.doSetDrumHit(pid, 0, 99, true));
+        assert(!s.doSetDrumHit(1, 0, 0, true));
+        assert(s.doPatchCell(pid, 2, 8, NoteCell.makeNote(50, 0.7f, cast(ushort) kit)));
+        assert(s.drumHitAt(pid, 2, 8, vel, custom) && custom);
+        assert(s.doSetDrumHit(pid, 2, 8, true) && s.drumHitAt(pid, 2, 8, vel, custom) && !custom);
+
+        assert(s.doRenameDrumLane(pid, 0, "  Big Kick ") && s.patternLanes(pid)[0].name == "Big Kick");
+        assert(!s.doRenameDrumLane(pid, 0, "   ") && !s.doRenameDrumLane(pid, 7, "x") && !s.doRenameDrumLane(1, 0, "x"));
+        assert(s.undo() && s.patternLanes(pid)[0].name == "Kick");
+
+        immutable uint kicker = s.doAddModule("synth.kicker", "Kicker", 0.0f, 0.0f);
+        assert(kicker != 0);
+        assert(s.doRetargetDrumLane(pid, 0, kicker, 60));
+        assert(s.patternLanes(pid)[0].moduleId == kicker && s.patternLanes(pid)[0].note == 60);
+        assert(s.document().patterns[1].cells[0].note == 61 && s.document().patterns[1].cells[0].moduleId == kicker);
+        assert(s.drumHitAt(pid, 0, 0, vel, custom) && !custom);
+        assert(s.undo() && s.document().patterns[1].cells[0].note == 37 && s.patternLanes(pid)[0].moduleId == kit);
+        assert(s.redo());
+        assert(!s.doRetargetDrumLane(pid, 0, kicker, 200) && !s.doRetargetDrumLane(pid, 9, kicker, 60));
+
+        assert(s.doAddDrumLane(pid, "Clap", kit, 39));
+        assert(s.document().patterns[1].tracks == 5 && s.patternLanes(pid)[4] == SavedDrumLane("Clap", kit, 39));
+        assert(s.drumHitAt(pid, 0, 0, vel, custom) && s.drumHitAt(pid, 1, 4, vel, custom) && s.drumHitAt(pid, 2, 8, vel, custom));
+        assert(s.doAddDrumLane(pid, "", 0, 60) && s.patternLanes(pid)[5].name == "Lane 6" && !s.isDrumLaneAssigned(pid, 5));
+        assert(!s.doSetDrumHit(pid, 5, 0, true));
+        assert(s.undo() && s.document().patterns[1].tracks == 5);
+        assert(!s.doAddDrumLane(1, "x", kit, 36) && !s.doAddDrumLane(pid, "x", kit, 128));
+
+        assert(s.doMoveDrumLane(pid, 0, 2));
+        assert(s.patternLanes(pid)[0].name == "Snare" && s.patternLanes(pid)[2].name == "Kick");
+        assert(s.drumHitAt(pid, 2, 0, vel, custom) && s.drumHitAt(pid, 0, 4, vel, custom) && s.drumHitAt(pid, 1, 8, vel, custom));
+        assert(s.doMoveDrumLane(pid, 2, 2) && !s.doMoveDrumLane(pid, 2, 9));
+        assert(s.undo() && s.patternLanes(pid)[0].name == "Kick" && s.drumHitAt(pid, 0, 0, vel, custom));
+
+        assert(s.doRemoveDrumLane(pid, 1));
+        assert(s.document().patterns[1].tracks == 4 && s.patternLanes(pid)[1].name == "Closed Hat");
+        assert(s.drumHitAt(pid, 1, 8, vel, custom) && !s.drumHitAt(pid, 1, 4, vel, custom));
+        assert(s.undo() && s.patternLanes(pid)[1].name == "Snare" && s.drumHitAt(pid, 1, 4, vel, custom));
+        assert(!s.doRemoveDrumLane(pid, 9));
+
+        assert(s.doResizePattern(pid, 3, 16) && s.patternLanes(pid).length == 3);
+        assert(s.undo() && s.patternLanes(pid).length == 5 && s.patternLanes(pid)[4].name == "Clap");
+        assert(s.doResizePattern(pid, 7, 32) && s.patternLanes(pid).length == 7 && s.patternLanes(pid)[6].name == "Lane 7");
+        assert(s.drumHitAt(pid, 0, 0, vel, custom) && s.document().patterns[1].lines == 32);
+        assert(s.undo() && s.document().patterns[1].tracks == 5 && s.document().patterns[1].lines == 16);
+
+        immutable uint dup = s.doDuplicatePattern(pid);
+        assert(dup != 0 && s.patternKind(dup) == PATTERN_KIND_DRUM && s.patternLanes(dup).length == 5);
+        assert(s.drumHitAt(dup, 0, 0, vel, custom));
+
+        assert(s.doRemoveModule(kicker));
+        assert(!s.isDrumLaneAssigned(pid, 0) && s.patternLanes(pid)[0].moduleId == kicker && s.isDrumLaneAssigned(pid, 1));
+        assert(s.undo() && s.isDrumLaneAssigned(pid, 0));
+
+        assert(s.doConvertToNormalPattern(pid) && s.patternKind(pid) == PATTERN_KIND_NORMAL && s.patternLanes(pid).length == 0);
+        assert(s.document().patterns[1].cells[0].note == 61 && !s.doConvertToNormalPattern(pid));
+        assert(!s.doSetDrumHit(pid, 0, 0, true) && !s.doAddDrumLane(pid, "x", kit, 36));
+        assert(s.doConvertToDrumPattern(pid) && s.patternKind(pid) == PATTERN_KIND_DRUM);
+        lanes = s.patternLanes(pid);
+        assert(lanes.length == 5 && lanes[0] == SavedDrumLane("Kicker", kicker, 60) && lanes[1] == SavedDrumLane("Drums", kit, 38));
+        assert(lanes[2] == SavedDrumLane("Drums", kit, 42) && lanes[3] == SavedDrumLane("Lane 4", 0, 60));
+        assert(!s.doConvertToDrumPattern(pid));
+        assert(s.undo() && s.patternKind(pid) == PATTERN_KIND_NORMAL);
+        assert(s.undo() && s.patternKind(pid) == PATTERN_KIND_DRUM && s.patternLanes(pid)[0].name == "Kick");
+
+        string err;
+        ubyte[] bytes;
+        assert(s.saveProjectToBytes(bytes, err), err);
+        StudioSession t = new StudioSession();
+        assert(t.initialize(44_100.0f));
+        scope (exit) t.shutdown();
+        assert(t.loadProjectFromBytes(bytes, err), err);
+        assert(t.patternKind(pid) == PATTERN_KIND_DRUM && t.patternLanes(pid) == s.patternLanes(pid));
+        assert(t.doAddClip(pid, 0, 16) != 0);
+        t.engine().reset();
+        t.engine().setTempo(120.0, 6);
+        t.engine().seekLine(0);
+        t.engine().setPlaying(true);
+        OwnedBuffer!float l;
+        OwnedBuffer!float r;
+        assert(t.engine().renderOfflineToBuffer(66_176, 64, l, r));
+        float peak = 0.0f;
+        foreach (i; 0 .. l.length) {
+            peak = fabs(l[i]) > peak ? fabs(l[i]) : peak;
+        }
+        assert(peak > 0.01f);
     }
 }

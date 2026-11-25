@@ -1038,6 +1038,47 @@ int runStudioGuiSelfTest(string[] args) {
                 format("opened=%s closed with Escape=%s", opened, closed));
         }
 
+        {
+            import gui.views.pattern_editor : PatternViewKind;
+            import io.project_format : PATTERN_KIND_DRUM;
+
+            click(root.pattern.viewButtons[PatternViewKind.pianoRoll].bounds.center());
+            pumpFor(0.1);
+            immutable bool toRoll = root.pattern.currentView() == PatternViewKind.pianoRoll
+                && root.pattern.viewButtons[PatternViewKind.pianoRoll].lit
+                && !root.pattern.viewButtons[PatternViewKind.drumpad].enabled;
+            click(root.pattern.viewButtons[PatternViewKind.tracker].bounds.center());
+            pumpFor(0.1);
+            immutable bool backTracker = root.pattern.currentView() == PatternViewKind.tracker
+                && root.pattern.viewButtons[PatternViewKind.tracker].lit;
+            immutable size_t patsBefore = doc().patterns.length;
+            click(root.pattern.addDrumButton.bounds.center());
+            immutable bool drumAdded = pumpUntil(() => doc().patterns.length == patsBefore + 1
+                && session.patternKind(ctx.currentPattern()) == PATTERN_KIND_DRUM);
+            immutable bool onDrumpad = root.pattern.currentView() == PatternViewKind.drumpad
+                && root.pattern.viewButtons[PatternViewKind.drumpad].lit
+                && !root.pattern.viewButtons[PatternViewKind.pianoRoll].enabled;
+            auto dp = root.pattern.drumpadView();
+            bool padToggled = false;
+            if (dp !is null && dp.visible) {
+                float hitVel = 0.0f;
+                bool hitCustom = false;
+                click(dp.padRect(0, 0).center());
+                pumpFor(0.08);
+                padToggled = session.drumHitAt(ctx.currentPattern(), 0, 0, hitVel, hitCustom);
+            }
+            click(root.pattern.viewButtons[PatternViewKind.tracker].bounds.center());
+            pumpFor(0.1);
+            immutable bool drumTracker = root.pattern.currentView() == PatternViewKind.tracker;
+            click(root.pattern.viewButtons[PatternViewKind.drumpad].bounds.center());
+            pumpFor(0.1);
+            immutable bool backDrumpad = root.pattern.currentView() == PatternViewKind.drumpad;
+            check("pattern editor views (switch)",
+                toRoll && backTracker && drumAdded && onDrumpad && padToggled && drumTracker && backDrumpad,
+                format("roll=%s tracker=%s drum=%s pad=%s drumTracker=%s drumpad=%s",
+                    toRoll, backTracker, drumAdded, padToggled, drumTracker, backDrumpad));
+        }
+
         key(8, "c", KeyModifiers.command | KeyModifiers.alt);
         immutable bool toggledLow = ctx.theme.contrast == ContrastMode.low && !shell.app.menuItemChecked("View", "High Contrast");
         string saved;

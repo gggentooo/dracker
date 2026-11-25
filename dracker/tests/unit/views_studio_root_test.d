@@ -935,4 +935,194 @@ version (unittest) {
         detached.appCommandHandler = null;
         assert(!detached.executeAction(StudioAction.quit));
     }
+
+    unittest {
+        import foundation.memory : OwnedBuffer;
+        import gui.views.drumpad_view : DrumpadView;
+        import gui.views.pattern_editor : PatternViewKind;
+        import gui.views.piano_roll_view : PianoRollView;
+        import gui.widgets : ContextMenu;
+        import io.project_format : PATTERN_KIND_DRUM, PATTERN_KIND_NORMAL, SavedDrumLane;
+
+        Rig r = makeRig();
+        scope (exit) r.session.dispose();
+        immutable uint lead = r.session.doAddModule("synth.analog_gen", "Lead");
+        assert(r.session.doConnectWire(lead, 2, 1, 0, 0.25f));
+        assert(r.session.doAddClip(1, 0, 64, 0) != 0);
+        r.ctx.selectModule(lead);
+        r.frame();
+
+        r.click(r.root.pattern.viewButtons[PatternViewKind.pianoRoll].bounds.center());
+        assert(r.root.pattern.currentView() == PatternViewKind.pianoRoll);
+        assert(r.root.pattern.viewButtons[PatternViewKind.pianoRoll].lit);
+        assert(!r.root.pattern.viewButtons[PatternViewKind.drumpad].enabled);
+        PianoRollView roll = r.root.pattern.pianoRollView();
+        assert(roll !is null && roll.visible && roll.pickedModule() == lead);
+
+        roll.setScroll(0.0f, cast(float)(127 - 74) * roll.rowHeight());
+        r.frame();
+        foreach (pair; [[0, 60], [4, 64], [8, 67]]) {
+            immutable Point2F pt = Point2F(roll.lineToX(cast(float) pair[0]) + roll.lineWidth() * 0.5f,
+                roll.pitchToY(cast(ubyte) pair[1]) + roll.rowHeight() * 0.5f);
+            assert(roll.gridRect().contains(pt));
+            r.click(pt);
+        }
+        assert(roll.notes().length == 3);
+
+        r.click(r.root.pattern.viewButtons[PatternViewKind.tracker].bounds.center());
+        assert(r.root.pattern.currentView() == PatternViewKind.tracker);
+        assert(r.root.pattern.tracksBox.visible);
+        const pat0 = r.session.document().patterns[0];
+        bool[3] foundPitch;
+        foreach (ln_idx, targetLine; [0u, 4u, 8u]) {
+            immutable ubyte wantNote = NoteCell.encodeMidiNote([60, 64, 67][ln_idx]);
+            foreach (trk; 0 .. pat0.tracks) {
+                immutable NoteCell c = pat0.cells[targetLine * pat0.tracks + trk];
+                if (c.note == wantNote && c.moduleId == lead) {
+                    foundPitch[ln_idx] = true;
+                }
+            }
+        }
+        assert(foundPitch[0] && foundPitch[1] && foundPitch[2]);
+
+        r.session.engine().reset();
+        r.session.engine().setTempo(r.session.document().bpm, r.session.document().ticksPerLine);
+        r.session.engine().seekLine(0);
+        r.session.engine().setPlaying(true);
+        OwnedBuffer!float l;
+        OwnedBuffer!float rr;
+        assert(r.session.engine().renderOfflineToBuffer(44_100, 64, l, rr));
+        r.session.stop();
+        float melPeak = 0.0f;
+        foreach (i; 0 .. l.length) {
+            if (fabs(l[i]) > melPeak) melPeak = fabs(l[i]);
+            if (fabs(rr[i]) > melPeak) melPeak = fabs(rr[i]);
+        }
+        assert(melPeak > 0.02f && melPeak < 0.99f, format("melPeak=%.6f", melPeak));
+
+        r.click(r.root.pattern.addDrumButton.bounds.center());
+        immutable uint drumPatId = r.ctx.currentPattern();
+        assert(drumPatId != 1 && r.session.patternKind(drumPatId) == PATTERN_KIND_DRUM);
+        assert(r.root.pattern.currentView() == PatternViewKind.drumpad);
+        assert(r.root.pattern.viewButtons[PatternViewKind.drumpad].lit);
+        assert(!r.root.pattern.viewButtons[PatternViewKind.pianoRoll].enabled);
+        assert(r.root.pattern.patternSelect.selectedText() == format("%02X [D] Drums", drumPatId)
+            || r.root.pattern.patternSelect.selectedText()[2 .. $].startsWith(" [D] "));
+        DrumpadView dp = r.root.pattern.drumpadView();
+        assert(dp !is null && dp.visible);
+
+        float hitVel = 0.0f;
+        bool hitCustom = false;
+        foreach (hit; [[0u, 0u], [0u, 8u], [1u, 4u], [1u, 12u], [2u, 0u], [2u, 2u], [2u, 4u], [2u, 6u]]) {
+            immutable Point2F pt = dp.padRect(hit[0], hit[1]).center();
+            assert(dp.padsRect().contains(pt));
+            r.click(pt);
+            assert(r.session.drumHitAt(drumPatId, hit[0], hit[1], hitVel, hitCustom));
+        }
+        assert(r.session.doAddClip(drumPatId, 64, 16, 1) != 0);
+
+        immutable string msvPath = buildPath(tempDir(), format("dracker_t56_views_%d.msv", thisProcessID()));
+        scope (exit) {
+            if (exists(msvPath)) remove(msvPath);
+        }
+        string err;
+        assert(r.session.saveProjectToFile(msvPath, err), err);
+
+        Rig r2 = makeRig();
+        scope (exit) r2.session.dispose();
+        assert(r2.session.openProjectFile(msvPath, err), err);
+        r2.frame();
+        assert(r2.session.document().patterns.length == r.session.document().patterns.length);
+        foreach (idx, ref origPat; r.session.document().patterns) {
+            const reopenedPat = r2.session.document().patterns[idx];
+            assert(reopenedPat.patternId == origPat.patternId && reopenedPat.kind == origPat.kind);
+            assert(reopenedPat.tracks == origPat.tracks && reopenedPat.lines == origPat.lines);
+            assert(reopenedPat.lanes == origPat.lanes && reopenedPat.cells == origPat.cells);
+        }
+
+        r2.ctx.selectPattern(drumPatId);
+        r2.frame();
+        assert(r2.root.pattern.currentView() == PatternViewKind.drumpad);
+
+        r2.session.engine().reset();
+        r2.session.engine().setTempo(r2.session.document().bpm, r2.session.document().ticksPerLine);
+        r2.session.engine().seekLine(64);
+        r2.session.engine().setPlaying(true);
+        OwnedBuffer!float dl;
+        OwnedBuffer!float dr;
+        assert(r2.session.engine().renderOfflineToBuffer(44_100, 64, dl, dr));
+        r2.session.stop();
+        float drumPeak = 0.0f;
+        foreach (i; 0 .. dl.length) {
+            if (fabs(dl[i]) > drumPeak) drumPeak = fabs(dl[i]);
+            if (fabs(dr[i]) > drumPeak) drumPeak = fabs(dr[i]);
+        }
+        assert(drumPeak > 0.02f && drumPeak < 0.99f, format("drumPeak=%.6f", drumPeak));
+
+        void clickPatternMenuEntry(ref Rig rig, string label) {
+            rig.click(rig.root.pattern.patternMenuButton.bounds.center());
+            ContextMenu menu = null;
+            foreach (w; rig.ui.overlays()) {
+                if (auto cm = cast(ContextMenu) w) {
+                    menu = cm;
+                }
+            }
+            assert(menu !is null);
+            bool clicked = false;
+            foreach (i, ref it; menu.items) {
+                if (it.label == label) {
+                    assert(it.enabled);
+                    rig.click(menu.itemRect(i).center());
+                    clicked = true;
+                    break;
+                }
+            }
+            assert(clicked, label);
+        }
+
+        const SavedDrumLane[] origLanes = r2.session.patternLanes(drumPatId).dup;
+        const NoteCell[] origCells = r2.session.document().patterns[1].cells.dup;
+
+        clickPatternMenuEntry(r2, "Convert to normal pattern");
+        assert(r2.session.patternKind(drumPatId) == PATTERN_KIND_NORMAL);
+        assert(r2.session.patternLanes(drumPatId).length == 0);
+        assert(r2.session.document().patterns[1].cells == origCells);
+        assert(r2.root.pattern.currentView() == PatternViewKind.tracker);
+        assert(r2.root.pattern.viewButtons[PatternViewKind.pianoRoll].enabled);
+        assert(!r2.root.pattern.viewButtons[PatternViewKind.drumpad].enabled);
+
+        clickPatternMenuEntry(r2, "Convert to drum pattern");
+        assert(r2.session.patternKind(drumPatId) == PATTERN_KIND_DRUM);
+        assert(r2.session.patternLanes(drumPatId).length == origLanes.length);
+        assert(r2.root.pattern.currentView() == PatternViewKind.drumpad);
+        assert(r2.root.pattern.viewButtons[PatternViewKind.drumpad].enabled);
+        assert(!r2.root.pattern.viewButtons[PatternViewKind.pianoRoll].enabled);
+
+        assert(r2.session.undo() && r2.session.patternKind(drumPatId) == PATTERN_KIND_NORMAL);
+        assert(r2.session.redo() && r2.session.patternKind(drumPatId) == PATTERN_KIND_DRUM);
+
+        AppearanceSettings lightHi;
+        AppearanceSettings lightLo;
+        lightLo.contrast = ContrastMode.low;
+        AppearanceSettings darkHi;
+        darkHi.palette = "Dark · Okabe–Ito";
+        AppearanceSettings[3] looks = [lightHi, lightLo, darkHi];
+        foreach (sig; [[4u, 4u], [3u, 4u]]) {
+            assert(r2.session.doSetTimeSignature(sig[0], sig[1]));
+            foreach (look; looks) {
+                r2.ctx.applyAppearance(look, false);
+                r2.ctx.selectPattern(1);
+                r2.root.pattern.setView(PatternViewKind.tracker);
+                r2.frame();
+                assert(r2.renderer.lastDrawList().instances.length > 200);
+                r2.root.pattern.setView(PatternViewKind.pianoRoll);
+                r2.frame();
+                assert(r2.renderer.lastDrawList().instances.length > 200);
+                r2.ctx.selectPattern(drumPatId);
+                r2.root.pattern.setView(PatternViewKind.drumpad);
+                r2.frame();
+                assert(r2.renderer.lastDrawList().instances.length > 200);
+            }
+        }
+    }
 }

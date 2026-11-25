@@ -42,6 +42,8 @@
 module app.skeleton_gen;
 
 import app.chord_progression : BLOCK_HALF_BARS, chordIntervals, ChordBlock, resolveChord, ResolvedChord;
+import app.factory_presets : factoryModule, FactoryPreset, findFactoryPreset;
+import app.instrument_library : InstrumentLibrary, LibraryEntry, PresetOrigin;
 import app.music_theory : MusicalKey;
 import graph.module_api : ModuleDescriptor;
 import graph.port : isAudioPort, PortDirection, PortKind;
@@ -65,7 +67,8 @@ enum InstrumentRole : ubyte {
 enum InstrumentSource : ubyte {
     defaultSound = 0,
     moduleType = 1,
-    presetFile = 2
+    presetFile = 2,
+    libraryPreset = 3
 }
 
 /**
@@ -75,12 +78,15 @@ enum InstrumentSource : ubyte {
 immutable string[] SELECTABLE_SYNTH_TYPES = ["synth.analog_gen", "synth.fm_synth", "synth.spectravoice"];
 
 /**
- * What plays one part: the default sound, a module type with its defaults, or a module from a preset file.
+ * What plays one part: the default sound, a module type with its defaults, a library preset, or a module from
+ * a preset file.
  */
 struct InstrumentChoice {
     InstrumentSource source = InstrumentSource.defaultSound;
     string typeId;
     string presetName;
+    string presetPath;
+    PresetOrigin origin = PresetOrigin.bundled;
     SavedModule preset;
 
     /**
@@ -128,10 +134,31 @@ struct InstrumentChoice {
     }
 
     /**
+     * Returns the choice of a playable preset loaded from an InstrumentLibrary entry.
+     *
+     * Params:
+     *   entry = Library metadata entry.
+     *   p = Loaded preset document.
+     *
+     * Returns:
+     *   Choice carrying a copy of the module.
+     */
+    static InstrumentChoice ofLibrary(const ref LibraryEntry entry, const ref LoadedPreset p) @safe pure nothrow {
+        InstrumentChoice c;
+        c.source = InstrumentSource.libraryPreset;
+        c.typeId = p.mod.typeId;
+        c.presetName = entry.name.length > 0 ? entry.name : (p.presetName.length > 0 ? p.presetName : p.mod.name);
+        c.presetPath = entry.path;
+        c.origin = entry.origin;
+        c.preset = copyModule(p.mod);
+        return c;
+    }
+
+    /**
      * Returns the text shown for this choice in a dropdown.
      *
      * Returns:
-     *   "Default", the module type's display name, or "Preset: <name>".
+     *   "Default", the module type's display name, library preset name, or "Preset: <name>".
      */
     string label() const {
         final switch (source) {
@@ -143,14 +170,15 @@ struct InstrumentChoice {
             }
             case InstrumentSource.presetFile:
                 return "Preset: " ~ presetName;
+            case InstrumentSource.libraryPreset:
+                return origin == PresetOrigin.user ? presetName ~ " (user)" : presetName;
         }
     }
 }
 
 /**
- * Lists the choices offered in an instrument dropdown: the default sound, then each registered selectable
- * module type in SELECTABLE_SYNTH_TYPES order. (Loading a preset file is a separate dropdown entry handled by
- * the panel, which then adds an ofPreset() choice.)
+ * Lists the built-in module choices offered when no InstrumentLibrary is supplied: Default followed by each
+ * registered module type in SELECTABLE_SYNTH_TYPES order.
  *
  * Returns:
  *   Choices.
@@ -160,6 +188,37 @@ InstrumentChoice[] instrumentChoices() {
     foreach (t; SELECTABLE_SYNTH_TYPES) {
         if (ModuleRegistry.findByTypeId(t) !is null) {
             list ~= InstrumentChoice.ofType(t);
+        }
+    }
+    return list;
+}
+
+/**
+ * Lists the choices offered in an instrument dropdown from an InstrumentLibrary: Default, then every playable
+ * bundled preset, then every playable user preset. Falls back to instrumentChoices() when library is null.
+ *
+ * Params:
+ *   library = Library to query (may be null).
+ *
+ * Returns:
+ *   Ordered choices ending before the panel's "Load preset file…" entry.
+ */
+InstrumentChoice[] instrumentChoices(InstrumentLibrary library) {
+    if (library is null) {
+        return instrumentChoices();
+    }
+    InstrumentChoice[] list = [InstrumentChoice.defaults()];
+    foreach (passOrigin; [PresetOrigin.bundled, PresetOrigin.user]) {
+        foreach (ref entry; library.entries()) {
+            if (!entry.playable || entry.origin != passOrigin) {
+                continue;
+            }
+            LoadedPreset loaded;
+            string err;
+            if (!library.load(entry, loaded, err)) {
+                continue;
+            }
+            list ~= InstrumentChoice.ofLibrary(entry, loaded);
         }
     }
     return list;
@@ -215,7 +274,8 @@ ptrdiff_t paramIndex(const(ModuleDescriptor)* d, string name) @safe pure nothrow
 }
 
 /**
- * Returns the default bass: an Analog Generator playing a saw through a low, slightly resonant filter.
+ * Returns the default bass: the bundled Electric Bass preset, an Analog Generator playing a saw through a low,
+ * slightly resonant filter.
  *
  * Params:
  *   id = Module id to assign.
@@ -224,26 +284,14 @@ ptrdiff_t paramIndex(const(ModuleDescriptor)* d, string name) @safe pure nothrow
  *   Module named "Bass".
  */
 SavedModule defaultBassModule(uint id) {
-    SavedModule m;
-    immutable bool ok = moduleWithDefaults("synth.analog_gen", id, "Bass", m);
-    assert(ok, "synth.analog_gen must be registered");
-    const(ModuleDescriptor)* d = ModuleRegistry.findByTypeId("synth.analog_gen");
-    setParam(m, d, "Waveform", 2.0f);
-    setParam(m, d, "Unison", 1.0f);
-    setParam(m, d, "Detune", 0.05f);
-    setParam(m, d, "Cutoff", 900.0f);
-    setParam(m, d, "Resonance", 0.25f);
-    setParam(m, d, "Attack", 0.003f);
-    setParam(m, d, "Decay", 0.25f);
-    setParam(m, d, "Sustain", 0.6f);
-    setParam(m, d, "Release", 0.12f);
-    return m;
+    return factoryDefault("Electric Bass", "Bass", id);
 }
 
 /**
- * Returns the default piano: an FM Synth electric piano. Algorithm 2 has two carriers: operator 1 with a gentle
- * same-ratio modulator (the body) and operator 3 modulated by operator 5 at ratio 14 (the tine). Operator 4 is
- * silent so operator 2 is a plain sine modulator; the decay is long and the sustain low, like a struck key.
+ * Returns the default piano: the bundled Electric Piano preset, an FM Synth. Algorithm 2 has two carriers:
+ * operator 1 with a gentle same-ratio modulator (the body) and operator 3 modulated by operator 5 at ratio 14 (the
+ * tine). Operator 4 is silent so operator 2 is a plain sine modulator; the decay is long and the sustain low, like
+ * a struck key.
  *
  * Params:
  *   id = Module id to assign.
@@ -252,27 +300,72 @@ SavedModule defaultBassModule(uint id) {
  *   Module named "Piano".
  */
 SavedModule defaultPianoModule(uint id) {
+    return factoryDefault("Electric Piano", "Piano", id);
+}
+
+/**
+ * Builds a module from a bundled preset under a role name.
+ *
+ * Params:
+ *   presetName = Name in FACTORY_PRESETS.
+ *   moduleName = Name the module gets.
+ *   id = Module id to assign.
+ *
+ * Returns:
+ *   The module.
+ */
+private SavedModule factoryDefault(string presetName, string moduleName, uint id) {
+    immutable(FactoryPreset)* p = findFactoryPreset(presetName);
+    assert(p !is null, "missing bundled preset " ~ presetName);
     SavedModule m;
-    immutable bool ok = moduleWithDefaults("synth.fm_synth", id, "Piano", m);
-    assert(ok, "synth.fm_synth must be registered");
-    const(ModuleDescriptor)* d = ModuleRegistry.findByTypeId("synth.fm_synth");
-    setParam(m, d, "Algorithm", 2.0f);
-    setParam(m, d, "Feedback", 0.05f);
-    setParam(m, d, "Op1 Ratio", 1.0f);
-    setParam(m, d, "Op2 Ratio", 1.0f);
-    setParam(m, d, "Op3 Ratio", 1.0f);
-    setParam(m, d, "Op4 Ratio", 1.0f);
-    setParam(m, d, "Op5 Ratio", 14.0f);
-    setParam(m, d, "Op1 Level", 1.0f);
-    setParam(m, d, "Op2 Level", 0.35f);
-    setParam(m, d, "Op3 Level", 0.3f);
-    setParam(m, d, "Op4 Level", 0.0f);
-    setParam(m, d, "Op5 Level", 0.18f);
-    setParam(m, d, "Attack", 2.0f);
-    setParam(m, d, "Decay", 1200.0f);
-    setParam(m, d, "Sustain", 0.25f);
-    setParam(m, d, "Release", 350.0f);
+    string err;
+    immutable bool ok = factoryModule(*p, id, m, err);
+    assert(ok, err);
+    m.name = moduleName;
     return m;
+}
+
+/**
+ * Resolves the default Bass or Piano module from the bundled preset in library ("Electric Bass" / "Electric Piano"),
+ * falling back to the built-in FACTORY_PRESETS constants when the library or bundled file is missing or invalid.
+ *
+ * Params:
+ *   role = Bass or piano.
+ *   id = Module id to assign (non-zero).
+ *   library = Library to search for the bundled preset (may be null).
+ *
+ * Returns:
+ *   Resolved default module named "Bass" or "Piano".
+ */
+SavedModule resolveDefaultModule(InstrumentRole role, uint id, InstrumentLibrary library = null) {
+    immutable string presetName = role == InstrumentRole.bass ? "Electric Bass" : "Electric Piano";
+    immutable string roleName = role == InstrumentRole.bass ? "Bass" : "Piano";
+    if (library !is null) {
+        foreach (ref entry; library.entries()) {
+            if (entry.origin != PresetOrigin.bundled || entry.name != presetName || !entry.playable) {
+                continue;
+            }
+            LoadedPreset loaded;
+            string err;
+            if (!library.load(entry, loaded, err)) {
+                continue;
+            }
+            const(ModuleDescriptor)* d = ModuleRegistry.findByTypeId(loaded.mod.typeId);
+            if (d is null || !isPlayableInstrument(loaded.mod.typeId)
+                    || loaded.mod.paramValues.length != d.params.length) {
+                continue;
+            }
+            SavedModule m = copyModule(loaded.mod);
+            m.id = id;
+            m.name = roleName;
+            m.posX = 0.0f;
+            m.posY = 0.0f;
+            m.muted = false;
+            m.bypassed = false;
+            return m;
+        }
+    }
+    return role == InstrumentRole.bass ? defaultBassModule(id) : defaultPianoModule(id);
 }
 
 /**
@@ -336,8 +429,8 @@ bool isPlayableInstrument(string typeId) pure {
  * Turns a choice into the module for the generated project.
  *
  * The module gets id, the role's name ("Bass" or "Piano") and position; everything else comes from the choice.
- * A module-type choice must be one of SELECTABLE_SYNTH_TYPES. A preset choice must hold a playable module
- * (isPlayableInstrument) whose parameter count matches its type.
+ * A module-type choice must be one of SELECTABLE_SYNTH_TYPES. A preset or library choice must hold a playable
+ * module (isPlayableInstrument) whose parameter count matches its type.
  *
  * Params:
  *   role = Bass or piano.
@@ -347,12 +440,13 @@ bool isPlayableInstrument(string typeId) pure {
  *   posY = Patchbay y position.
  *   m = Receives the module.
  *   err = Receives the reason on failure.
+ *   library = Optional library for resolving defaultSound from bundled files.
  *
  * Returns:
  *   True on success.
  */
 bool resolveInstrument(InstrumentRole role, const ref InstrumentChoice c, uint id, float posX, float posY,
-        out SavedModule m, out string err) {
+        out SavedModule m, out string err, InstrumentLibrary library = null) {
     immutable string name = role == InstrumentRole.bass ? "Bass" : "Piano";
     if (id == 0) {
         err = "Module id 0 is reserved";
@@ -360,7 +454,7 @@ bool resolveInstrument(InstrumentRole role, const ref InstrumentChoice c, uint i
     }
     final switch (c.source) {
         case InstrumentSource.defaultSound:
-            m = role == InstrumentRole.bass ? defaultBassModule(id) : defaultPianoModule(id);
+            m = resolveDefaultModule(role, id, library);
             break;
         case InstrumentSource.moduleType: {
             bool listed = false;
@@ -373,7 +467,8 @@ bool resolveInstrument(InstrumentRole role, const ref InstrumentChoice c, uint i
             }
             break;
         }
-        case InstrumentSource.presetFile: {
+        case InstrumentSource.presetFile:
+        case InstrumentSource.libraryPreset: {
             const(ModuleDescriptor)* d = ModuleRegistry.findByTypeId(c.preset.typeId);
             if (d is null) {
                 err = "Preset module type is not available: " ~ c.preset.typeId;
@@ -398,21 +493,6 @@ bool resolveInstrument(InstrumentRole role, const ref InstrumentChoice c, uint i
     m.muted = false;
     m.bypassed = false;
     return true;
-}
-
-/**
- * Sets a parameter by name; asserts that the module type has it.
- *
- * Params:
- *   m = Module whose paramValues follow d.
- *   d = Module descriptor.
- *   name = Parameter name.
- *   v = Plain (unnormalized) value.
- */
-private void setParam(ref SavedModule m, const(ModuleDescriptor)* d, string name, float v) {
-    immutable ptrdiff_t i = paramIndex(d, name);
-    assert(i >= 0, "unknown parameter " ~ name);
-    m.paramValues[i] = v;
 }
 
 /**
@@ -605,11 +685,12 @@ ulong totalLines(const ref SkeletonSpec spec) @safe pure nothrow @nogc {
  * Params:
  *   spec = Settings.
  *   err = Receives the reason when invalid.
+ *   library = Optional library for resolving defaultSound from bundled presets.
  *
  * Returns:
  *   True when generateSkeleton() will succeed (apart from out-of-memory).
  */
-bool validateSpec(const ref SkeletonSpec spec, out string err) {
+bool validateSpec(const ref SkeletonSpec spec, out string err, InstrumentLibrary library = null) {
     if (spec.title.length > MAX_STRING_LEN) {
         err = "The title is too long";
         return false;
@@ -649,11 +730,11 @@ bool validateSpec(const ref SkeletonSpec spec, out string err) {
     }
     if (spec.blocks.length > 0) {
         SavedModule m;
-        if (!resolveInstrument(InstrumentRole.bass, spec.bass, 2, 0.0f, 0.0f, m, err)) {
+        if (!resolveInstrument(InstrumentRole.bass, spec.bass, 2, 0.0f, 0.0f, m, err, library)) {
             err = "Bass: " ~ err;
             return false;
         }
-        if (!resolveInstrument(InstrumentRole.piano, spec.piano, 3, 0.0f, 0.0f, m, err)) {
+        if (!resolveInstrument(InstrumentRole.piano, spec.piano, 3, 0.0f, 0.0f, m, err, library)) {
             err = "Piano: " ~ err;
             return false;
         }
@@ -674,12 +755,14 @@ bool validateSpec(const ref SkeletonSpec spec, out string err) {
  *   spec = Settings.
  *   proj = Receives the project.
  *   err = Receives validateSpec()'s reason on failure.
+ *   library = Optional library for resolving defaultSound from bundled presets.
  *
  * Returns:
  *   True on success.
  */
-bool generateSkeleton(const ref SkeletonSpec spec, out LoadedProject proj, out string err) {
-    if (!validateSpec(spec, err)) {
+bool generateSkeleton(const ref SkeletonSpec spec, out LoadedProject proj, out string err,
+        InstrumentLibrary library = null) {
+    if (!validateSpec(spec, err, library)) {
         return false;
     }
     proj.title = spec.title.length > 0 ? spec.title : "Untitled";
@@ -715,8 +798,8 @@ bool generateSkeleton(const ref SkeletonSpec spec, out LoadedProject proj, out s
 
     SavedModule bass;
     SavedModule piano;
-    if (!resolveInstrument(InstrumentRole.bass, spec.bass, 2, 200.0f, 80.0f, bass, err)
-            || !resolveInstrument(InstrumentRole.piano, spec.piano, 3, 200.0f, 240.0f, piano, err)) {
+    if (!resolveInstrument(InstrumentRole.bass, spec.bass, 2, 200.0f, 80.0f, bass, err, library)
+            || !resolveInstrument(InstrumentRole.piano, spec.piano, 3, 200.0f, 240.0f, piano, err, library)) {
         return false;
     }
     proj.modules ~= bass;

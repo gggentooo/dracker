@@ -823,6 +823,41 @@ version (unittest) {
         }
         assert(fabs(adsr.value() - 0.25f) < 1e-4f);
 
+        adsr.prepare(1024.0f);
+        adsr.setParams(0.0f, 0.0625f, 0.0f, 0.0625f);
+        adsr.setCurves(1.0f, 3.0f, 3.0f);
+        adsr.trigger();
+        float prevDecay = adsr.value();
+        float decayQuarter = 0.0f;
+        foreach (step; 0 .. 64) {
+            immutable float v = adsr.next();
+            assert(v <= prevDecay + 1e-6f);
+            prevDecay = v;
+            if (step == 15) {
+                decayQuarter = v;
+            }
+        }
+        assert(decayQuarter > 0.0f && decayQuarter < 0.5f);
+        assert(adsr.value() == 0.0f && adsr.stage() == EnvStage.sustain);
+
+        adsr.setParams(0.0f, 0.0f, 1.0f, 0.0625f);
+        adsr.setCurves(1.0f, 3.0f, 3.0f);
+        adsr.trigger();
+        assert(adsr.value() == 1.0f);
+        adsr.releaseNote();
+        float prevRel = adsr.value();
+        float relQuarter = 0.0f;
+        foreach (step; 0 .. 64) {
+            immutable float v = adsr.next();
+            assert(v <= prevRel + 1e-6f);
+            prevRel = v;
+            if (step == 15) {
+                relQuarter = v;
+            }
+        }
+        assert(relQuarter > 0.0f && relQuarter < 0.5f);
+        assert(!adsr.isActive() && adsr.stage() == EnvStage.idle && adsr.value() == 0.0f);
+
         immutable EnvBreakpoint[4] points = [
             EnvBreakpoint(0.0f, 0.0f, 1.0f),
             EnvBreakpoint(0.01f, 1.0f, 1.0f),

@@ -29,7 +29,7 @@ module tests.unit.appearance_test;
 version (unittest) {
     import std.format : format;
     import std.math : fabs;
-    import std.string : indexOf;
+    import std.string : indexOf, splitLines;
 
     import gui.appearance;
     import gui.renderer : ColorRGBA;
@@ -362,5 +362,82 @@ version (unittest) {
         assert(!blocked.save("x", err) && err.length > 0);
         assert(defaultAppearancePath().length == 0
             || defaultAppearancePath()[$ - "Dracker/appearance.cfg".length .. $] == "Dracker/appearance.cfg");
+    }
+
+    unittest {
+        foreach (name; ["rollNote", "rollNoteSelected", "padHit"]) {
+            assert(colorTokenIndex(name) >= 0, name);
+            bool grouped = false;
+            foreach (ref g; tokenGroups()) {
+                foreach (t; g.tokens) {
+                    grouped = grouped || t == name;
+                }
+            }
+            assert(grouped, name);
+        }
+        static immutable string[4] rows = ["trackerBackground", "trackerRowBeat", "trackerRowBar", "trackerPlayhead"];
+        foreach (ref spec; builtinPalettes()) {
+            foreach (mode; [ContrastMode.high, ContrastMode.low]) {
+                StudioTheme t = makeTheme(spec, mode);
+                assert(contrastFailures(t).length == 0, t.paletteName);
+                size_t checked = 0;
+                foreach (ref p; usedGraphicPairs(t)) {
+                    if (p.fg == "rollNote" || p.fg == "rollNoteSelected" || p.fg == "padHit") {
+                        assert(contrastRatio(p.fgColor, p.bgColor) >= graphicFloor(mode), t.paletteName ~ " " ~ p.fg ~ "/" ~ p.bg);
+                        checked++;
+                    }
+                }
+                assert(checked == 3 * 4 + 2 * 4);
+                foreach (rname; rows) {
+                    immutable ColorRGBA rc = colorToken(t, cast(size_t) colorTokenIndex(rname));
+                    assert(contrastRatio(t.border, rc) >= graphicFloor(mode));
+                    assert(contrastRatio(t.pianoBlackKey, t.pianoWhiteKey) >= graphicFloor(mode));
+                }
+            }
+        }
+        assert(StudioTheme.init.rollNote == StudioTheme.init.accent && StudioTheme.init.padHit == StudioTheme.init.accent);
+        assert(StudioTheme.init.rollNoteSelected == StudioTheme.init.accentHot);
+
+        assert(lateTokenSource("rollNote") == colorTokenIndex("accent") && lateTokenSource("padHit") == colorTokenIndex("accent"));
+        assert(lateTokenSource("rollNoteSelected") == colorTokenIndex("accentHot") && lateTokenSource("accent") == -1);
+        PaletteSpec custom = builtinPalettes()[2];
+        custom.name = "Custom 1";
+        custom.builtin = false;
+        custom.colors.accent = ColorRGBA.fromHex(0x123456FF);
+        custom.colors.rollNote = ColorRGBA.fromHex(0xABCDEFFF);
+        immutable string full = encodePalette(custom);
+        PaletteSpec back;
+        string err;
+        assert(decodePalette(full, back, err), err);
+        assert(back.colors.rollNote == ColorRGBA.fromHex(0xABCDEFFF));
+        string old;
+        string noAccent;
+        foreach (line; splitLines(full)) {
+            immutable bool late = line.length > 4 && (line[0 .. 4] == "roll" || line[0 .. 4] == "padH");
+            if (!late) {
+                old ~= line ~ "\n";
+            }
+            if (!late && !(line.length > 7 && line[0 .. 7] == "accent=")) {
+                noAccent ~= line ~ "\n";
+            }
+        }
+        assert(old.indexOf("rollNote") < 0 && old.indexOf("padHit") < 0);
+        assert(decodePalette(old, back, err), err);
+        assert(back.colors.rollNote == ColorRGBA.fromHex(0x123456FF) && back.colors.padHit == ColorRGBA.fromHex(0x123456FF));
+        assert(back.colors.rollNoteSelected == custom.colors.accentHot);
+        assert(!decodePalette(noAccent, back, err) && err == "missing palette token");
+        AppearanceSettings st;
+        st.customPalettes = [custom];
+        st.palette = "Custom 1";
+        string settingsText = encodeAppearance(st);
+        string oldSettings;
+        foreach (line; splitLines(settingsText)) {
+            if (!(line.length > 4 && (line[0 .. 4] == "roll" || line[0 .. 4] == "padH"))) {
+                oldSettings ~= line ~ "\n";
+            }
+        }
+        AppearanceSettings loaded;
+        assert(decodeAppearance(oldSettings, loaded, err), err);
+        assert(loaded.customPalettes.length == 1 && loaded.customPalettes[0].colors.padHit == ColorRGBA.fromHex(0x123456FF));
     }
 }

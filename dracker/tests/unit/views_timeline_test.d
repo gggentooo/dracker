@@ -1057,4 +1057,54 @@ version (unittest) {
         assert(v.majorStep() == 1);
         assert(g.s.undo());
     }
+
+    @("timeline: drum patterns show non-color clip mark, lane hit miniature, and menu label")
+    unittest {
+        auto g = new Rig();
+        scope (exit) g.dispose();
+        auto v = g.view;
+        immutable uint normalPid = g.s.doAddPattern(4, 16, "Beat");
+        immutable uint drumPid = g.s.doAddDrumPattern("Beat");
+        assert(normalPid != 0 && drumPid != 0);
+        assert(g.s.doSetDrumHit(drumPid, 0, 0, true, 0.9f));
+        assert(g.s.doSetDrumHit(drumPid, 3, 4, true, 0.7f));
+        immutable uint normalCid = g.s.doAddClip(normalPid, 0, 16, 0);
+        immutable uint drumCid = g.s.doAddClip(drumPid, 0, 16, 1);
+        assert(normalCid != 0 && drumCid != 0);
+        g.frame();
+
+        immutable RectF normalNameR = v.clipNameRect(normalCid);
+        immutable RectF drumNameR = v.clipNameRect(drumCid);
+        assert(!normalNameR.isEmpty() && !drumNameR.isEmpty());
+        assert(drumNameR.x > normalNameR.x + 10.0f);
+
+        immutable RectF drumClipR = v.clipRect(drumCid);
+        size_t hitMarks = 0;
+        float minMarkY = float.max;
+        float maxMarkY = -float.max;
+        immutable float miniTop = (drumClipR.y + 17.0f) * 2.0f;
+        immutable float miniBot = (drumClipR.bottom() - 3.0f) * 2.0f;
+        foreach (ref inst; g.r.lastDrawList().instances) {
+            if (inst.kind != InstanceKind.shape) {
+                continue;
+            }
+            if (inst.rect[0] >= drumClipR.x * 2.0f && inst.rect[0] <= drumClipR.right() * 2.0f
+                    && inst.rect[1] >= miniTop && inst.rect[1] + inst.rect[3] <= miniBot + 1.0f
+                    && inst.rect[2] <= 20.0f && inst.rect[3] <= 20.0f) {
+                hitMarks++;
+                minMarkY = inst.rect[1] < minMarkY ? inst.rect[1] : minMarkY;
+                maxMarkY = inst.rect[1] > maxMarkY ? inst.rect[1] : maxMarkY;
+            }
+        }
+        assert(hitMarks == 2 && maxMarkY > minMarkY + 4.0f);
+
+        MenuItem[] items = v.buildContextMenu(Point2F(v.lineToX(0) + 4.0f, v.laneToY(2) + 8.0f));
+        bool sawDrumMenu = false;
+        foreach (ref it; items) {
+            if (it.label == "Add Clip: [D] Beat" || it.label == "Add Clip: [D] Beat1") {
+                sawDrumMenu = true;
+            }
+        }
+        assert(sawDrumMenu);
+    }
 }

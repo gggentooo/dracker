@@ -22,13 +22,14 @@
  *   off-screen nodes and wires, and stays inside the view bounds.
  *
  * Dependencies:
- *   Internal: app.keymap, graph.{module_api,port,registry}, gui.{renderer,theme,widgets}, gui.views.studio_context,
- *     platform.interfaces
+ *   Internal: app.{instrument_library,keymap}, graph.{module_api,port,registry}, gui.{renderer,theme,widgets},
+ *     gui.views.{instrument_sidebar,studio_context}, platform.interfaces
  *   External: std.math (abs, exp, floor, isFinite, sqrt)
  *
  * Planned API (Types, Functions & Hooks):
  *   - enum PatchbayBadge / enum PatchbayHitKind / struct PatchbayHit
- *   - final class PatchbayView : Widget, StudioCommandSink — this(StudioContext), handleStudioAction(), hitTestAt(),
+ *   - final class PatchbayView : Widget, StudioCommandSink — this(StudioContext), sidebar, canvasRect(),
+ *     isDropHovered(), addPresetAt(), addPresetNext(), handleStudioAction(), hitTestAt(),
  *     zoomAround(), panBy(), setView(), fitAll(), resetZoom(), deleteSelection(), deleteModule(), addModuleAt(),
  *     selectWire(), clearWireSelection(), addModuleMenuItems(), categoryMenuItems(), nodeMenuItems(),
  *     duplicateModule(), toggleBadge(), pulsesActive(), scopeModules(), isAnimating()
@@ -42,16 +43,21 @@
 module gui.views.patchbay_view;
 
 import std.math : abs, exp, floor, isFinite, sqrt;
+import std.string : strip;
 
+import app.instrument_library : LIBRARY_GROUPS, LibraryEntry, OTHER_GROUP;
 import app.keymap : StudioAction, StudioCommandSink;
 import graph.module_api : ModuleCategory, ModuleDescriptor;
 import graph.port : arePortsCompatible, PortDirection, PortKind;
 import graph.registry : ModuleRegistry;
+import gui.layout : clampRectInside;
 import gui.renderer : ColorRGBA, drawDashedPolyline, FontId, IRenderer2D, Point2F, RectF, sampleBezier;
 import gui.theme : StudioTheme, WireDash, WireKind, wireKindOf;
+import gui.views.instrument_sidebar : InstrumentSidebar, PRESET_DRAG_KIND, PresetDragData;
 import gui.views.studio_context : StudioContext;
-import gui.widgets : fillCircle, hasModifier, KeyCode, KeyEvent, MenuItem, MouseButton, MouseEvent, ScrollEvent,
-    UiContext, Widget;
+import gui.widgets : Button, DragPayload, Dropdown, fillCircle, hasModifier, KeyCode, KeyEvent, MenuItem,
+    MouseButton, MouseEvent, ScrollEvent, TextField, UiContext, Widget;
+import io.project_format : SavedModule;
 import platform.interfaces : KeyModifiers;
 
 enum float PATCHBAY_MIN_ZOOM = 0.25f;
@@ -198,6 +204,8 @@ float patchbaySegmentDistance(Point2F p, Point2F a, Point2F b) @safe nothrow pur
  * Zoomable, pannable modular node graph editor for the session document.
  */
 final class PatchbayView : Widget, StudioCommandSink {
+    InstrumentSidebar sidebar;
+
     private StudioContext ctx_;
     private float zoom_ = 1.0f;
     private Point2F pan_ = Point2F(40.0f, 40.0f);
@@ -222,6 +230,7 @@ final class PatchbayView : Widget, StudioCommandSink {
     private ushort wirePort_ = 0;
     private Point2F wireCursor_;
     private Point2F[] scopeScratch_;
+    private bool dropHover_ = false;
 
     /**
      * Creates the patchbay over a studio context.
@@ -234,7 +243,56 @@ final class PatchbayView : Widget, StudioCommandSink {
         ctx_ = ctx;
         id = "patchbay";
         focusable = true;
+        sidebar = add(new InstrumentSidebar(ctx));
+        sidebar.onActivateEntry = (LibraryEntry e) { addPresetNext(e); };
+        sidebar.onToggleCollapsed = () { layoutChildren(); clampPan(); invalidate(); };
         contextMenuProvider = &buildContextMenu;
+    }
+
+    /**
+     * Returns the width reserved for the instrument sidebar in logical points.
+     *
+     * Returns:
+     *   Sidebar width (0 when hidden).
+     */
+    float sidebarWidth() const {
+        if (sidebar is null || !sidebar.visible) {
+            return 0.0f;
+        }
+        immutable float w = sidebar.preferredWidth();
+        return w < bounds.w ? w : bounds.w;
+    }
+
+    /**
+     * Returns the graph canvas rectangle (the area to the right of the instrument sidebar).
+     *
+     * Returns:
+     *   Canvas rectangle in logical window coordinates.
+     */
+    RectF canvasRect() const {
+        immutable float sw = sidebarWidth();
+        immutable float cw = bounds.w > sw ? bounds.w - sw : 0.0f;
+        return RectF(bounds.x + sw, bounds.y, cw, bounds.h);
+    }
+
+    /**
+     * Reports whether a preset drag is currently hovering over the canvas drop zone.
+     *
+     * Returns:
+     *   True while a preset drag can drop on the canvas.
+     */
+    bool isDropHovered() const {
+        return dropHover_;
+    }
+
+    /**
+     * Arranges the instrument sidebar at the left edge and keeps the canvas pan within bounds.
+     */
+    override void layoutChildren() {
+        if (sidebar !is null && sidebar.visible) {
+            sidebar.arrange(RectF(bounds.x, bounds.y, sidebarWidth(), bounds.h));
+        }
+        clampPan();
     }
 
     /**
@@ -267,7 +325,8 @@ final class PatchbayView : Widget, StudioCommandSink {
      *   View point.
      */
     Point2F worldToView(Point2F w) const {
-        return Point2F(bounds.x + pan_.x + w.x * zoom_, bounds.y + pan_.y + w.y * zoom_);
+        immutable RectF cr = canvasRect();
+        return Point2F(cr.x + pan_.x + w.x * zoom_, cr.y + pan_.y + w.y * zoom_);
     }
 
     /**
@@ -280,7 +339,8 @@ final class PatchbayView : Widget, StudioCommandSink {
      *   World point.
      */
     Point2F viewToWorld(Point2F v) const {
-        return Point2F((v.x - bounds.x - pan_.x) / zoom_, (v.y - bounds.y - pan_.y) / zoom_);
+        immutable RectF cr = canvasRect();
+        return Point2F((v.x - cr.x - pan_.x) / zoom_, (v.y - cr.y - pan_.y) / zoom_);
     }
 
     /**
@@ -306,9 +366,10 @@ final class PatchbayView : Widget, StudioCommandSink {
      *   newZoom = Requested zoom (clamped to 0.25 .. 3).
      */
     void zoomAround(Point2F anchor, float newZoom) {
+        immutable RectF cr = canvasRect();
         immutable Point2F w = viewToWorld(anchor);
         zoom_ = clampZoom(newZoom);
-        pan_ = Point2F(anchor.x - bounds.x - w.x * zoom_, anchor.y - bounds.y - w.y * zoom_);
+        pan_ = Point2F(anchor.x - cr.x - w.x * zoom_, anchor.y - cr.y - w.y * zoom_);
         clampPan();
         invalidate();
     }
@@ -330,17 +391,18 @@ final class PatchbayView : Widget, StudioCommandSink {
     }
 
     /**
-     * Resets the zoom to 1 around the view centre.
+     * Resets the zoom to 1 around the canvas centre.
      */
     void resetZoom() {
-        zoomAround(bounds.center(), 1.0f);
+        zoomAround(canvasRect().center(), 1.0f);
     }
 
     /**
-     * Fits every node (and its scope area) into the view; resets the view when the document has no modules.
+     * Fits every node (and its scope area) into the canvas; resets the view when the document has no modules.
      */
     void fitAll() {
         ensureCache();
+        immutable RectF cr = canvasRect();
         RectF c;
         if (!contentWorldRect(c)) {
             zoom_ = 1.0f;
@@ -349,8 +411,8 @@ final class PatchbayView : Widget, StudioCommandSink {
             return;
         }
         immutable float pad = 32.0f;
-        immutable float aw = bounds.w - 2.0f * pad;
-        immutable float ah = bounds.h - 2.0f * pad;
+        immutable float aw = cr.w - 2.0f * pad;
+        immutable float ah = cr.h - 2.0f * pad;
         float z = 1.0f;
         if (aw > 0.0f && ah > 0.0f && c.w > 0.0f && c.h > 0.0f) {
             immutable float zx = aw / c.w;
@@ -359,7 +421,7 @@ final class PatchbayView : Widget, StudioCommandSink {
         }
         zoom_ = clampZoom(z);
         immutable Point2F cc = c.center();
-        pan_ = Point2F(bounds.w * 0.5f - cc.x * zoom_, bounds.h * 0.5f - cc.y * zoom_);
+        pan_ = Point2F(cr.w * 0.5f - cc.x * zoom_, cr.h * 0.5f - cc.y * zoom_);
         invalidate();
     }
 
@@ -528,23 +590,24 @@ final class PatchbayView : Widget, StudioCommandSink {
     }
 
     /**
-     * Returns a view point inside the bounds that is not over any node, port, badge, wire, or mini-scope.
+     * Returns a view point inside the canvas bounds that is not over any node, port, badge, wire, or mini-scope.
      *
      * Returns:
-     *   Empty canvas point (the view centre if the canvas is completely covered).
+     *   Empty canvas point (the canvas centre if the canvas is completely covered).
      */
     Point2F emptyCanvasPoint() {
         ensureCache();
+        immutable RectF cr = canvasRect();
         immutable float step = 12.0f;
-        for (float y = bounds.y + step; y < bounds.bottom() - step; y += step) {
-            for (float x = bounds.x + step; x < bounds.right() - step; x += step) {
+        for (float y = cr.y + step; y < cr.bottom() - step; y += step) {
+            for (float x = cr.x + step; x < cr.right() - step; x += step) {
                 immutable Point2F p = Point2F(x, y);
                 if (isClearCanvas(p)) {
                     return p;
                 }
             }
         }
-        return bounds.center();
+        return cr.center();
     }
 
     /**
@@ -569,7 +632,7 @@ final class PatchbayView : Widget, StudioCommandSink {
     PatchbayHit hitTestAt(Point2F p) {
         ensureCache();
         PatchbayHit h;
-        if (!bounds.contains(p)) {
+        if (!canvasRect().contains(p)) {
             return h;
         }
         float bestD = portHitRadius();
@@ -767,6 +830,40 @@ final class PatchbayView : Widget, StudioCommandSink {
     }
 
     /**
+     * Adds a preset from the instrument library at a world position (unwired, selected, one undo step).
+     *
+     * Params:
+     *   entry = Library preset entry.
+     *   world = World position of the node's top-left corner.
+     *
+     * Returns:
+     *   New module id, or 0 on failure.
+     */
+    uint addPresetAt(const ref LibraryEntry entry, Point2F world) {
+        immutable uint newId = ctx_.addPresetFromLibrary(entry, world.x, world.y);
+        if (newId != 0) {
+            hasSelectedWire_ = false;
+        }
+        invalidate();
+        return newId;
+    }
+
+    /**
+     * Adds a preset from the instrument library at the next free patchbay position (unwired, selected, one undo
+     * step).
+     *
+     * Params:
+     *   entry = Library preset entry.
+     *
+     * Returns:
+     *   New module id, or 0 on failure.
+     */
+    uint addPresetNext(const ref LibraryEntry entry) {
+        immutable float[2] pos = ctx_.nextModulePosition();
+        return addPresetAt(entry, Point2F(pos[0], pos[1]));
+    }
+
+    /**
      * Builds the empty-canvas menu: one "Add <Category> ▸" entry per registry category (each opens a menu of
      * that category's modules), "Load Preset…" (adds an .msym preset as a new module at world), then view commands.
      *
@@ -838,6 +935,7 @@ final class PatchbayView : Widget, StudioCommandSink {
         items ~= MenuItem(soloed ? "Unsolo" : "Solo", () { toggleBadge(mid, PatchbayBadge.solo); }, !output);
         items ~= MenuItem(bypassed ? "Enable" : "Bypass", () { toggleBadge(mid, PatchbayBadge.bypass); }, !output);
         items ~= MenuItem.makeSeparator();
+        items ~= MenuItem("Add to Instruments…", () { openAddToInstrumentsDialog(mid); }, !output);
         items ~= MenuItem("Save Preset…", () { ctx_.saveModulePreset(mid); }, !output);
         items ~= MenuItem("Apply Preset…", () { ctx_.applyModulePreset(mid); }, !output);
         items ~= MenuItem.makeSeparator();
@@ -859,10 +957,10 @@ final class PatchbayView : Widget, StudioCommandSink {
     bool handleStudioAction(StudioAction action) {
         switch (action) {
         case StudioAction.zoomIn:
-            zoomAround(bounds.center(), zoom_ * 1.25f);
+            zoomAround(canvasRect().center(), zoom_ * 1.25f);
             return true;
         case StudioAction.zoomOut:
-            zoomAround(bounds.center(), zoom_ / 1.25f);
+            zoomAround(canvasRect().center(), zoom_ / 1.25f);
             return true;
         case StudioAction.zoomReset:
             resetZoom();
@@ -923,7 +1021,7 @@ final class PatchbayView : Widget, StudioCommandSink {
     }
 
     override bool onMouseDown(const ref MouseEvent e) {
-        if (e.button != MouseButton.left) {
+        if (e.button != MouseButton.left || !canvasRect().contains(e.pos)) {
             return false;
         }
         immutable PatchbayHit h = hitTestAt(e.pos);
@@ -1017,6 +1115,9 @@ final class PatchbayView : Widget, StudioCommandSink {
     }
 
     override bool onScroll(const ref ScrollEvent e) {
+        if (!canvasRect().contains(e.pos)) {
+            return false;
+        }
         if (hasModifier(e.modifiers, KeyModifiers.command)) {
             zoomAround(e.pos, zoom_ * exp(e.deltaY * 0.01f));
         } else {
@@ -1026,7 +1127,7 @@ final class PatchbayView : Widget, StudioCommandSink {
     }
 
     override bool onMagnify(Point2F pos, float magnification) {
-        if (!isFinite(magnification)) {
+        if (!isFinite(magnification) || !canvasRect().contains(pos)) {
             return false;
         }
         zoomAround(pos, zoom_ * (1.0f + magnification));
@@ -1048,25 +1149,77 @@ final class PatchbayView : Widget, StudioCommandSink {
         return false;
     }
 
+    override void onFocusGained() {
+        super.onFocusGained();
+        if (sidebar !is null) {
+            sidebar.refresh(true);
+        }
+    }
+
+    override bool onDragQuery(const ref DragPayload payload, Point2F pos) {
+        return payload.kind == PRESET_DRAG_KIND && cast(PresetDragData) payload.data !is null
+            && canvasRect().contains(pos);
+    }
+
+    override void onDragEnter(const ref DragPayload payload, Point2F pos) {
+        dropHover_ = true;
+        invalidate();
+    }
+
+    override void onDragLeave() {
+        dropHover_ = false;
+        invalidate();
+    }
+
+    override bool onDrop(const ref DragPayload payload, Point2F pos) {
+        dropHover_ = false;
+        auto data = cast(PresetDragData) payload.data;
+        if (data is null || !canvasRect().contains(pos)) {
+            invalidate();
+            return false;
+        }
+        immutable uint id = addPresetAt(data.entry, viewToWorld(pos));
+        return id != 0;
+    }
+
     override void paint(IRenderer2D r, const ref StudioTheme theme) {
         ensureCache();
         syncSelection();
         requestTaps();
-        r.pushClip(bounds);
-        r.fillRect(bounds, theme.panelSunken);
-        drawGrid(r, theme);
-        drawWires(r, theme);
+        immutable RectF cr = canvasRect();
+        if (cr.isEmpty()) {
+            return;
+        }
+        r.pushClip(cr);
+        r.fillRect(cr, theme.panelSunken);
+        drawGrid(r, theme, cr);
+        drawWires(r, theme, cr);
         if (drag_ == DragMode.wire) {
             drawRubberBand(r, theme);
         }
         foreach (ref n; nodes_) {
-            drawNode(r, theme, n);
+            drawNode(r, theme, n, cr);
         }
-        drawScopes(r, theme);
+        drawScopes(r, theme, cr);
+        if (dropHover_) {
+            r.strokeRoundedRect(cr.inset(1.5f), 0.0f, 3.0f, theme.accentHot);
+        }
+        r.popClip();
+    }
+
+    override void drawChildren(IRenderer2D r, const ref StudioTheme theme) {
+        if (bounds.isEmpty()) {
+            return;
+        }
+        r.pushClip(bounds);
+        super.drawChildren(r, theme);
         r.popClip();
     }
 
     private MenuItem[] buildContextMenu(Point2F p) {
+        if (!canvasRect().contains(p)) {
+            return null;
+        }
         immutable PatchbayHit h = hitTestAt(p);
         if (h.kind == PatchbayHitKind.node || h.kind == PatchbayHitKind.badge || h.kind == PatchbayHitKind.inputPort
                 || h.kind == PatchbayHitKind.outputPort) {
@@ -1345,19 +1498,20 @@ final class PatchbayView : Widget, StudioCommandSink {
         if (!contentWorldRect(c)) {
             return;
         }
+        immutable RectF cr = canvasRect();
         immutable RectF v = worldRectToView(c);
         immutable float m = PATCHBAY_PAN_MARGIN;
         float dx = 0.0f;
         float dy = 0.0f;
-        if (v.right() < bounds.x + m) {
-            dx = bounds.x + m - v.right();
-        } else if (v.x > bounds.right() - m) {
-            dx = bounds.right() - m - v.x;
+        if (v.right() < cr.x + m) {
+            dx = cr.x + m - v.right();
+        } else if (v.x > cr.right() - m) {
+            dx = cr.right() - m - v.x;
         }
-        if (v.bottom() < bounds.y + m) {
-            dy = bounds.y + m - v.bottom();
-        } else if (v.y > bounds.bottom() - m) {
-            dy = bounds.bottom() - m - v.y;
+        if (v.bottom() < cr.y + m) {
+            dy = cr.y + m - v.bottom();
+        } else if (v.y > cr.bottom() - m) {
+            dy = cr.bottom() - m - v.y;
         }
         pan_ = Point2F(pan_.x + dx, pan_.y + dy);
     }
@@ -1506,27 +1660,27 @@ final class PatchbayView : Widget, StudioCommandSink {
         }
     }
 
-    private void drawGrid(IRenderer2D r, const ref StudioTheme theme) {
+    private void drawGrid(IRenderer2D r, const ref StudioTheme theme, RectF cr) {
         immutable float step = 40.0f * zoom_;
         if (step < 10.0f) {
             return;
         }
-        immutable Point2F w0 = viewToWorld(Point2F(bounds.x, bounds.y));
+        immutable Point2F w0 = viewToWorld(Point2F(cr.x, cr.y));
         float gx = floor(w0.x / 40.0f) * 40.0f;
-        for (float x = worldToView(Point2F(gx, 0.0f)).x; x < bounds.right(); x += step) {
-            if (x >= bounds.x) {
-                r.fillRect(RectF(x, bounds.y, 1.0f, bounds.h), theme.gridLine);
+        for (float x = worldToView(Point2F(gx, 0.0f)).x; x < cr.right(); x += step) {
+            if (x >= cr.x) {
+                r.fillRect(RectF(x, cr.y, 1.0f, cr.h), theme.gridLine);
             }
         }
         float gy = floor(w0.y / 40.0f) * 40.0f;
-        for (float y = worldToView(Point2F(0.0f, gy)).y; y < bounds.bottom(); y += step) {
-            if (y >= bounds.y) {
-                r.fillRect(RectF(bounds.x, y, bounds.w, 1.0f), theme.gridLine);
+        for (float y = worldToView(Point2F(0.0f, gy)).y; y < cr.bottom(); y += step) {
+            if (y >= cr.y) {
+                r.fillRect(RectF(cr.x, y, cr.w, 1.0f), theme.gridLine);
             }
         }
     }
 
-    private void drawWires(IRenderer2D r, const ref StudioTheme theme) {
+    private void drawWires(IRenderer2D r, const ref StudioTheme theme, RectF cr) {
         immutable ptrdiff_t sel = selectedWireIndex();
         WireKey selKey = selectedWire_;
         immutable float zw = zoom_ < 0.5f ? 0.5f : (zoom_ > 2.0f ? 2.0f : zoom_);
@@ -1535,7 +1689,7 @@ final class PatchbayView : Widget, StudioCommandSink {
             Point2F p0, c0, c1, p1;
             wireCurve(w, p0, c0, c1, p1);
             immutable float width = theme.wireWidth * zw * gainScale(w.gain);
-            if (curveBounds(p0, c0, c1, p1, width + 6.0f).intersect(bounds).isEmpty()) {
+            if (curveBounds(p0, c0, c1, p1, width + 6.0f).intersect(cr).isEmpty()) {
                 continue;
             }
             immutable ColorRGBA col = theme.portColor(w.kind);
@@ -1584,10 +1738,10 @@ final class PatchbayView : Widget, StudioCommandSink {
             StudioTheme.wireDash(wireKindOf(k)));
     }
 
-    private void drawNode(IRenderer2D r, const ref StudioTheme theme, const ref NodeCache n) {
+    private void drawNode(IRenderer2D r, const ref StudioTheme theme, const ref NodeCache n, RectF cr) {
         immutable RectF v = worldRectToView(nodeWorldRect(n));
         immutable float portR = PATCHBAY_PORT_RADIUS * zoom_ + 2.0f;
-        if (RectF(v.x - portR, v.y, v.w + 2.0f * portR, v.h).intersect(bounds).isEmpty()) {
+        if (RectF(v.x - portR, v.y, v.w + 2.0f * portR, v.h).intersect(cr).isEmpty()) {
             return;
         }
         immutable bool selected = ctx_.selectedModule() == n.id;
@@ -1792,7 +1946,7 @@ final class PatchbayView : Widget, StudioCommandSink {
         }
     }
 
-    private void drawScopes(IRenderer2D r, const ref StudioTheme theme) {
+    private void drawScopes(IRenderer2D r, const ref StudioTheme theme, RectF cr) {
         size_t shown = 0;
         foreach (idv; recentSelection_) {
             if (shown >= PATCHBAY_MAX_SCOPES) {
@@ -1804,7 +1958,7 @@ final class PatchbayView : Widget, StudioCommandSink {
             }
             shown++;
             immutable RectF sr = worldRectToView(scopeWorldRect(nodes_[*p]));
-            if (sr.intersect(bounds).isEmpty()) {
+            if (sr.intersect(cr).isEmpty()) {
                 continue;
             }
             float[] left;
@@ -1826,6 +1980,238 @@ final class PatchbayView : Widget, StudioCommandSink {
                 scopeScratch_[k] = Point2F(sr.x + sr.w * cast(float) k / cast(float)(points - 1), sr.center().y - s * half);
             }
             r.drawPolyline(scopeScratch_, 1.25f, theme.success);
+        }
+    }
+
+    /**
+     * Opens the modal "Add to Instruments" dialog for a module, pre-filling its name and choosing a default
+     * group for its category.
+     *
+     * Params:
+     *   moduleId = Source module id (0 and core.output are refused).
+     *
+     * Returns:
+     *   The open dialog, or null if invalid or detached.
+     */
+    AddInstrumentDialog openAddToInstrumentsDialog(uint moduleId) {
+        auto ui = context();
+        if (ui is null || ctx_.library is null || isOutputModule(moduleId)) {
+            return null;
+        }
+        const(SavedModule)* found = null;
+        foreach (ref m; ctx_.session.document().modules) {
+            if (m.id == moduleId) {
+                found = &m;
+                break;
+            }
+        }
+        if (found is null) {
+            return null;
+        }
+        string[] groups;
+        void appendUnique(string g) {
+            foreach (existing; groups) {
+                if (existing == g) return;
+            }
+            groups ~= g;
+        }
+        foreach (g; LIBRARY_GROUPS) {
+            appendUnique(g);
+        }
+        foreach (g; ctx_.library.groups()) {
+            appendUnique(g);
+        }
+        appendUnique(OTHER_GROUP);
+
+        string defGroup = defaultGroupForModule(found.typeId);
+        size_t defIdx = 0;
+        foreach (i, g; groups) {
+            if (g == defGroup) {
+                defIdx = i;
+                break;
+            }
+        }
+        immutable uint mid = moduleId;
+        auto dlg = new AddInstrumentDialog(found.name, groups, defIdx, (string name, string group) {
+            SavedModule modCopy;
+            bool stillHere = false;
+            foreach (ref m; ctx_.session.document().modules) {
+                if (m.id == mid) {
+                    modCopy.id = m.id;
+                    modCopy.typeId = m.typeId;
+                    modCopy.name = m.name;
+                    modCopy.posX = m.posX;
+                    modCopy.posY = m.posY;
+                    modCopy.muted = m.muted;
+                    modCopy.bypassed = m.bypassed;
+                    modCopy.paramValues = m.paramValues.dup;
+                    modCopy.extraBlob = m.extraBlob.dup;
+                    stillHere = true;
+                    break;
+                }
+            }
+            if (!stillHere) {
+                ctx_.setStatus("The module is no longer in the project");
+                return true;
+            }
+            LibraryEntry added;
+            string err;
+            if (!ctx_.library.addFromModule(modCopy, strip(name), group, added, err)) {
+                ctx_.setStatus(err);
+                return false;
+            }
+            ctx_.notifyLibraryChanged();
+            sidebar.refresh(false);
+            ctx_.setStatus("Added \"" ~ added.name ~ "\" to " ~ added.group);
+            return true;
+        });
+        immutable RectF vp = ui.viewport();
+        immutable RectF want = RectF(vp.x + (vp.w - AddInstrumentDialog.WIDTH) * 0.5f,
+            vp.y + (vp.h - AddInstrumentDialog.HEIGHT) * 0.5f,
+            AddInstrumentDialog.WIDTH, AddInstrumentDialog.HEIGHT);
+        dlg.bounds = vp.isEmpty() ? RectF(0, 0, AddInstrumentDialog.WIDTH, AddInstrumentDialog.HEIGHT)
+            : clampRectInside(want, vp);
+        ui.openOverlay(dlg);
+        ui.setFocus(dlg.nameField);
+        return dlg;
+    }
+
+    private static string defaultGroupForModule(string typeId) {
+        if (typeId == "synth.drumsynth" || typeId == "synth.kicker") {
+            return "Drums";
+        }
+        const(ModuleDescriptor)* d = ModuleRegistry.findByTypeId(typeId);
+        if (d !is null && d.category != ModuleCategory.synth) {
+            return "Effects";
+        }
+        return "Other";
+    }
+}
+
+/**
+ * Modal overlay asking for preset name and group when saving a module into the user instrument library.
+ */
+final class AddInstrumentDialog : Widget {
+    enum float WIDTH = 340.0f;
+    enum float HEIGHT = 188.0f;
+    enum float PAD = 16.0f;
+    enum float ROW_H = 26.0f;
+    enum float GAP = 10.0f;
+    enum float BUTTON_W = 84.0f;
+
+    TextField nameField;
+    Dropdown groupSelect;
+    Button addButton;
+    Button cancelButton;
+    bool delegate(string name, string group) onSubmit;
+
+    /**
+     * Creates the dialog overlay.
+     *
+     * Params:
+     *   initialName = Default preset name.
+     *   groups = Group choices for Dropdown.
+     *   initialGroup = Initially selected group index.
+     *   submit = Callback receiving (name, group); returns true to close or false to show error status and keep open.
+     */
+    this(string initialName, string[] groups, size_t initialGroup, bool delegate(string, string) submit) {
+        onSubmit = submit;
+        focusable = true;
+        nameField = add(new TextField(initialName));
+        nameField.id = "addInstrument.name";
+        nameField.persistent = true;
+        nameField.onCommit = (string) { trySubmit(); };
+        groupSelect = add(new Dropdown(groups, initialGroup));
+        groupSelect.id = "addInstrument.group";
+        addButton = add(new Button("Add", &trySubmit));
+        addButton.id = "addInstrument.add";
+        cancelButton = add(new Button("Cancel", &close));
+        cancelButton.id = "addInstrument.cancel";
+    }
+
+    override bool isModalOverlay() const {
+        return true;
+    }
+
+    override bool onKeyDown(const ref KeyEvent e) {
+        if (e.keyCode == KeyCode.escape) {
+            close();
+            return true;
+        }
+        if (e.keyCode == KeyCode.returnKey || e.keyCode == KeyCode.keypadEnter) {
+            trySubmit();
+            return true;
+        }
+        if (e.keyCode == KeyCode.tab) {
+            if (auto c = context()) {
+                Widget[4] ring = [nameField, groupSelect, addButton, cancelButton];
+                size_t cur = 0;
+                foreach (i, w; ring) {
+                    if (c.focused is w) {
+                        cur = i;
+                        break;
+                    }
+                }
+                c.setFocus(ring[(cur + 1) % ring.length]);
+            }
+            return true;
+        }
+        return true;
+    }
+
+    override bool onKeyUp(const ref KeyEvent e) {
+        return true;
+    }
+
+    override bool onTextInput(dchar c) {
+        return true;
+    }
+
+    override bool onMouseDown(const ref MouseEvent e) {
+        return true;
+    }
+
+    override bool onScroll(const ref ScrollEvent e) {
+        return true;
+    }
+
+    override void layoutChildren() {
+        immutable float labelW = 58.0f;
+        immutable float fieldX = bounds.x + PAD + labelW;
+        immutable float fieldW = bounds.w - 2.0f * PAD - labelW;
+        float y = bounds.y + PAD + 28.0f;
+        nameField.arrange(RectF(fieldX, y, fieldW, ROW_H));
+        y += ROW_H + GAP;
+        groupSelect.arrange(RectF(fieldX, y, fieldW, ROW_H));
+        immutable float by = bounds.bottom() - PAD - ROW_H;
+        addButton.arrange(RectF(bounds.right() - PAD - BUTTON_W, by, BUTTON_W, ROW_H));
+        cancelButton.arrange(RectF(bounds.right() - PAD - 2.0f * BUTTON_W - GAP, by, BUTTON_W, ROW_H));
+    }
+
+    override void paint(IRenderer2D r, const ref StudioTheme theme) {
+        r.fillRoundedRect(bounds.translate(0.0f, 4.0f), theme.radiusLg, theme.shadow);
+        r.fillRoundedRect(bounds, theme.radiusLg, theme.panel);
+        r.strokeRoundedRect(bounds, theme.radiusLg, 2.0f, theme.borderStrong);
+        r.drawText(Point2F(bounds.x + PAD, bounds.y + PAD), "Add to Instruments", FontId.ui,
+            theme.fontSizeTitle, theme.text);
+        immutable float lh = r.lineHeight(FontId.ui, theme.fontSizeBody);
+        r.drawText(Point2F(bounds.x + PAD, nameField.bounds.y + (ROW_H - lh) * 0.5f), "Name", FontId.ui,
+            theme.fontSizeBody, theme.text);
+        r.drawText(Point2F(bounds.x + PAD, groupSelect.bounds.y + (ROW_H - lh) * 0.5f), "Group", FontId.ui,
+            theme.fontSizeBody, theme.text);
+    }
+
+    private void trySubmit() {
+        immutable string grp = groupSelect.selectedIndex < groupSelect.items.length
+            ? groupSelect.items[groupSelect.selectedIndex] : OTHER_GROUP;
+        if (onSubmit is null || onSubmit(nameField.text(), grp)) {
+            close();
+        }
+    }
+
+    private void close() {
+        if (auto c = context()) {
+            c.closeOverlay(this);
         }
     }
 }

@@ -46,6 +46,7 @@ version (unittest) {
     import std.process : thisProcessID;
 
     import app.chord_progression : ChordForm;
+    import app.instrument_library : InstrumentLibrary;
     import app.keymap : isDocumentLevel, Keymap, StudioAction;
     import foundation.memory : OwnedBuffer;
     import std.math : fabs;
@@ -173,6 +174,7 @@ version (unittest) {
         assert(r.session.initialize(44_100.0f));
         r.dialog = new PanelDialog();
         r.ctx = new StudioContext(r.session, null, r.dialog);
+        r.ctx.library = new InstrumentLibrary(["resources/presets"], "");
         r.root = new StudioRoot(r.ctx);
         r.ui = new UiContext(r.root);
         r.renderer = new HeadlessRenderer(new GlyphCache(new PanelRasterizer()));
@@ -437,53 +439,77 @@ version (unittest) {
         assert(savePreset(fx, effect, err), err);
         write(junk, "not a preset");
 
+        size_t findDropdownItem(string[] items, string label) {
+            foreach (idx, it; items) {
+                if (it == label) {
+                    return idx;
+                }
+            }
+            assert(false, "missing item " ~ label);
+        }
+
         SkeletonPanel p = r.root.openSkeletonPanel();
         r.frame();
-        immutable string[] base = ["Default", "Analog Generator", "FM Synth", "SpectraVoice", "Load preset file…"];
-        assert(p.bassBox.items == base && p.pianoBox.items == base);
+        immutable string[] expectedPlayable = [
+            "Default",
+            "Electric Bass", "Synth Bass",
+            "Bell", "Bright Piano", "Electric Piano", "Organ",
+            "Pluck", "Saw Lead", "Strings", "Warm Pad",
+            "Drum Kit", "Kick",
+            "Load preset file…"
+        ];
+        assert(p.bassBox.items == expectedPlayable && p.pianoBox.items == expectedPlayable);
         assert(!p.bassBox.enabled && !p.pianoBox.enabled);
         assert(p.addChords("I IV V"));
         assert(p.bassBox.enabled && p.pianoBox.enabled);
 
-        p.bassBox.select(2);
+        immutable size_t bellIdx = findDropdownItem(p.bassBox.items, "Bell");
+        immutable size_t loadBassIdx = p.bassBox.items.length - 1;
+        immutable size_t loadPianoIdx = p.pianoBox.items.length - 1;
+        p.bassBox.select(bellIdx);
         SkeletonSpec s = p.spec();
-        assert(s.bass.source == InstrumentSource.moduleType && s.bass.typeId == "synth.fm_synth");
+        assert(s.bass.source == InstrumentSource.libraryPreset && s.bass.typeId == "synth.fm_synth"
+            && s.bass.label() == "Bell");
         assert(s.piano.source == InstrumentSource.defaultSound);
 
         r.dialog.openPath = good;
-        p.pianoBox.select(4);
+        p.pianoBox.select(loadPianoIdx);
         assert(r.dialog.opens == 1 && r.dialog.lastTitle == "Load Piano Preset" && r.dialog.lastExtensions == ["msym"]);
-        assert(p.pianoBox.items.length == 6 && p.pianoBox.items[4] == "Preset: Warm Bass" && p.pianoBox.selectedIndex == 4);
-        assert(p.pianoBox.items[5] == "Load preset file…" && p.instrumentError() == "");
+        assert(p.pianoBox.items.length == expectedPlayable.length + 1
+            && p.pianoBox.items[$ - 2] == "Preset: Warm Bass" && p.pianoBox.selectedIndex == p.pianoBox.items.length - 2);
+        assert(p.pianoBox.items[$ - 1] == "Load preset file…" && p.instrumentError() == "");
         s = p.spec();
         assert(s.piano.source == InstrumentSource.presetFile && s.piano.typeId == "synth.analog_gen");
 
         r.dialog.openPath = "";
-        p.pianoBox.select(5);
-        assert(r.dialog.opens == 2 && p.pianoBox.selectedIndex == 4 && p.pianoBox.items.length == 6);
+        p.pianoBox.select(p.pianoBox.items.length - 1);
+        assert(r.dialog.opens == 2 && p.pianoBox.selectedIndex == p.pianoBox.items.length - 2
+            && p.pianoBox.items.length == expectedPlayable.length + 1);
 
         r.dialog.openPath = junk;
-        p.bassBox.select(4);
-        assert(p.instrumentError().startsWith("Could not load preset: ") && p.bassBox.selectedIndex == 2);
-        assert(p.bassBox.items.length == 5);
+        p.bassBox.select(loadBassIdx);
+        assert(p.instrumentError().startsWith("Could not load preset: ") && p.bassBox.selectedIndex == bellIdx);
+        assert(p.bassBox.items.length == expectedPlayable.length);
 
         r.dialog.openPath = effect;
-        p.bassBox.select(4);
+        p.bassBox.select(loadBassIdx);
         assert(p.instrumentError() == "\"Shaper\" cannot play notes; choose a synth preset");
-        assert(p.bassBox.selectedIndex == 2 && p.spec().bass.typeId == "synth.fm_synth");
+        assert(p.bassBox.selectedIndex == bellIdx && p.spec().bass.typeId == "synth.fm_synth");
         p.bassBox.select(0);
         assert(p.instrumentError() == "" && p.spec().bass.source == InstrumentSource.defaultSound);
 
         LoadedProject proj;
         SkeletonSpec chosen = p.spec();
-        assert(generateSkeleton(chosen, proj, err), err);
+        assert(generateSkeleton(chosen, proj, err, r.ctx.library), err);
         assert(proj.modules[1].typeId == "synth.analog_gen" && proj.modules[2].typeId == "synth.analog_gen");
         assert(proj.modules[2].name == "Piano");
 
         r.key(53);
         SkeletonPanel q = r.root.openSkeletonPanel();
         r.frame();
-        assert(q.pianoBox.items.length == 6 && q.pianoBox.selectedIndex == 4 && q.pianoBox.items[4] == "Preset: Warm Bass");
+        assert(q.pianoBox.items.length == expectedPlayable.length + 1
+            && q.pianoBox.selectedIndex == q.pianoBox.items.length - 2
+            && q.pianoBox.items[$ - 2] == "Preset: Warm Bass");
         r.key(53);
 
         StudioContext bare = new StudioContext(r.session);
@@ -594,7 +620,12 @@ version (unittest) {
         p.presetBox.select(0);
         r.click(centerOf(p.insertButton.bounds));
         assert(p.strip.blocks.length == 5 && p.strip.blockText(0)[0] == "iii · Bm");
-        p.bassBox.select(2);
+        foreach (i, item; p.bassBox.items) {
+            if (item == "Bell") {
+                p.bassBox.select(i);
+                break;
+            }
+        }
         r.frame();
         r.click(centerOf(p.createButton.bounds));
         assert(r.root.skeletonPanel() is null);
@@ -641,5 +672,58 @@ version (unittest) {
             peak = fabs(l[i]) > peak ? fabs(l[i]) : peak;
         }
         assert(peak > 0.01f && peak < 1.0f);
+    }
+
+    unittest {
+        import std.file : exists, mkdirRecurse, rmdirRecurse;
+
+        PanelRig r = makeRig();
+        scope (exit) r.session.dispose();
+        immutable string userDir = buildPath(tempDir(), "dracker_t52_panel_" ~ to!string(thisProcessID()));
+        mkdirRecurse(buildPath(userDir, "Keys"));
+        mkdirRecurse(buildPath(userDir, "Effects"));
+        scope (exit) if (exists(userDir)) rmdirRecurse(userDir);
+
+        string err;
+        LoadedPreset userKey;
+        userKey.presetName = "Warm User";
+        assert(moduleWithDefaults("synth.spectravoice", 1, "Warm User", userKey.mod));
+        assert(savePreset(userKey, buildPath(userDir, "Keys", "Warm User.msym"), err), err);
+
+        LoadedPreset userFx;
+        userFx.presetName = "User Verb";
+        assert(moduleWithDefaults("fx.reverb", 1, "User Verb", userFx.mod));
+        assert(savePreset(userFx, buildPath(userDir, "Effects", "User Verb.msym"), err), err);
+
+        r.ctx.library = new InstrumentLibrary(["resources/presets"], userDir);
+        SkeletonPanel p = r.root.openSkeletonPanel();
+        r.frame();
+        assert(p.bassBox.items[0] == "Default");
+        assert(p.bassBox.items.length == 1 + 12 + 1 + 1);
+        assert(p.bassBox.items[$ - 2] == "Warm User (user)");
+        assert(p.bassBox.items[$ - 1] == "Load preset file…");
+        assert(!p.bassBox.items.canFind("User Verb"));
+        assert(p.addChords("I IV"));
+        p.bassBox.select(p.bassBox.items.length - 2);
+        assert(p.spec().bass.typeId == "synth.spectravoice");
+        r.click(centerOf(p.createButton.bounds));
+        assert(r.session.document().modules[1].typeId == "synth.spectravoice");
+
+        SkeletonPanel reopened = r.root.openSkeletonPanel();
+        r.frame();
+        assert(reopened.bassBox.selectedIndex == reopened.bassBox.items.length - 2);
+        r.key(53);
+
+        PanelRig emptyRig = makeRig();
+        scope (exit) emptyRig.session.dispose();
+        emptyRig.ctx.library = new InstrumentLibrary(null, "");
+        SkeletonPanel ep = emptyRig.root.openSkeletonPanel();
+        emptyRig.frame();
+        assert(ep.bassBox.items == ["Default", "Load preset file…"]);
+        assert(ep.addChords("I V"));
+        emptyRig.click(centerOf(ep.createButton.bounds));
+        assert(emptyRig.session.document().modules.length == 3);
+        assert(emptyRig.session.document().modules[1].typeId == "synth.analog_gen");
+        assert(emptyRig.session.document().modules[2].typeId == "synth.fm_synth");
     }
 }

@@ -179,7 +179,7 @@ struct Reverb {
         immutable float room = isFinite(roomSize) ? (roomSize < 0.0f ? 0.0f : (roomSize > 1.0f ? 1.0f : roomSize)) : 0.65f;
         immutable float width = isFinite(stereoWidth)
             ? (stereoWidth < 0.0f ? 0.0f : (stereoWidth > 1.0f ? 1.0f : stereoWidth)) : 1.0f;
-        immutable float fbGain = frozen ? 0.998f : (0.35f + 0.58f * room);
+        immutable float fbGain = frozen ? 0.998f : (0.48f + 0.49f * room);
         immutable float preMs = isFinite(preDelayMs)
             ? (preDelayMs < 0.0f ? 0.0f : (preDelayMs > 200.0f ? 200.0f : preDelayMs)) : 0.0f;
         size_t preDelaySamp = cast(size_t)(preMs * 0.001f * sr);
@@ -224,8 +224,8 @@ struct Reverb {
                 fdnLines_[k].write(mixed);
             }
 
-            immutable float tankL = (taps[0] + taps[2] + taps[4] + taps[6]) * 0.35f;
-            immutable float tankR = (taps[1] + taps[3] + taps[5] + taps[7]) * 0.35f;
+            immutable float tankL = (taps[0] + taps[2] + taps[4] + taps[6]) * 0.65f;
+            immutable float tankR = (taps[1] + taps[3] + taps[5] + taps[7]) * 0.65f;
             immutable float mid = 0.5f * (tankL + tankR);
             immutable float side = 0.5f * (tankL - tankR) * width;
 

@@ -10,6 +10,135 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
 
 ---
 
+## [2026-11-26 08:05:02 KST]
+- **Author:** Gemini 4 Neon
+- **Task:** Owner sign-off (`T46`, `T56`, `T64`) and Build items (`T49`, `T52`, `T58`)
+- **Summary:**
+  - **Sign-offs (`T46`, `T56`, `T64`):** Owner confirmed the re-rendered sound checks (retuned Electric Piano, Keys presets, and wet/dry effect renders) and the pattern editor views check; moved `T46`, `T56`, and `T64` to Done.
+  - **T49 (Packaging — Bundled presets in the app bundle):** Updated `packaging/macos/bundle_macos.sh` to validate every preset listed in `source/app/factory_presets.d` against `resources/presets/`, copy `resources/presets/` to `Contents/Resources/Presets`, and verify every bundle destination file is non-empty; updated `ci/macos.yml` to run the same preset-presence check alongside `bash -n packaging/macos/bundle_macos.sh` and `dub test --config=headless` (`factory_presets_test`); updated Phase 9.1 and the §3 Package Map in `agents.md`.
+  - **T52 (App, GUI/views — Skeleton generator uses the library):** Extended `InstrumentSource` / `InstrumentChoice` in `source/app/skeleton_gen.d` with `libraryPreset`, `ofLibrary()`, `instrumentChoices(InstrumentLibrary)`, and `resolveDefaultModule()` (resolving defaults from bundled `.msym` presets with fallback to `defaultBassModule()` / `defaultPianoModule()`); updated `SkeletonPanel` (`source/gui/views/skeleton_panel.d`) and `StudioRoot.createSkeletonProject()` (`source/gui/views/studio_root.d`) to rescan and pass `ctx.library`; added unit tests in `tests/unit/skeleton_gen_test.d` and `tests/unit/views_skeleton_panel_test.d` (verifying bundled-then-user ordering, non-playable exclusion, missing-bundled fallback, and sample-identical default renders).
+  - **T58 (Docs — Pattern editor views manual & architecture):** Documented the view bar, `+Drum` / `...` header controls, Piano roll (§8.12), Drum patterns and Drumpad (§8.13), and updated Appendix A & C in `docs/manual.md`; updated §3 and added §8 (components, decisions T30–T34, and `DRUM` chunk specification) in `../architecture.md`; updated `agents.md` package map.
+- **Verification:**
+  - `dub test --compiler=ldc2 --config=headless` (`37 modules passed unittests`)
+  - `dub test --compiler=ldc2 --config=app` (`4 modules passed unittests`)
+  - `DFLAGS="-w" dub build --compiler=ldc2 --config=app --build=debug --force` (exit 0, zero warnings; `build/dracker` is GUI binary)
+  - `bash -n packaging/macos/bundle_macos.sh`, `plutil -lint packaging/macos/Info.plist packaging/macos/entitlements.plist`, and preset verification against `resources/presets/` (exit 0)
+  - Inline-comment audit (`! grep -n '//'` across all modified `.d` files): 0 matches
+
+---
+
+## [2026-11-26 07:51:33 KST]
+- **Author:** Gemini 4 Neon
+- **Task:** Stage 0 Build items (`T56`, `T64`) — awaiting owner visual/listening sign-off
+- **Summary:**
+  - **T64 (App — Keys presets retune and verification):** Updated `FACTORY_PRESETS` in `source/app/factory_presets.d` per decision T61 (`Electric Piano`: Decay `2500.0f`, Sustain `0.0f`, Release `200.0f`; `Bright Piano`: Decay `1800.0f`, Sustain `0.0f`, Release `200.0f`; `Organ`: unchanged; `Bell`: Release `600.0f`) and regenerated `resources/presets/Keys/*.msym` via `--write-factory-presets=resources/presets`. Added 2 s held-note decay/organ-sustain checks and release-time decay/exact-zero post-release checks for all four Keys presets in `tests/unit/factory_presets_test.d`, and updated `defaultPianoModule` envelope assertions in `tests/unit/skeleton_gen_test.d`.
+  - **T56 (Tests — Pattern editor views end-to-end check):** Added headless integration test in `tests/unit/views_studio_root_test.d` exercising writing a phrase in `PianoRollView`, verifying notes in `PatternEditorView` Tracker mode and offline render, creating a drum pattern with `+Drum`, programming hits in `DrumpadView`, saving/reopening `.msv`, verifying drum pattern state/cells/render, converting both ways (`"Convert to normal pattern"` / `"Convert to drum pattern"`) with undo/redo, and drawing Tracker/Piano roll/Drumpad across High/Low contrast, dark palette (`"Dark · Okabe–Ito"`), and 4/4 & 3/4 time signatures. Added synthetic `"pattern editor views (switch)"` step to `runStudioGuiSelfTest()` in `source/app/studio_app.d`.
+- **Verification:**
+  - `dub test --compiler=ldc2 --config=headless` (`37 modules passed unittests`)
+  - `dub test --compiler=ldc2 --config=app` (`4 modules passed unittests`)
+  - `DFLAGS="-w" dub build --compiler=ldc2 --config=app --build=debug --force` (exit 0, zero warnings; `build/dracker` is GUI binary)
+  - `./build/dracker --sound-check-presets=build/preset-sounds` (wrote 20 WAV files, 11.0 s each, peaks `0.23`–`0.85`)
+  - `./build/dracker --sound-check=build/default-sounds.wav` (wrote `build/default-sounds.wav`, `26.0 s`, peak `0.65`)
+  - `./build/dracker --studio-gui-selftest --quick` (`15/16 checks passed`; `"pattern editor views (switch)"` passed; pre-existing `"heavy voice setup (rack)"` failed with `unison 4 voices, release 0.25 s`)
+
+---
+
+## [2026-11-26 07:38:02 KST]
+- **Author:** Gemini 4 Neon
+- **Task:** Stage 0 Build items (`T53`, `T54`, `T55`, `T63`, `T65`)
+- **Summary:**
+  - **T63 (DSP — FM Synth envelope decay and release shape):** Updated `AdsrEnvelope.next()` in `source/dsp/envelope.d` so decay and release follow a convex-down curve (`1.0 - pow(1.0 - phase_, curve)`), keeping attack unchanged, and updated `FmVoice.trigger()` in `source/modules/synths/fm_synth.d` (`ampEnv_` curves `(1.0, 3.0, 3.0)`, `modEnv_` curves `(1.0, 2.5, 2.5)`). Added envelope shape and RT-safety unit tests in `tests/unit/dsp_test.d` and `tests/unit/modules_test.d`. Inspected `tests/golden/golden_suite.d` (no checked-in `.wav` baselines; golden patches involving `synth.fm_synth` are Patch 2 and Patch 4).
+  - **T65 (App — Effect previews that expose the effect):** Updated `Reverb.process()` tank readout scale (`0.35f` to `0.65f`) and `fbGain` (`0.48f + 0.49f * room`) in `source/modules/effects/reverb.d`; updated the 4 effect presets in `source/app/factory_presets.d` and regenerated `resources/presets/Effects/*.msym`; updated `factoryPreviewBars()` to 4 bars and `factoryPreviewProject(..., bool wet = true)` with per-effect preview material; updated `runSoundCheckPresets()` in `source/main.d` and Appendix D in `docs/manual.md` to emit separate `(dry).wav` and `(wet).wav` files for each effect (20 WAV files total). Added effect-exposure regression tests in `tests/unit/factory_presets_test.d`.
+  - **T53 (GUI/views — Piano roll editing):** Added `doReplacePatternGrid()` in `source/app/session.d` and implemented full editing in `source/gui/views/piano_roll_view.d` (velocity strip `VELOCITY_H = 56.0f`, add, move, resize, `⌥`-drag copy preserving effect columns, marquee selection, audition, Escape cancel, Delete/Backspace, `DRACKER-ROLL-V1` clipboard `⌘X/⌘C/⌘V`, transpose `±1`/`±12`, context menu, one undo step per gesture, `"Added track N"` status, `noteEditMessage()` refusals) plus unit tests in `tests/unit/views_piano_roll_test.d`.
+  - **T54 (GUI/views — Drumpad lanes, new drum pattern, and conversion):** Added `"New drum pattern"` (`"+Drum"`, id `"pattern.addDrum"`), pattern `"..."` menu (`"pattern.menu"`), and bidirectional drum/normal conversion in `source/gui/views/pattern_editor.d`, plus lane audition, lane menu (Module, Note, Set MIDI Note, Rename, Move Up/Down, Remove Lane), and `+ Lane` in `source/gui/views/drumpad_view.d`, with unit tests and undo coverage in `tests/unit/views_drumpad_test.d`.
+  - **T55 (GUI/views — Patchbay user preset management):** Added `revealInFinder` / `revealFileInFinder()` in `source/gui/views/studio_context.d`, `"Add to Instruments…"` (`AddInstrumentDialog`) in `source/gui/views/patchbay_view.d`, and user-preset-only row context menu (`Rename…`, `Move to group ▸`, `Remove…` with `ConfirmDialog`, `Show in Finder`) plus status bar error reporting in `source/gui/views/instrument_sidebar.d`, tested with temporary folders and a fake Finder callback in `tests/unit/views_instrument_sidebar_test.d`.
+- **Verification:**
+  - `dub test --compiler=ldc2 --config=headless` (`37 modules passed unittests`)
+  - `dub test --compiler=ldc2 --config=app` (`4 modules passed unittests`)
+  - `DFLAGS="-w" dub build --compiler=ldc2 --config=app --build=debug --force` (exit 0, zero warnings; `build/dracker` is GUI binary)
+  - `./build/dracker --sound-check-presets=build/preset-sounds` (wrote 20 WAV files, 11.0 s each, peaks 0.23–0.83)
+  - `./build/dracker --sound-check=build/default-sounds.wav` (wrote `build/default-sounds.wav`, 26.0 s, peak 0.65)
+
+---
+
+## [2026-11-25 20:29:09 KST]
+- **Author:** Gemini 4 Neon
+- **Affected Files:** `source/app/instrument_library.d`, `tests/unit/instrument_library_test.d`
+- **Reason / Summary:** Fixed duplicate bundled presets in the instrument sidebar on case-insensitive macOS APFS filesystems:
+  - **Root cause:** `bundledPresetDirectories()` checked both `../Resources/Presets` and `../resources/presets`. On case-insensitive macOS volumes next to the development binary `dracker/build/dracker`, both paths resolved to the same `dracker/resources/presets` directory inode, causing `InstrumentLibrary.rescan()` to scan the bundled presets twice.
+  - **Fix (`app/instrument_library.d`):** Added `directoryKey()` (`st_dev` / `st_ino` on POSIX with normalized absolute-path fallback) and deduplicated directories in both `bundledPresetDirectories()` and `InstrumentLibrary.rescan()`.
+  - **Tests (`tests/unit/instrument_library_test.d`):** Added unit tests covering duplicate directory lists, case-variant aliases on case-insensitive filesystems, and unique entries from `bundledPresetDirectories()`.
+  - **Verification:** `dub test --compiler=ldc2 --config=headless` (37/37 passed), `dub test --compiler=ldc2 --config=app` (4/4 passed), `DFLAGS="-w" dub build --compiler=ldc2 --config=app --build=debug --force` (succeeded with zero warnings), and zero `//` inline comments.
+
+## [2026-11-25 20:15:23 KST]
+- **Author:** Gemini 4 Neon
+- **Affected Files:**
+  - New: `source/gui/views/piano_roll_view.d`, `source/gui/views/drumpad_view.d`, `source/gui/views/instrument_sidebar.d`, `tests/unit/views_piano_roll_test.d`, `tests/unit/views_drumpad_test.d`, `tests/unit/views_instrument_sidebar_test.d`
+  - Modified: `source/gui/views/pattern_editor.d`, `source/gui/views/patchbay_view.d`, `source/gui/views/timeline_view.d`, `source/gui/views/studio_context.d`, `tests/unit/views_patchbay_test.d`, `tests/unit/views_pattern_editor_test.d`, `tests/unit/views_timeline_test.d`, `docs/todo.md`, `agents.md`
+- **Reason / Summary:** Recorded owner confirmations for Decision items T60–T62 in `docs/todo.md` and implemented all Stage 0 Build items (T47, T48, T50, T51):
+  - **Decision confirmations (`docs/todo.md`, T60–T62):** Recorded owner approval of proposed options for FM Synth envelope decay/release shape (T60), Keys preset tuning (T61), and separate dry/wet effect previews + stronger effect presets (T62).
+  - **Piano roll display & navigation (`gui/views/piano_roll_view.d`, `gui/views/pattern_editor.d`, T47):**
+    - Implemented `PianoRollView` (`Widget`, `StudioCommandSink`) registered with `PatternEditorView.registerView(PatternViewKind.pianoRoll, …)` by default.
+    - Displays piano keys (`C-1`..`G9`, C labels, indented black keys), time-signature bar ruler and grid (`linesPerBeat()` / `linesPerBar()`), notes from `app.pattern_notes.notesOf()` (picked module filled `theme.rollNote`, other modules outlined `theme.borderStrong`), top-bar module picker synced with `StudioContext`, auto-scroll to notes on open/pattern switch, playhead + follow-playhead, scroll and Cmd-scroll/pinch/action zoom, and live redraw on pattern/undo edits.
+  - **Drumpad pads (`gui/views/drumpad_view.d`, `gui/views/pattern_editor.d`, T48):**
+    - Implemented `DrumpadView` (`Widget`, `StudioCommandSink`) registered with `PatternEditorView.registerView(PatternViewKind.drumpad, …)` by default.
+    - Displays lane labels (unassigned lanes hatched and `[unassigned]` tagged), beat/bar grouped step pads, click toggling, drag paint/erase as single undo groups, vertical velocity drag + Option-click cycle (soft/medium/loud) updating lane default velocity, playhead column with follow, non-color corner marks for hits differing from their lane, and horizontal/vertical scrolling.
+  - **Patchbay instrument sidebar (`gui/views/instrument_sidebar.d`, `gui/views/patchbay_view.d`, `gui/views/studio_context.d`, T50):**
+    - Fixed pre-existing failure in `tests/unit/views_patchbay_test.d:824` (`"Add Core ▸"` omitted when no non-output Core modules exist).
+    - Added `StudioContext.library`, `libraryRevision()`, `notifyLibraryChanged()`, and `addPresetFromLibrary()`.
+    - Built collapsible `InstrumentSidebar` over `GroupedList` + `InstrumentLibrary` with `"user"` tags, missing-bundled note, focus/revision rescan, double-click/Return add at `nextModulePosition()` (unwired, selected, single undo step, status message), and drag-and-drop onto `PatchbayView` (`onDragQuery`/`onDragEnter`/`onDragLeave`/`onDrop` outline + drop at `viewToWorld(pos)`). Scoped `PatchbayView` canvas geometry, clipping, hit-testing, pan, Fit All, and zoom to `canvasRect()`, and clipped child drawing to `bounds`.
+  - **Drum pattern marks (`gui/views/timeline_view.d`, `gui/views/pattern_editor.d`, T51):**
+    - Prefixed drum patterns with `[D] ` in `PatternEditorView` pattern dropdown, `TimelineView` clip labels (`paintClip()` / `clipNameRect()`) and empty-lane `"Add Clip: [D] …"` menu items, and switched `TimelineView.paintMiniature()` to draw lane-aligned square hit marks for drum patterns.
+  - **Verification:**
+    - `dub test --compiler=ldc2 --config=headless`: 37/37 test modules passed (including `views_piano_roll_test`, `views_drumpad_test`, `views_instrument_sidebar_test`, `views_patchbay_test`, `views_pattern_editor_test`, `views_timeline_test`).
+    - `dub test --compiler=ldc2 --config=app`: 4/4 modules passed.
+    - `dub build --compiler=ldc2 --config=app --build=debug`: succeeded.
+    - `DFLAGS="-w" dub build --compiler=ldc2 --config=headless --build=debug --force`: zero warnings.
+    - Comment policy audit: zero `//` inline comments across all created and modified `.d` files.
+
+## [2026-11-25 19:17:29 KST]
+- **Author:** Claude Fable 5.2
+- **Affected Files:**
+  - New: `source/app/pattern_notes.d`, `source/app/instrument_library.d`, `source/app/factory_presets.d`, `resources/presets/` (16 `.msym` files in 5 folders), `tests/unit/pattern_notes_test.d`, `tests/unit/instrument_library_test.d`, `tests/unit/factory_presets_test.d`
+  - Modified: `source/app/session.d`, `source/app/skeleton_gen.d`, `source/gui/views/pattern_editor.d`, `source/gui/theme.d`, `source/gui/appearance.d`, `source/main.d`, `tests/unit/studio_backend_test.d`, `tests/unit/views_pattern_editor_test.d`, `tests/unit/appearance_test.d`, `docs/manual.md`, `docs/todo.md`, `agents.md`
+- **Reason / Summary:** Tasks T41–T46 of the pattern editor views and instrument library features (`docs/todo.md`). The only visible change in the app is the view bar above the pattern editor, where Tracker is the one view available so far.
+  - **Drum patterns in the session (`app/session.d`, T41):**
+    - Getters: `patternKind()`, `patternLanes()`, `isDrumLaneAssigned()`, `drumHitAt()`.
+    - Undoable operations: `doAddDrumPattern()` (default kit on a DrumSynth, added and wired when missing, as one step), lane add / remove / move / rename / retarget, `doConvertToDrumPattern()`, `doConvertToNormalPattern()`, `doSetDrumHit()`, `doToggleDrumHit()`.
+    - New `replacePatternDirect()` swaps a whole pattern (cells, shape, kind, lanes) with one snapshot push; every lane operation uses it.
+    - `doResizePattern()` on a drum pattern keeps lanes equal to tracks, and undo restores them.
+  - **Piano-roll note model (`app/pattern_notes.d`, T42):** pure functions that read cells as notes and add, move, resize, delete and set velocity under the track rules of T32. Edits are all-or-nothing and never change other modules' notes.
+  - **View bar (`gui/views/pattern_editor.d`, T43):**
+    - `PatternViewKind`, `ViewTabButton`, `registerView()`, `currentView()`, `setView()`, `viewRect()`.
+    - The header and grid moved down by the bar's 28 points.
+    - The tracker ignores input while another view is current.
+    - The tracker grid stays inside `PatternEditorView`; it was not split into a separate file.
+  - **Theme (`gui/theme.d`, `gui/appearance.d`, T44):**
+    - New tokens `rollNote`, `rollNoteSelected`, `padHit` in all palettes, with new graphic contrast pairs against the four tracker row backgrounds.
+    - New Appearance token group "Piano roll & drumpad".
+    - `lateTokenSource()` lets older palette and preference files load without the new tokens.
+  - **Instrument library (`app/instrument_library.d`, T45):** `InstrumentLibrary` scans bundled and user folders (group = folder), reports skipped files, and adds, renames, moves and removes user presets. Folder helpers: `bundledPresetDirectories()`, `defaultUserInstrumentDirectory()`, `defaultTrashDirectory()`.
+  - **Bundled presets (`app/factory_presets.d`, `resources/presets/`, `main.d`, `app/skeleton_gen.d`, T46):**
+    - `FACTORY_PRESETS`: 12 instruments (Electric Bass, Synth Bass, Electric Piano, Bright Piano, Organ, Bell, Warm Pad, Strings, Saw Lead, Pluck, Drum Kit, Kick) and 4 effects (Room Reverb, Tempo Delay, Bus Compressor, Warm Overdrive).
+    - New commands `--write-factory-presets=<dir>` and `--sound-check-presets=<dir>`.
+    - `defaultBassModule()` / `defaultPianoModule()` now build from the Electric Bass / Electric Piano entries, with the same values as before.
+    - The Bell's carrier level was lowered from 1.0 to 0.6 after its first render reached 0.99.
+    - The owner has not listened to the sounds yet; T46 stays open.
+  - **Tests:**
+    - `studio_backend_test.d`: every drum operation with undo and redo, save and load, and a render.
+    - `pattern_notes_test.d`: lengths, track choice, refusals, restore-on-delete, effect columns, and 3,000 random edits.
+    - `views_pattern_editor_test.d`: view bar states, switching, per-pattern memory, drum patterns, action forwarding.
+    - `appearance_test.d`: the new tokens pass in all palettes and modes; old palette text loads.
+    - `instrument_library_test.d`: scanning, order, problems, and every operation in temporary folders.
+    - `factory_presets_test.d`: the table, files byte-identical to code, library scan of `resources/presets`, and all 16 previews rendering below full scale.
+  - **Docs:** `docs/manual.md` (§8.1 view bar, §14 colour groups, Appendix D commands), `agents.md` package map, `docs/todo.md`.
+  - **Verification:**
+    - `dub test --compiler=ldc2 --config=headless`: 33 of 34 modules pass. The failure is the existing `tests/unit/views_patchbay_test.d:824` failure.
+    - `dub test --compiler=ldc2 --config=app`: 4 of 4 modules pass.
+    - `dub build --config=app` succeeds, and both new commands ran.
+    - All changed and new files compile with `ldc2 -w`.
+    - Not checked by hand: the view bar in the running app.
+
 ## [2026-11-25 18:58:52 KST]
 - **Author:** Claude Fable 5.2
 - **Affected Files:** `source/io/project_format.d`, `source/app/session.d`, `source/gui/widgets.d`, `tests/unit/persistence_test.d`, `tests/fuzz/project_format_fuzz.d`, `tests/unit/gui_test.d`, `docs/todo.md`, `docs/changelog.md`

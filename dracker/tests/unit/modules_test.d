@@ -26,7 +26,7 @@ module tests.unit.modules_test;
 version (unittest) {
     import core.thread : Thread;
     import core.time : dur;
-    import std.math : fabs, isFinite, sin;
+    import std.math : fabs, isFinite, sin, sqrt;
 
     import dsp.envelope : EnvBreakpoint;
     import dsp.tables : TWO_PI_D;
@@ -817,5 +817,65 @@ version (unittest) {
         ctx.frames = FIXED_BLOCK_FRAMES;
         assert(desc.vtable.process(st, io, ctx));
         assert(fabs(outL[0] - 0.6f) < 1e-5f && fabs(outR[0] + 0.3f) < 1e-5f);
+    }
+
+    unittest {
+        ModuleInstance fm;
+        assert(ModuleRegistry.createOffRT("synth.fm_synth", ModuleId(40), 44_100.0f, fm));
+        scope (exit) fm.destroyOffRT();
+
+        fm.desc.vtable.setParam(fm.state, 12, 1.0f, 44_100.0f, true);
+        fm.desc.vtable.setParam(fm.state, 13, 10.0f, 44_100.0f, true);
+        fm.desc.vtable.setParam(fm.state, 14, 1.0f, 44_100.0f, true);
+        fm.desc.vtable.setParam(fm.state, 15, 200.0f, 44_100.0f, true);
+
+        sendEvent(fm.desc, fm.state, ModEvent.makeNoteOn(NoteId(1), 60.0f, 1.0f), 44_100.0f);
+
+        float[FIXED_BLOCK_FRAMES] outL = 0.0f;
+        float[FIXED_BLOCK_FRAMES] outR = 0.0f;
+        ProcessIO io;
+        io.audioOut = [outL[], outR[]];
+        ProcessContext ctx;
+        ctx.sampleRate = 44_100.0f;
+        ctx.frames = FIXED_BLOCK_FRAMES;
+        ctx.inputSilent = true;
+
+        double susSq = 0.0;
+        size_t susN = 0;
+        foreach (b; 0 .. 40) {
+            assert(fm.desc.vtable.process(fm.state, io, ctx));
+            if (b >= 30) {
+                foreach (s; outL) {
+                    susSq += cast(double) s * s;
+                    susN++;
+                }
+            }
+        }
+        immutable double susRms = sqrt(susSq / cast(double) susN);
+        assert(susRms > 0.05);
+
+        sendEvent(fm.desc, fm.state, ModEvent.makeNoteOff(NoteId(1)), 44_100.0f);
+        size_t released = 0;
+        double qSq = 0.0;
+        size_t qN = 0;
+        immutable size_t qStart = cast(size_t)(0.050 * 44_100.0);
+        immutable size_t qEnd = cast(size_t)(0.065 * 44_100.0);
+        while (released < cast(size_t)(0.22 * 44_100.0)) {
+            fm.desc.vtable.process(fm.state, io, ctx);
+            foreach (i; 0 .. FIXED_BLOCK_FRAMES) {
+                immutable size_t pos = released + i;
+                if (pos >= qStart && pos < qEnd) {
+                    qSq += cast(double) outL[i] * outL[i];
+                    qN++;
+                }
+            }
+            released += FIXED_BLOCK_FRAMES;
+        }
+        immutable double quarterRms = sqrt(qSq / cast(double) qN);
+        assert(quarterRms < susRms * 0.5, "FM Synth release should drop below half before a quarter of release time");
+        assert(!fm.desc.vtable.process(fm.state, io, ctx));
+        foreach (i; 0 .. FIXED_BLOCK_FRAMES) {
+            assert(outL[i] == 0.0f && outR[i] == 0.0f);
+        }
     }
 }

@@ -58,7 +58,7 @@ import gui.theme : StudioTheme;
 import gui.views.studio_context : StudioContext;
 import gui.widgets : KeyCode, KeyEvent, lineHeightOr, measureTextOr, MenuItem, MouseButton, MouseEvent,
     openTextEditor, ScrollEvent, TextField, Widget, hasModifier;
-import io.project_format : LoadedProject, SavedPattern;
+import io.project_format : LoadedProject, PATTERN_KIND_DRUM, SavedPattern;
 import platform.interfaces : KeyModifiers;
 import sequencer.timeline : TimelineClip;
 
@@ -215,6 +215,8 @@ final class TimelineView : Widget, StudioCommandSink {
     private static struct MiniPattern {
         uint lines;
         uint tracks;
+        bool isDrum;
+        uint lanes;
         uint[] lineStart;
         ushort[] trackAt;
     }
@@ -393,6 +395,9 @@ final class TimelineView : Widget, StudioCommandSink {
             }
             if (c.isSupertrack) {
                 tx += measureTextOr(m, "ST ", FontId.ui, size);
+            }
+            if (sp.kind == PATTERN_KIND_DRUM) {
+                tx += measureTextOr(m, "[D] ", FontId.ui, size);
             }
             immutable float tw = measureTextOr(m, sp.name.length > 0 ? sp.name : "W", FontId.ui, size);
             immutable RectF label = RectF(tx - 2.0f, cr.y, tw + 4.0f, lineHeightOr(m, FontId.ui, size) + 4.0f);
@@ -1080,7 +1085,7 @@ final class TimelineView : Widget, StudioCommandSink {
             foreach (ref pat; ctx.session.document().patterns) {
                 immutable uint pid = pat.patternId;
                 MenuItem it;
-                it.label = "Add Clip: " ~ pat.name;
+                it.label = pat.kind == PATTERN_KIND_DRUM ? "Add Clip: [D] " ~ pat.name : "Add Clip: " ~ pat.name;
                 it.action = addClipAction(pid, line, lane);
                 items ~= it;
             }
@@ -1487,10 +1492,13 @@ final class TimelineView : Widget, StudioCommandSink {
         MiniPattern mp;
         mp.lines = sp.lines;
         mp.tracks = sp.tracks;
+        mp.isDrum = sp.kind == PATTERN_KIND_DRUM;
+        mp.lanes = mp.isDrum && sp.lanes.length > 0 ? cast(uint) sp.lanes.length : sp.tracks;
+        immutable uint scanTracks = mp.isDrum && mp.lanes < sp.tracks ? mp.lanes : sp.tracks;
         mp.lineStart = new uint[sp.lines + 1];
         foreach (ln; 0 .. sp.lines) {
             mp.lineStart[ln] = cast(uint) mp.trackAt.length;
-            foreach (tr; 0 .. sp.tracks) {
+            foreach (tr; 0 .. scanTracks) {
                 immutable size_t idx = cast(size_t) ln * sp.tracks + tr;
                 if (idx < sp.cells.length && sp.cells[idx].note >= 1 && sp.cells[idx].note <= 128) {
                     mp.trackAt ~= cast(ushort) tr;
@@ -1904,6 +1912,10 @@ final class TimelineView : Widget, StudioCommandSink {
             }
             const(SavedPattern)* sp = findPattern(c.patternId);
             if (sp !is null) {
+                if (sp.kind == PATTERN_KIND_DRUM) {
+                    r.drawText(Point2F(tx, cr.y + 2.0f), "[D]", FontId.ui, theme.fontSizeSmall, tc);
+                    tx += r.measureText("[D] ", FontId.ui, theme.fontSizeSmall);
+                }
                 r.drawText(Point2F(tx, cr.y + 2.0f), sp.name, FontId.ui, theme.fontSizeSmall, tc);
             }
             paintMiniature(r, theme, vis, cr, c, dimmed, budget);
@@ -1937,9 +1949,14 @@ final class TimelineView : Widget, StudioCommandSink {
         if (h < 4.0f) {
             return;
         }
-        immutable float th = h / mp.tracks;
-        immutable float mh = th > 1.5f ? th - 0.5f : 1.0f;
-        immutable float mw = ppl_ > 2.0f ? ppl_ - 1.0f : 1.0f;
+        immutable uint rows = mp.isDrum ? (mp.lanes > 0 ? mp.lanes : 1) : mp.tracks;
+        immutable float th = h / rows;
+        immutable float mh = mp.isDrum ? (th > 2.5f ? th - 1.0f : (th > 1.0f ? th : 1.0f))
+            : (th > 1.5f ? th - 0.5f : 1.0f);
+        immutable float mw = mp.isDrum ? ((ppl_ > 2.0f ? ppl_ - 1.0f : 1.0f) < mh + 1.0f
+            ? (ppl_ > 2.0f ? ppl_ - 1.0f : 1.0f) : mh + 1.0f)
+            : (ppl_ > 2.0f ? ppl_ - 1.0f : 1.0f);
+        immutable float yOff = mp.isDrum && th > mh ? (th - mh) * 0.5f : 0.0f;
         immutable ColorRGBA mc = theme.clipText.withAlpha(dimmed ? 0.55f : 0.75f);
         long k0 = cast(long) floor(lineAtF(vis.x)) - c.startLine;
         long k1 = cast(long) ceil(lineAtF(vis.right())) - c.startLine;
@@ -1953,7 +1970,7 @@ final class TimelineView : Widget, StudioCommandSink {
                     return;
                 }
                 budget--;
-                r.fillRect(RectF(x, top + mp.trackAt[i] * th, mw, mh), mc);
+                r.fillRect(RectF(x, top + mp.trackAt[i] * th + yOff, mw, mh), mc);
             }
         }
     }

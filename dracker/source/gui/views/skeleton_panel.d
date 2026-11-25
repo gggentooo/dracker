@@ -463,8 +463,11 @@ final class SkeletonPanel : Widget {
         lengthBox.onSelect = (size_t i) { setSelectedLength(BLOCK_HALF_BARS[i]); };
         clearButton = formAdd(new Button("Clear", &clearBlocks), "skeleton.clear");
 
-        choices_[0] = instrumentChoices();
-        choices_[1] = instrumentChoices();
+        if (ctx_ !is null && ctx_.library !is null) {
+            ctx_.library.rescan();
+        }
+        choices_[0] = instrumentChoices(ctx_ !is null ? ctx_.library : null);
+        choices_[1] = instrumentChoices(ctx_ !is null ? ctx_.library : null);
         chosen_[0] = adoptChoice(0, initial.bass);
         chosen_[1] = adoptChoice(1, initial.piano);
         bassBox = formAdd(new Dropdown(instrumentItems(0), chosen_[0]), "skeleton.bass");
@@ -989,7 +992,7 @@ final class SkeletonPanel : Widget {
         pianoBox.enabled = any;
         SkeletonSpec s = spec();
         string why;
-        if (!validateSpec(s, why)) {
+        if (!validateSpec(s, why, ctx_ !is null ? ctx_.library : null)) {
             reason_ = why;
         } else if (onCreate is null) {
             reason_ = "Creating a project is not connected yet";
@@ -1007,6 +1010,15 @@ final class SkeletonPanel : Widget {
             case InstrumentSource.moduleType:
                 foreach (i, ref x; choices_[r]) {
                     if (x.source == InstrumentSource.moduleType && x.typeId == c.typeId) {
+                        return i;
+                    }
+                }
+                return 0;
+            case InstrumentSource.libraryPreset:
+                foreach (i, ref x; choices_[r]) {
+                    if (x.source == InstrumentSource.libraryPreset
+                            && ((c.presetPath.length > 0 && x.presetPath == c.presetPath)
+                                || (x.presetName == c.presetName && x.origin == c.origin))) {
                         return i;
                     }
                 }

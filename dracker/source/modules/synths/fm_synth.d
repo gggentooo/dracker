@@ -95,12 +95,12 @@ struct FmVoice {
 
         ampEnv_.prepare(sampleRate);
         ampEnv_.setParams(attackSec, decaySec, sustain, releaseSec);
-        ampEnv_.setCurves(1.0f, 1.5f, 1.5f);
+        ampEnv_.setCurves(1.0f, 3.0f, 3.0f);
         ampEnv_.trigger(false);
 
         modEnv_.prepare(sampleRate);
         modEnv_.setParams(attackSec * 0.8f, decaySec * 0.7f, sustain * 0.75f, releaseSec);
-        modEnv_.setCurves(1.0f, 2.0f, 1.5f);
+        modEnv_.setCurves(1.0f, 2.5f, 2.5f);
         modEnv_.trigger(false);
     }
 

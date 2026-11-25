@@ -109,114 +109,6 @@ Facts about the current code that the tasks rely on:
 
 ## Stage 0 — Ready now
 
-#### [App] Drum patterns in the session · T41 · Build
-
-- **Files:** `source/app/session.d`, `source/app/history.d`, `tests/unit/studio_backend_test.d`
-- **Task:** Getters for a pattern's kind and lanes (stored since T38 as `SavedPattern.kind` and `lanes`; today the session only keeps lanes within the track count on resize, and undoing that resize does not bring a dropped lane back, which this task fixes). Undoable operations per T34: add a drum pattern with the default kit (adding and wiring a DrumSynth when needed, as one step), add / rename / retarget / move / remove a lane (keeping cells and lanes in step), convert normal ↔ drum, toggle a hit and set its velocity. Duplicate keeps kind and lanes; resizing tracks keeps lanes in step; deleting a module marks its lanes unassigned. Tests for every operation with undo and redo, and a render of a drum pattern.
-- **Needs:** T34, T38
-
-#### [App] Note model for the piano roll · T42 · Build
-
-- **Files:** `source/app/pattern_notes.d` (new), `tests/unit/pattern_notes_test.d` (new), `source/app/pattern_ops.d`
-- **Task:** Pure functions, no GUI: read a pattern's cells as notes (track, start line, length, pitch, velocity, module), and apply edits per T32 (add, move, resize, delete, set velocity, for one note or a set) producing the new cells and, when needed, a new track count. Effect columns travel with their note. Tests: lengths from note-offs, next notes and the pattern end; track choice; refused overlaps; round trip (cells → notes → cells unchanged); random edit sequences never corrupt other modules' notes.
-- **Needs:** T32
-
-#### [GUI/views] Pattern editor: view bar and the tracker view as one of several · T43 · Build
-
-- **Files:** `source/gui/views/pattern_editor.d`, `source/gui/views/tracker_view.d` (new), `source/gui/views/studio_context.d`, `tests/unit/views_pattern_editor_test.d`
-- **Task:** Split `PatternEditorView` into a host (view bar per T30, shared header, the current view, command routing) and the tracker grid as the first view, with no change in tracker behaviour. The host offers views by pattern type, remembers the view per pattern, and forwards `StudioAction`s, focus and context menus to the current view. Existing pattern-editor tests keep passing unchanged where they do not depend on layout offsets; new tests for the view bar (enabled and disabled buttons, switching, remembering).
-- **Needs:** T30
-
-#### [GUI] Theme colors for the new views · T44 · Build
-
-- **Files:** `source/gui/theme.d`, `source/gui/appearance.d`, `tests/unit/appearance_test.d`, `source/gui/views/appearance_panel.d`
-- **Task:** Add the semantic tokens the piano roll and drumpad need (white and black key, key label, roll background and its beat and bar lines, note fill / border / selected / other-module outline, velocity bar, pad empty / hit / playhead, lane header) with values for every built-in palette. They must pass the existing gates: text 7:1 (High) and 4.5:1 (Low), graphics 4.5:1 and 3:1, color-vision separation for any set that carries meaning, and no size metric changes. Custom palettes and the Appearance panel's token groups include the new tokens; old `.stpalette` and preference files still load.
-- **Needs:** T31, T33
-
-#### [App] Instrument library: bundled and user presets · T45 · Build
-
-- **Files:** `source/app/instrument_library.d` (new), `tests/unit/instrument_library_test.d` (new), `source/app/gui_shell.d` (bundled directory lookup), `source/app/skeleton_gen.d` (`isPlayableInstrument`)
-- **Task:** Scan the bundled and user preset folders per T35 and T37 into entries (name, group, path, bundled or user, module type, playable or effect). Unreadable files are skipped and reported. Operations on user presets: add from a module (unique name), rename, move to a group, remove, rescan. No GUI. Tests with temporary folders: grouping, sorting, duplicates, bad files, each operation, missing folders.
-- **Needs:** T35, T37
-
-#### [App] Bundled presets: definitions, files, and sound check · T46 · Build
-
-- **Files:** `source/app/factory_presets.d` (new), `resources/presets/` (new), `source/main.d` (`--write-factory-presets`, `--sound-check`), `source/app/skeleton_gen.d`, `tests/unit/factory_presets_test.d` (new)
-- **Task:** Define the presets of T36 in code per T37, move the generator's default bass and piano there as Electric Bass and Electric Piano, write the `.msym` files, and extend `--sound-check` to render every bundled preset (instruments on a short phrase, the drum kit on a beat, effects on a fixed dry phrase, dry then wet) into one WAV per preset. Tests: every preset loads, has in-range parameters, matches its file, and renders sound without clipping. **Open until the owner has approved each sound by ear.**
-- **Needs:** T36, T37
-
----
-
-## Stage 1
-
-#### [GUI/views] Piano roll: display and navigation · T47 · Build
-
-- **Files:** `source/gui/views/piano_roll_view.d` (new), `source/gui/views/pattern_editor.d`, `tests/unit/views_piano_roll_test.d` (new)
-- **Task:** The piano roll as a view of the pattern host: keys, grid by time signature, notes from T42 (picked module solid, others outlined), module picker in the view's bar, playhead and follow, scroll and zoom, redraw on any pattern change (including edits made in the tracker view and undo). Read-only in this task. Tests: note rectangles for known patterns, the picker, grid in 4/4 and 3/4, scrolling to the notes on open, drawing in every built-in palette.
-- **Needs:** T31, T42, T43, T44
-
-#### [GUI/views] Drumpad: pads · T48 · Build
-
-- **Files:** `source/gui/views/drumpad_view.d` (new), `source/gui/views/pattern_editor.d`, `tests/unit/views_drumpad_test.d` (new)
-- **Task:** The drumpad as a view of the pattern host for drum patterns: lane rows with names, pads grouped by beat and bar, toggle and paint, velocity, playhead column, hits that differ from their lane marked, unassigned lanes marked, scroll for long patterns and many lanes. Tests: toggling writes the right cell and is one undo step, painting, velocity, grouping in 4/4 and 6/8, changes made in the tracker view show up.
-- **Needs:** T33, T41, T43, T44
-
-#### [Packaging] Bundled presets in the app bundle · T49 · Build
-
-- **Files:** `packaging/macos/bundle_macos.sh`, `ci/macos.yml`, `agents.md` (Phase 9.1 note)
-- **Task:** Copy `resources/presets/` to `Contents/Resources/Presets` in the bundle; the build fails if a preset listed in code is missing. CI checks that the checked-in files match the code (T46's test) and that the script passes `bash -n`.
-- **Needs:** T46
-
-#### [GUI/views] Patchbay: instrument sidebar · T50 · Build
-
-- **Files:** `source/gui/views/patchbay_view.d`, `source/gui/views/instrument_sidebar.d` (new), `source/gui/views/studio_context.d`, `tests/unit/views_patchbay_test.d`, `tests/unit/views_instrument_sidebar_test.d` (new)
-- **Task:** The sidebar per T35 with the list of T40 filled from T45. The canvas takes the remaining rectangle (hit-testing, panning limits, Fit All and zoom use it). Double-click or Return adds the preset's module at the next free position, selected, not wired, as one undo step with a status message. Dragging a row onto the canvas adds it at the drop point (`GroupedList.dragPayloadProvider` → `UiContext.beginDrag()`; the canvas implements `onDragQuery` / `onDrop` and outlines itself between `onDragEnter` and `onDragLeave`). Collapsing the sidebar. The list rescans when the patchbay gets focus and after library changes. Note: `tests/unit/views_patchbay_test.d:824` fails today ("Add Core ▸"); fix or correct that test first so the suite is clean before this change.
-- **Needs:** T35, T39, T40, T45
-
-#### [GUI/views] Drum patterns in the timeline and the pattern list · T51 · Build
-
-- **Files:** `source/gui/views/timeline_view.d`, `source/gui/views/pattern_editor.d`, `tests/unit/views_timeline_test.d`
-- **Task:** Make drum patterns recognisable outside the editor without relying on color: a mark on their timeline clips (and a miniature that shows hits per lane) and in the pattern dropdown.
-- **Needs:** T41
-
-#### [App, GUI/views] Skeleton generator uses the library · T52 · Build
-
-- **Files:** `source/app/skeleton_gen.d`, `source/gui/views/skeleton_panel.d`, `tests/unit/skeleton_gen_test.d`, `tests/unit/views_skeleton_panel_test.d`
-- **Task:** The generator's Bass and Piano menus list the library's playable instruments (bundled, then user) after "Default"; the defaults resolve to the bundled Electric Bass and Electric Piano, with the built-in constants as fallback when the bundled files are missing. "Load preset file…" stays. A project generated with defaults is unchanged from today (compare cell by cell and by render).
-- **Needs:** T45, T46
-
----
-
-## Stage 2
-
-#### [GUI/views] Piano roll: editing · T53 · Build
-
-- **Files:** `source/gui/views/piano_roll_view.d`, `tests/unit/views_piano_roll_test.d`
-- **Task:** Editing per T31 through T42: add, move, resize, delete, copy-drag, rubber-band selection, velocity strip, note audition, clipboard and transpose commands, one undo step per gesture, automatic track adding with a status message, refused edits explained. Tests for each gesture, undo, and that other modules' notes and effect columns survive.
-- **Needs:** T47
-
-#### [GUI/views] Drumpad: lanes, new drum pattern, and conversion · T54 · Build
-
-- **Files:** `source/gui/views/drumpad_view.d`, `source/gui/views/pattern_editor.d`, `tests/unit/views_drumpad_test.d`
-- **Task:** Lane menu (module and note chooser, rename, move, remove), add lane, lane audition; "New drum pattern" next to the existing add button; "Convert to drum pattern" / "Convert to normal pattern" in the pattern menu; all through T41. Tests for each command and its undo.
-- **Needs:** T34, T48
-
-#### [GUI/views] Patchbay: managing user presets · T55 · Build
-
-- **Files:** `source/gui/views/instrument_sidebar.d`, `source/gui/views/patchbay_view.d`, `tests/unit/views_instrument_sidebar_test.d`
-- **Task:** "Add to Instruments" on a module's menu (name and group, per T35); the row menu for user presets (Rename, Move to group, Remove with a confirmation, Show in Finder); bundled rows offer none of these. Errors (folder not writable, name in use) are shown in the status bar. Tests with temporary folders and a fake Finder call.
-- **Needs:** T50
-
----
-
-## Stage 3
-
-#### [Tests] End-to-end check of the pattern editor views · T56 · Build
-
-- **Files:** `tests/unit/views_studio_root_test.d`, `source/app/studio_app.d` (`--studio-gui-selftest`)
-- **Task:** Headless: in one project, write a phrase in the piano roll and check it in the tracker view and by render; create a drum pattern, program a beat, save, reopen, compare and render; convert both ways. Add self-test steps that switch views. **Open until the owner has checked by hand** in the app: every view in High and Low contrast and one dark palette, 4/4 and 3/4.
-- **Needs:** T51, T53, T54
-
 #### [Tests] End-to-end check of the instrument library · T57 · Build
 
 - **Files:** `tests/unit/views_studio_root_test.d`, `source/app/studio_app.d` (`--studio-gui-selftest`)
@@ -225,13 +117,7 @@ Facts about the current code that the tasks rely on:
 
 ---
 
-## Stage 4
-
-#### [Docs] Manual and architecture: pattern editor views · T58 · Build
-
-- **Files:** `docs/manual.md` (§8, Appendix A, Appendix C), `../architecture.md`, `agents.md` (package map), `docs/changelog.md`
-- **Task:** Describe the view bar, the piano roll, drum patterns and the drumpad in the manual; record the decisions T30–T34 and the new file section in the architecture document; update the package map. Check that every build task has its changelog entry.
-- **Needs:** T56
+## Stage 1
 
 #### [Docs] Manual and architecture: instrument library · T59 · Build
 
@@ -242,6 +128,149 @@ Facts about the current code that the tasks rely on:
 ---
 
 ## Done
+
+#### [Packaging] Bundled presets in the app bundle · T49 · Build
+
+- **Files:** `packaging/macos/bundle_macos.sh`, `ci/macos.yml`, `agents.md` (Phase 9.1 note)
+- **Done:** 2026-11-26. `packaging/macos/bundle_macos.sh` parses all 16 presets from `source/app/factory_presets.d`, verifies their `.msym` files in `resources/presets/`, copies them into `Contents/Resources/Presets`, and fails if any are missing; `ci/macos.yml` enforces `bash -n`, preset presence, and `factory_presets_test`; `agents.md` Phase 9.1 updated. Recorded in `docs/changelog.md` (2026-11-26 08:05:02 KST).
+- **Needs:** T46
+
+#### [App, GUI/views] Skeleton generator uses the library · T52 · Build
+
+- **Files:** `source/app/skeleton_gen.d`, `source/gui/views/skeleton_panel.d`, `source/gui/views/studio_root.d`, `tests/unit/skeleton_gen_test.d`, `tests/unit/views_skeleton_panel_test.d`
+- **Done:** 2026-11-26. Added `InstrumentSource.libraryPreset`, `InstrumentChoice.ofLibrary()`, `instrumentChoices(InstrumentLibrary)` (listing playable bundled then user presets after `"Default"`), and `resolveDefaultModule()` (resolving defaults via the bundled `.msym` files with built-in fallback when missing). `SkeletonPanel` and `StudioRoot.createSkeletonProject()` rescan and pass `ctx.library`. Tests verify library dropdowns, user preset selection/remembering, fallback on empty library, and byte-identical / sample-identical generated default projects. Recorded in `docs/changelog.md` (2026-11-26 08:05:02 KST).
+- **Needs:** T45, T46
+
+#### [Docs] Manual and architecture: pattern editor views · T58 · Build
+
+- **Files:** `docs/manual.md` (§8, Appendix A, Appendix C), `../architecture.md`, `agents.md` (package map), `docs/changelog.md`
+- **Done:** 2026-11-26. Updated `docs/manual.md` (§8.1 view bar/`+Drum`/`...` header, new §8.12 Piano roll, new §8.13 Drum patterns and the drumpad, Appendix A shortcuts/mouse modifiers, Appendix C notes), `../architecture.md` (§3 directory tree and new §8 documenting components, owner decisions T30–T34, and the optional `DRUM` chunk), and `agents.md` package map; audited changelog entries for every build task. Recorded in `docs/changelog.md` (2026-11-26 08:05:02 KST).
+- **Needs:** T56
+
+#### [Tests] End-to-end check of the pattern editor views · T56 · Build
+
+- **Files:** `tests/unit/views_studio_root_test.d`, `source/app/studio_app.d` (`--studio-gui-selftest`)
+- **Done:** 2026-11-26 (owner signed off). Built 2026-11-26 (`docs/changelog.md`, 2026-11-26 07:51:33 KST): headless end-to-end workflow and contrast/palette/time-signature render checks in `tests/unit/views_studio_root_test.d`, plus `"pattern editor views (switch)"` in `runStudioGuiSelfTest()`.
+- **Needs:** T51, T53, T54
+
+#### [App] Keys presets: retune and verify · T64 · Build
+
+- **Files:** `source/app/factory_presets.d`, `resources/presets/Keys/`, `tests/unit/factory_presets_test.d`, `tests/unit/skeleton_gen_test.d`
+- **Done:** 2026-11-26 (owner confirmed). Retuned `Electric Piano`, `Bright Piano`, and `Bell` per T61 (`Organ` unchanged), regenerated `resources/presets/Keys/*.msym`, added Keys hold/release regression tests, and updated `defaultPianoModule` checks (`docs/changelog.md`, 2026-11-26 07:51:33 KST).
+- **Needs:** T61, T63
+
+#### [App] Bundled presets: definitions, files, and sound check · T46 · Build
+
+- **Files:** `source/app/factory_presets.d` (new), `resources/presets/` (new), `source/main.d` (`--write-factory-presets`, `--sound-check`), `source/app/skeleton_gen.d`, `tests/unit/factory_presets_test.d` (new)
+- **Done:** 2026-11-26 (owner confirmed after T63–T65 fixes and `--sound-check-presets=build/preset-sounds` / `--sound-check=build/default-sounds.wav` renders). Recorded in `docs/changelog.md` (2026-11-25 19:17:29 KST, 2026-11-26 07:38:02 KST, 2026-11-26 07:51:33 KST).
+- **Needs:** T36, T37, T64, T65
+
+#### [GUI/views] Piano roll: editing · T53 · Build
+
+- **Files:** `source/gui/views/piano_roll_view.d`, `source/app/session.d`, `tests/unit/views_piano_roll_test.d`
+- **Task:** Editing per T31 through T42: add, move, resize, delete, copy-drag, rubber-band selection, velocity strip, note audition, clipboard and transpose commands, one undo step per gesture, automatic track adding with a status message, refused edits explained. Tests for each gesture, undo, and that other modules' notes and effect columns survive.
+- **Status:** Built 2026-11-26 (see `docs/changelog.md`, 2026-11-26 07:38:02 KST).
+- **Needs:** T47
+
+#### [GUI/views] Drumpad: lanes, new drum pattern, and conversion · T54 · Build
+
+- **Files:** `source/gui/views/drumpad_view.d`, `source/gui/views/pattern_editor.d`, `tests/unit/views_drumpad_test.d`
+- **Task:** Lane menu (module and note chooser, rename, move, remove), add lane, lane audition; "New drum pattern" next to the existing add button; "Convert to drum pattern" / "Convert to normal pattern" in the pattern menu; all through T41. Tests for each command and its undo.
+- **Status:** Built 2026-11-26 (see `docs/changelog.md`, 2026-11-26 07:38:02 KST).
+- **Needs:** T34, T48
+
+#### [GUI/views] Patchbay: managing user presets · T55 · Build
+
+- **Files:** `source/gui/views/studio_context.d`, `source/gui/views/instrument_sidebar.d`, `source/gui/views/patchbay_view.d`, `tests/unit/views_instrument_sidebar_test.d`
+- **Task:** "Add to Instruments" on a module's menu (name and group, per T35); the row menu for user presets (Rename, Move to group, Remove with a confirmation, Show in Finder); bundled rows offer none of these. Errors (folder not writable, name in use) are shown in the status bar. Tests with temporary folders and a fake Finder call.
+- **Status:** Built 2026-11-26 (see `docs/changelog.md`, 2026-11-26 07:38:02 KST).
+- **Needs:** T50
+
+#### [DSP] FM Synth envelope: decay and release shape · T63 · Build
+
+- **Files:** `source/dsp/envelope.d`, `source/modules/synths/fm_synth.d`, `tests/unit/dsp_test.d`, `tests/golden/golden_suite.d`, `tests/unit/modules_test.d`
+- **Task:** Apply the decision of T60. Unit tests for the envelope shape (after a quarter of the release time the level is below half; decay likewise; the envelope still ends exactly at zero and stays real-time safe). Regenerate the golden references that involve the FM Synth and list which changed. Render the sound check again.
+- **Status:** Built 2026-11-26 (see `docs/changelog.md`, 2026-11-26 07:38:02 KST). Inspected `tests/golden/golden_suite.d`: no checked-in `.wav` references exist (renders dynamically in `/tmp`); patches involving `synth.fm_synth` are Patch 2 (`synth.fm_synth -> fx.waveshaper -> fx.flanger -> fx.eq3 -> core.output`) and Patch 4 (`Engine` song with `synth.fm_synth` + `ctl.metamodule` + `fx.echo`).
+- **Needs:** T60
+
+#### [App] Effect previews that expose the effect · T65 · Build
+
+- **Files:** `source/app/factory_presets.d`, `source/modules/effects/reverb.d`, `resources/presets/Effects/`, `source/main.d`, `tests/unit/factory_presets_test.d`, `docs/manual.md` (Appendix D)
+- **Task:** Apply the decision of T62: per-effect preview material, separate dry and wet files, and the stronger preset values. Tests that would have caught the report: for every effect the wet render differs from the dry render by at least a quarter of the dry level; the reverb and the delay are still audible 0.5 s into a rest; the compressor reduces the difference between loud and quiet hits; the overdrive adds energy above the fundamental. Render the sound check for the owner.
+- **Status:** Built 2026-11-26 (see `docs/changelog.md`, 2026-11-26 07:38:02 KST).
+- **Needs:** T62
+
+#### [GUI/views] Drum patterns in the timeline and the pattern list · T51 · Build
+
+- **Files:** `source/gui/views/timeline_view.d`, `source/gui/views/pattern_editor.d`, `tests/unit/views_timeline_test.d`, `tests/unit/views_pattern_editor_test.d`
+- **Done:** 2026-11-25. `PatternEditorView` pattern dropdown prefixes drum patterns with `[D] ` (`formatPatternListEntry()`). `TimelineView` renders a `[D]` prefix on drum pattern clips (`paintClip()` and `clipNameRect()`), prefixes empty-lane menu items (`"Add Clip: [D] ..."`), and draws drum pattern miniatures (`paintMiniature()`) as lane-aligned square hit dots rather than melodic bars. Verified by `views_timeline_test.d` and `views_pattern_editor_test.d`. Recorded in `docs/changelog.md` (2026-11-25 20:15:23 KST).
+- **Needs:** T41
+
+#### [GUI/views] Patchbay: instrument sidebar · T50 · Build
+
+- **Files:** `source/gui/views/patchbay_view.d`, `source/gui/views/instrument_sidebar.d` (new), `source/gui/views/studio_context.d`, `tests/unit/views_patchbay_test.d`, `tests/unit/views_instrument_sidebar_test.d` (new)
+- **Done:** 2026-11-25. Fixed the pre-existing `tests/unit/views_patchbay_test.d:824` failure (`"Add Core ▸"` omitted when empty). Added `StudioContext.library`, `libraryRevision()`, `notifyLibraryChanged()`, and `addPresetFromLibrary()`. Created `InstrumentSidebar` (`GroupedList` over `InstrumentLibrary`, `"user"` tag, collapse toggle, missing-bundled note, focus/revision rescan, drag payloads) and integrated it into `PatchbayView` (`canvasRect()`, hit-testing/pan/zoom/Fit All scoped to canvas, double-click/Return add at `nextModulePosition()`, drag-and-drop with `onDragQuery`/`onDragEnter`/`onDragLeave`/`onDrop` outline and drop at `viewToWorld(pos)`). Verified by `views_patchbay_test.d` and `views_instrument_sidebar_test.d`. Recorded in `docs/changelog.md` (2026-11-25 20:15:23 KST).
+- **Needs:** T35, T39, T40, T45
+
+#### [GUI/views] Drumpad: pads · T48 · Build
+
+- **Files:** `source/gui/views/drumpad_view.d` (new), `source/gui/views/pattern_editor.d`, `tests/unit/views_drumpad_test.d` (new)
+- **Done:** 2026-11-25. `DrumpadView` registered with `PatternEditorView.registerView(PatternViewKind.drumpad, …)`: lane names with unassigned-lane hatching and `[unassigned]` tag, beat/bar grouped step pads using `linesPerBeat()` / `linesPerBar()`, click toggle, drag paint/erase as single undo groups, vertical velocity drag and Option-click cycle (soft/medium/loud) updating lane default velocity, playhead column with follow, non-color corner mark for hits differing from their lane, and horizontal/vertical scroll. Verified by `views_drumpad_test.d`. Recorded in `docs/changelog.md` (2026-11-25 20:15:23 KST).
+- **Needs:** T33, T41, T43, T44
+
+#### [GUI/views] Piano roll: display and navigation · T47 · Build
+
+- **Files:** `source/gui/views/piano_roll_view.d` (new), `source/gui/views/pattern_editor.d`, `tests/unit/views_piano_roll_test.d` (new)
+- **Done:** 2026-11-25. `PianoRollView` registered with `PatternEditorView.registerView(PatternViewKind.pianoRoll, …)`: piano keys (`C-1`..`G9`, C labels, indented black keys), time-signature bar ruler and grid (`linesPerBeat()` / `linesPerBar()`), notes from `notesOf()` (picked module filled `theme.rollNote`, other modules outlined `theme.borderStrong`), module picker in top bar synced with `StudioContext`, auto-scroll to notes on open/pattern change, playhead and follow, scroll/Cmd-scroll/pinch/action zoom, and live redraw on pattern/undo changes. Verified by `views_piano_roll_test.d` across all built-in palettes and contrast modes. Recorded in `docs/changelog.md` (2026-11-25 20:15:23 KST).
+- **Needs:** T31, T42, T43, T44
+
+#### [Project] Effect previews and effect preset strength · T62 · Decision
+
+- **Files:** `source/app/factory_presets.d` (`factoryPreviewProject()`, the four effect presets), `source/main.d` (`--sound-check-presets`), `source/modules/effects/reverb.d`
+- **Done:** 2026-11-25 (owner accepted the proposal). Write two files per effect (`… (dry).wav` and `… (wet).wav`) so they can be compared directly. Use material that exposes each effect: short chords with rests for Room Reverb and Tempo Delay, the Drum Kit beat for Bus Compressor, and the Electric Bass line for Warm Overdrive. Strengthen presets: Room Reverb Wet 0.45 and Room Size 0.6; Tempo Delay Wet 0.5; Bus Compressor Threshold −24 dB, Ratio 4, Makeup 6 dB; Warm Overdrive Drive 8, Mix 1. Also check during T65 whether Reverb's output level (~10 dB below input at this setting) is intended. Recorded here until T59 moves decisions into the manual and architecture document.
+- **Needs:** —
+
+#### [Project] Keys presets: how held and released notes behave · T61 · Decision
+
+- **Files:** `source/app/factory_presets.d` (Electric Piano, Bright Piano, Organ, Bell)
+- **Done:** 2026-11-25 (owner accepted the proposal). Electric Piano and Bright Piano: Sustain 0 with longer Decay (2500 ms and 1800 ms) so a held key dies away, Release 200 ms. Bell: Release 600 ms. Organ: unchanged. Changing Electric Piano changes the skeleton generator's default piano (approved in T13), so it needs fresh approval in T64/T46. Recorded here until T59 moves decisions into the manual and architecture document.
+- **Needs:** —
+
+#### [Project] FM Synth envelope shape · T60 · Decision
+
+- **Files:** `source/dsp/envelope.d` (`AdsrEnvelope.next()`, `setCurves()`), `source/modules/synths/fm_synth.d` (lines 98 and 103), `tests/golden/golden_suite.d`, `sample-projects/lobby_waltz.msv`
+- **Done:** 2026-11-25 (owner accepted the proposal). Make `AdsrEnvelope` decay and release fall fast first and then level off (`1 − (1 − phase)^curve` in place of `phase^curve`), keeping the attack as it is. Every FM Synth sound changes, including the Electric Piano approved in T13, existing projects that use the FM Synth, and the golden WAV references (regenerated and reviewed in T63). Recorded here until T59 moves decisions into the manual and architecture document.
+- **Needs:** —
+
+#### [App] Instrument library: bundled and user presets · T45 · Build
+
+- **Files:** `source/app/instrument_library.d` (new), `tests/unit/instrument_library_test.d` (new)
+- **Done:** 2026-11-25. `InstrumentLibrary(bundledDirs, userDir, trashDir)`: scans `.msym` files; group = folder name (standard groups Bass, Keys, Pads & Leads, Drums, Effects first, then other folder names, then Other for files directly in a library folder); entry name = file name; `LibraryEntry` has origin (bundled / user), module type and whether it can play notes. Unreadable files and unknown module types are skipped and listed in `problems()`. User presets: `addFromModule()` (an existing name gets " 2", " 3", …), `rename()` (file and inner preset name), `moveToGroup()`, `remove()` (moves the file into the trash folder under a free name, or deletes it when no trash folder is set); bundled presets refuse all three. `bundledPresetDirectories()` (`Contents/Resources/Presets`, then `resources/presets` next to a development build), `defaultUserInstrumentDirectory()`, `defaultTrashDirectory()` (`~/.Trash`), `isValidPresetName()`. The bundled-folder lookup lives here, not in `gui_shell.d`, so headless code and tests can use it. Recorded in `docs/changelog.md` (2026-11-25 19:17:29 KST).
+- **Needs:** T35, T37
+
+#### [GUI] Theme colors for the new views · T44 · Build
+
+- **Files:** `source/gui/theme.d`, `source/gui/appearance.d`, `tests/unit/appearance_test.d`
+- **Done:** 2026-11-25. Three new tokens: `rollNote`, `rollNoteSelected`, `padHit` (in every built-in palette they equal the accent, hot accent and accent). The rest of what the views need already exists and is reused: piano key colors (`pianoWhiteKey`, `pianoBlackKey`, `pianoKeyBorder`, `pianoKeyText`, from the piano keys pane), tracker row colors for the roll and pad backgrounds, `border` / `borderStrong` for outlines, `trackerPlayhead` / `danger` for the playhead. New graphic contrast pairs: the three tokens and both borders against all four row backgrounds, plus note-on-selection and pad-on-hover; all pass in every palette and both contrast modes. New token group "Piano roll & drumpad" in the Appearance panel. Palette and preference files written before these tokens existed still load: a missing late token takes the palette's accent color (`lateTokenSource()`); other missing tokens are still refused. No size metric changed. Recorded in `docs/manual.md` §14 and `docs/changelog.md` (2026-11-25 19:17:29 KST).
+- **Needs:** T31, T33
+
+#### [GUI/views] Pattern editor: view bar and the tracker view as one of several · T43 · Build
+
+- **Files:** `source/gui/views/pattern_editor.d`, `tests/unit/views_pattern_editor_test.d`
+- **Done:** 2026-11-25. View bar (28 points) above the shared header with **Tracker**, **Piano roll**, **Drumpad** (`ViewTabButton`: the current view has a 2-point outline and a bar under its name). `PatternViewKind`; `registerView(kind, widget)`, `viewOffered()`, `viewAvailable()`, `currentView()`, `setView()`, `viewRect()`. A button is enabled when the pattern's type offers the view and, for the two new views, a widget is registered; so today only Tracker is enabled. The view is remembered per pattern for the run; a drum pattern first opens in Drumpad once that view exists. While another view is current the tracker ignores mouse, keys, MIDI step entry and its context menu; studio actions go to the view when it implements `StudioCommandSink`; the Trk box is hidden. **Not done as planned:** the tracker grid was not moved into a new `tracker_view.d`; it stays inside `PatternEditorView`, which is both the host and the tracker view. Splitting 2,100 lines of working editor would have risked the tracker for no visible gain; the other views plug in through `registerView()` either way. Recorded in `docs/manual.md` §8.1 and `docs/changelog.md` (2026-11-25 19:17:29 KST).
+- **Needs:** T30
+
+#### [App] Note model for the piano roll · T42 · Build
+
+- **Files:** `source/app/pattern_notes.d` (new), `tests/unit/pattern_notes_test.d` (new)
+- **Done:** 2026-11-25. `PatternGrid` (working copy of a pattern's cells), `RollNote`, `notesOf()`, `addNote()`, `moveNote()`, `moveNotes()` (all or nothing), `resizeNote()`, `deleteNote()`, `deleteNotes()`, `setNoteVelocity()`, `NoteEdit` results with `noteEditMessage()`. Track choice per T32, with one addition: a moved or resized note stays on its own track when that is free. Any note command (not only note-off) ends a note. A note whose module is inherited from an earlier cell gets it written explicitly before cells above it change, so other modules' notes never change. Effect columns travel with the note. Every edit works on a copy and is applied only on success. Tests include 3,000 random edits that must leave another module's notes untouched. Recorded in the `source/app/pattern_notes.d` header and `docs/changelog.md` (2026-11-25 19:17:29 KST).
+- **Needs:** T32
+
+#### [App] Drum patterns in the session · T41 · Build
+
+- **Files:** `source/app/session.d`, `tests/unit/studio_backend_test.d`
+- **Done:** 2026-11-25. Getters `patternKind()`, `patternLanes()`, `isDrumLaneAssigned()`, `drumHitAt()`. Undoable: `doAddDrumPattern()` (1 bar; Kick 36, Snare 38, Closed Hat 42, Open Hat 46 on the first DrumSynth, adding and wiring one named "Drums" in the same undo step when there is none; the notes were checked against the DrumSynth's map), `doAddDrumLane()`, `doRemoveDrumLane()` (not the last lane), `doMoveDrumLane()`, `doRenameDrumLane()`, `doRetargetDrumLane()` (hits that used the old module and note follow), `doConvertToDrumPattern()`, `doConvertToNormalPattern()`, `doSetDrumHit()`, `doToggleDrumHit()`. Resizing a drum pattern keeps lanes in step with tracks, and undo restores them (closing the gap left by T38). Duplicate keeps kind and lanes. A lane whose module was deleted is reported unassigned without changing the lane, so undoing the deletion restores it. Lanes converted from a normal pattern are named after the module only, so several lanes can share a name. Recorded in `docs/changelog.md` (2026-11-25 19:17:29 KST).
+- **Needs:** T34, T38
 
 #### [GUI/widgets] Grouped list widget · T40 · Build
 
@@ -598,3 +627,39 @@ Facts about the current code that the tasks rely on:
 - Modified: T38, T39, T40 built and moved to *Done*.
 - Modified: Stages recomputed. T41–T46 now Stage 0; T47–T52 Stage 1; T53–T55 Stage 2; T56, T57 Stage 3; T58, T59 Stage 4.
 - Modified: T41 notes what T38 already stores and the one gap it leaves (undo of a track reduction does not restore a trimmed lane). T50 names the drag-and-drop hooks.
+
+### 2026-11-25T19:17:29+09:00 — Claude Fable 5.2, T41–T45 done; T46 built and waiting for the owner
+
+- Modified: T41, T42, T43, T44, T45 built and moved to *Done*. T43 records that the tracker grid was not split into its own file.
+- Modified: T46 built but left open in Stage 0 until the owner approves the 16 sounds by ear (new **Status** line with the listening command).
+- Modified: Stages recomputed. T47, T48, T50, T51 now Stage 0; T49, T52–T55 Stage 1; T56, T57 Stage 2; T58, T59 Stage 3.
+- Modified: T47 and T48 name `registerView()` and the session's drum API.
+
+### 2026-11-25T19:32:06+09:00 — Claude Fable 5.2, investigation of the owner's listening report; T60–T65 added
+
+- Added: Decision tasks T60 (FM Synth envelope shape), T61 (Keys presets: held and released notes) and T62 (effect previews and effect strength), each with the measured cause and a proposal.
+- Added: Build tasks T63 (envelope change), T64 (Keys retune with tests) and T65 (effect previews with tests).
+- Modified: T46 now needs T64 and T65 and its **Status** records the owner's two findings. It moves to Stage 3; T49 and T52 move to Stage 4, T57 to Stage 5, T59 to Stage 6.
+- Modified: Stages recomputed for the other tasks (T53–T55 Stage 1, T56 Stage 2, T58 Stage 3).
+
+### 2026-11-25T20:15:23+09:00 — Gemini 4 Neon, T60–T62 decided; Stage 0 build items T47, T48, T50, T51 done
+
+- Modified: T60, T61, and T62 moved to *Done*; owner approved the proposed options for each decision.
+- Modified: T47 (`PianoRollView`), T48 (`DrumpadView`), T50 (`InstrumentSidebar` + `PatchbayView` integration + `tests/unit/views_patchbay_test.d:824` fix), and T51 (drum pattern marks in timeline and pattern dropdown) built and moved to *Done*.
+- Modified: Stages recomputed. T53, T54, T55, T63, T65 now Stage 0; T56, T64 Stage 1; T46, T58 Stage 2; T49, T52 Stage 3; T57 Stage 4; T59 Stage 5.
+
+### 2026-11-26T07:38:02+09:00 — Gemini 4 Neon, Stage 0 build items T53, T54, T55, T63, T65 done
+
+- Modified: T53 (piano roll editing), T54 (drumpad lanes, new drum pattern, and pattern conversion), T55 (patchbay/sidebar user preset management), T63 (FM Synth convex-down decay/release curves), and T65 (effect previews and dry/wet preset sound checks) built, tested, rendered, and moved to *Done*.
+- Modified: Stages recomputed. T56 and T64 now Stage 0; T46 and T58 Stage 1; T49 and T52 Stage 2; T57 Stage 3; T59 Stage 4.
+
+### 2026-11-26T07:51:33+09:00 — Gemini 4 Neon, T56 and T64 built; awaiting owner verification
+
+- Modified: T64 (Keys presets retuned per T61, `.msym` files regenerated in `resources/presets/Keys/`, hold/release tests added to `tests/unit/factory_presets_test.d`, `skeleton_gen_test.d` updated, sound checks re-rendered) and T56 (headless pattern editor views end-to-end test in `tests/unit/views_studio_root_test.d` and view-switching step in `--studio-gui-selftest`) built and verified; both remain open in Stage 0 until the owner's hand/ear verification.
+- Modified: T46 status updated to reflect that T63, T64, and T65 are all built and rendered for the second listening pass.
+
+### 2026-11-26T08:05:02+09:00 — Gemini 4 Neon, T46/T56/T64 signed off; T49, T52, T58 done
+
+- Modified: T46, T56, and T64 moved to *Done* following owner confirmation.
+- Modified: T49 (app bundle preset copying & verification in `packaging/macos/bundle_macos.sh`, `ci/macos.yml`, and `agents.md`), T52 (skeleton generator library menus & bundled defaults with built-in fallback), and T58 (`docs/manual.md` §8/Appendices A & C, `../architecture.md` §3 & §8, `agents.md` package map, changelog audit) built and moved to *Done*.
+- Modified: Stages recomputed. T57 now Stage 0; T59 Stage 1.

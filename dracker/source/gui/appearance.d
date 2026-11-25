@@ -29,6 +29,7 @@
  *   - usedTextPairs(), usedGraphicPairs(), contrastFailures(), categoricalSets(), minCategoricalDeltaE()
  *   - simulateCvd(), deltaE2000()
  *   - encodeAppearance()/decodeAppearance(), encodePalette()/decodePalette()
+ *   - lateTokenSource() (tokens added later take another token's value when a palette file lacks them)
  *   - duplicateAsCustom(), renameCustomNext(), deleteCustom(), resetCustom(), setCustomToken(), addImportedPalette()
  *   - struct TokenGroup / tokenGroups(); struct ContrastReading / contrastReadout() (palette editor)
  *   - defaultAppearancePath()
@@ -333,7 +334,8 @@ private immutable HexToken[] TOL_LIGHT = [
     HexToken("categoryEffect", 0xAA3377FF), HexToken("categoryControl", 0x1E772DFF),
     HexToken("clip0", 0xE0EEE2FF), HexToken("clip1", 0x5BA768FF), HexToken("clip2", 0xCA81ABFF),
     HexToken("clip3", 0x66CCEEFF), HexToken("clip4", 0xCCBB44FF), HexToken("clip5", 0xE8E0A9FF),
-    HexToken("clip6", 0xBEBEBEFF), HexToken("clip7", 0xC5ECF9FF)
+    HexToken("clip6", 0xBEBEBEFF), HexToken("clip7", 0xC5ECF9FF),
+    HexToken("rollNote", 0x1F364DFF), HexToken("rollNoteSelected", 0x0F1B27FF), HexToken("padHit", 0x1F364DFF)
 ];
 
 private immutable HexToken[] DARK_OKABE_ITO = [
@@ -359,7 +361,8 @@ private immutable HexToken[] DARK_OKABE_ITO = [
     HexToken("categoryEffect", 0xCC79A7FF), HexToken("categoryControl", 0x05A076FF),
     HexToken("clip0", 0x005B8EFF), HexToken("clip1", 0x914000FF), HexToken("clip2", 0x004C37FF),
     HexToken("clip3", 0x764661FF), HexToken("clip4", 0x5E2900FF), HexToken("clip5", 0x002940FF),
-    HexToken("clip6", 0x212121FF), HexToken("clip7", 0x331700FF), HexToken("clipText", 0xFFFFFFFF)
+    HexToken("clip6", 0x212121FF), HexToken("clip7", 0x331700FF), HexToken("clipText", 0xFFFFFFFF),
+    HexToken("rollNote", 0x7DB7D8FF), HexToken("rollNoteSelected", 0xB5D8ECFF), HexToken("padHit", 0x7DB7D8FF)
 ];
 
 /**
@@ -713,6 +716,14 @@ ContrastPair[] usedGraphicPairs(const ref StudioTheme t) {
     add("borderStrong", "clip", t.clip0);
     add("pianoKeyBorder", "pianoWhiteKey", t.pianoWhiteKey);
     add("pianoBlackKey", "pianoWhiteKey", t.pianoWhiteKey);
+    foreach (rname; ["trackerBackground", "trackerRowBeat", "trackerRowBar", "trackerPlayhead"]) {
+        immutable ColorRGBA rc = tok(t, rname);
+        foreach (f; ["rollNote", "rollNoteSelected", "padHit", "border", "borderStrong"]) {
+            add(f, rname, rc);
+        }
+        add("rollNote", rname ~ "+selection", compositeOver(t.selection, rc));
+        add("padHit", rname ~ "+hover", compositeOver(t.hover, rc));
+    }
     return out_;
 }
 
@@ -1085,14 +1096,42 @@ private bool parsePaletteBody(ref LineReader rd, bool block, out PaletteSpec p, 
         err = "incomplete palette";
         return false;
     }
-    foreach (b; seen) {
-        if (!b) {
+    foreach (i, b; seen) {
+        if (b) {
+            continue;
+        }
+        immutable ptrdiff_t source = lateTokenSource(THEME_COLOR_TOKENS[i]);
+        if (source < 0 || !seen[source]) {
             err = "missing palette token";
             return false;
         }
+        setColorToken(p.colors, i, colorToken(p.colors, cast(size_t) source));
     }
     p.builtin = false;
     return true;
+}
+
+/**
+ * For a color token added after palette format 1 was first written, returns the token whose value stands in
+ * for it when a palette file does not have it: the piano roll and drumpad colors (T44) take the palette's accent
+ * colors.
+ *
+ * Params:
+ *   name = Token name.
+ *
+ * Returns:
+ *   Index of the source token, or -1 when the token must be present in the file.
+ */
+ptrdiff_t lateTokenSource(const(char)[] name) @safe nothrow pure @nogc {
+    switch (name) {
+        case "rollNote":
+        case "padHit":
+            return colorTokenIndex("accent");
+        case "rollNoteSelected":
+            return colorTokenIndex("accentHot");
+        default:
+            return -1;
+    }
 }
 
 private bool parseVersionLine(const(char)[] line, string magic, uint expected) @safe nothrow pure @nogc {
@@ -1446,7 +1485,8 @@ TokenGroup[] tokenGroups() {
             "trackerEffect", "trackerParam", "trackerEmpty"]),
         TokenGroup("Categories & clips", ["categoryCore", "categorySynth", "categoryEffect", "categoryControl", "clip0",
             "clip1", "clip2", "clip3", "clip4", "clip5", "clip6", "clip7"]),
-        TokenGroup("Piano", ["pianoWhiteKey", "pianoBlackKey", "pianoKeyBorder", "pianoKeyText"])
+        TokenGroup("Piano", ["pianoWhiteKey", "pianoBlackKey", "pianoKeyBorder", "pianoKeyText"]),
+        TokenGroup("Piano roll & drumpad", ["rollNote", "rollNoteSelected", "padHit"])
     ];
 }
 

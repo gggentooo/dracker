@@ -96,13 +96,14 @@ For any changes or decisions that may have significant impact on the codebase, t
 | `source/modules/` | `output.d`, `synths/` (8), `effects/` (19), `control/` (11) | `@nogc nothrow` RT; zero syscalls |
 | `source/sequencer/` | `note.d`, `pattern.d`, `timeline.d`, `clock.d`, `track_effects.d`, `stream_worker.d`, `engine.d` | RT step `@nogc nothrow`; `stream_worker.d` off-RT worker |
 | `source/io/` | `binary_stream.d`, `project_format.d`, `audio_io.d`, `importers/` (`.mid`, `.xm`, `.sunvox`) | `@safe` off-RT I/O & `audio-formats` (`boost`) |
-| `source/app/` | `session.d`, `history.d`, `keymap.d`, `pattern_ops.d`, `telemetry.d`, `music_theory.d` (keys, scales, note spelling), `skeleton_gen.d` (skeleton project generator: instrument choices, sound-check preview), `chord_progression.d` (chord and progression parser), `audio_host.d` + `studio_selftest.d` (macOS), `gui_shell.d` + `gui_gallery.d` + `studio_app.d` (`StudioGUI` only) | Main/UI thread orchestration, undo/redo, native GUI main loop & `--gui-selftest` |
-| `source/gui/` | `renderer.d`, `theme.d`, `layout.d`, `widgets.d`, `views/` (`studio_context.d`, `studio_root.d` + 7 studio views, `appearance_panel.d`, `skeleton_panel.d` (skeleton project generator panel)) | Main/UI thread only; toolkit and all views are built and unit-tested in `headless` |
+| `source/app/` | `session.d`, `history.d`, `keymap.d`, `pattern_ops.d`, `telemetry.d`, `music_theory.d` (keys, scales, note spelling), `skeleton_gen.d` (skeleton project generator: instrument choices, sound-check preview), `chord_progression.d` (chord and progression parser), `pattern_notes.d` (piano-roll note model), `instrument_library.d` (bundled and user preset library), `factory_presets.d` (bundled preset definitions; files in `resources/presets/`), `audio_host.d` + `studio_selftest.d` (macOS), `gui_shell.d` + `gui_gallery.d` + `studio_app.d` (`StudioGUI` only) | Main/UI thread orchestration, undo/redo, native GUI main loop & `--gui-selftest` |
+| `source/gui/` | `renderer.d`, `theme.d`, `layout.d`, `widgets.d`, `views/` (`studio_context.d`, `studio_root.d` + 7 studio views, `appearance_panel.d`, `skeleton_panel.d` (skeleton project generator panel), `piano_roll_view.d`, `drumpad_view.d`, `instrument_sidebar.d`) | Main/UI thread only; toolkit and all views are built and unit-tested in `headless` |
 | `source/platform/` | `interfaces.d` + `macos/` (`corefoundation.d`, `coreaudio.d`, `coremidi.d`, `objc_runtime.d`, `objc_blocks_shim.m`, `appkit.d`, `coretext.d`, `metal_renderer.d`) | Only OS FFI boundary in the project |
 | `shaders/` | `ui2d.metal` (Metal 2D instanced UI, Beziers, R8 glyphs) | Compiled to `build/ui2d.metallib` |
+| `resources/` | `fonts/`, `presets/` (bundled `.msym` presets matching `app.factory_presets`) | Read-only app resources |
 | `packaging/macos/`, `ci/` | `Info.plist`, `entitlements.plist`, `bundle_macos.sh`, `macos.yml` | Release bundling & CI automation |
 | `tests/` | `audio_harness.d`, `rt_malloc_trap.d`, `unit/`, `golden/`, `fuzz/` | Offline CI & local verification |
-| `docs/` | `changelog.md` | Mandatory change log (Rule 4) |
+| `docs/` | `manual.md`, `todo.md`, `changelog.md` | User manual, task tracker, mandatory change log (Rule 4) |
 
 ---
 
@@ -234,11 +235,11 @@ Each phase below tracks status with `[ ]` / `[x]`. Do not mark any item `[x]` un
 
 ### `[ ]` Phase 9 — macOS `.app` Packaging, Universal Binary, Profiling & Hardening *(Deps: Phase 8, 8.5)*
 - **Subtasks:**
-  - `[ ]` `9.1` `packaging/macos/bundle_macos.sh`, `Info.plist`, `entitlements.plist`, `AppIcon.icns` (Universal `arm64`+`x86_64`, `lipo`, `codesign`), plus the **bundled fonts**: Atkinson Hyperlegible Next and Fira Code with their OFL texts go in `Contents/Resources/Fonts`, with `ATSApplicationFontsPath`; the build fails if any are missing
+  - `[ ]` `9.1` `packaging/macos/bundle_macos.sh`, `Info.plist`, `entitlements.plist`, `AppIcon.icns` (Universal `arm64`+`x86_64`, `lipo`, `codesign`), plus the **bundled fonts**: Atkinson Hyperlegible Next and Fira Code with their OFL texts go in `Contents/Resources/Fonts`, with `ATSApplicationFontsPath`, and **bundled presets**: `resources/presets/` go in `Contents/Resources/Presets`; the build fails if any are missing
   - `[ ]` `9.2` Xcode Instruments `Audio System Trace` & `Allocations` RT audit
   - `[ ]` `9.3` Hot-path DSP profiling + targeted `ldc.attributes.restrict` / `core.simd`
   - `[ ]` `9.4` Autosave crash recovery & live audio/MIDI hot-plug resilience
-- **Exit Criteria:** Universal `Dracker.app` launches on Apple Silicon and Intel with `otool -L` showing system-only frameworks, `codesign --verify --deep --strict` passing, zero Instruments RT violations, and crash-free hot-unplug recovery. The app renders with its bundled Atkinson Hyperlegible Next and Fira Code; resolved font URLs point inside `Contents/Resources/Fonts`.
+- **Exit Criteria:** Universal `Dracker.app` launches on Apple Silicon and Intel with `otool -L` showing system-only frameworks, `codesign --verify --deep --strict` passing, zero Instruments RT violations, and crash-free hot-unplug recovery. The app renders with its bundled Atkinson Hyperlegible Next and Fira Code (resolved font URLs point inside `Contents/Resources/Fonts`) and loads its bundled presets from `Contents/Resources/Presets`.
 
 ---
 

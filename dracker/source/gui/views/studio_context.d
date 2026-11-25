@@ -41,6 +41,8 @@
 module gui.views.studio_context;
 
 import app.audio_host : AudioLoadTelemetry;
+import app.instrument_library : bundledPresetDirectories, defaultTrashDirectory, defaultUserInstrumentDirectory,
+    InstrumentLibrary, LibraryEntry;
 import app.session : MidiNoteEvent, StudioSession;
 import app.telemetry : makeStudioTelemetry, ScopeHistory, StudioTelemetry;
 import foundation.types : ModuleId;
@@ -173,6 +175,8 @@ final class StudioContext {
     FontResolution fonts;
     ScopeHistory scopes;
     StudioTelemetry telemetry;
+    InstrumentLibrary library;
+    bool delegate(string path) revealInFinder;
 
     enum uint QWERTY_TAKE_TAG = 0x1000_0000u;
     enum uint MIDI_TAKE_TAG = 0x2000_0000u;
@@ -200,6 +204,7 @@ final class StudioContext {
     private ulong noteHighlightRevision_ = 1;
     private ulong octaveRevision_ = 1;
     private long countInBeatShown_ = long.min;
+    private ulong libraryRevision_ = 1;
 
     /**
      * Creates a context over session.
@@ -218,6 +223,8 @@ final class StudioContext {
         this.clipboard = clipboard;
         this.theme = StudioTheme.light();
         this.scopes = new ScopeHistory(8192);
+        this.library = new InstrumentLibrary(bundledPresetDirectories(), defaultUserInstrumentDirectory(),
+            defaultTrashDirectory());
         const doc = session.document();
         if (doc.patterns.length > 0) {
             currentPattern_ = doc.patterns[0].patternId;
@@ -724,6 +731,77 @@ final class StudioContext {
             }
         }
         return [x, y];
+    }
+
+    /**
+     * Returns a counter bumped whenever the instrument library contents change.
+     *
+     * Returns:
+     *   Library revision.
+     */
+    ulong libraryRevision() const {
+        return libraryRevision_;
+    }
+
+    /**
+     * Notifies listeners that the instrument library contents changed.
+     */
+    void notifyLibraryChanged() {
+        libraryRevision_++;
+    }
+
+    /**
+     * Reveals a file in the system file manager (Finder on macOS) or calls revealInFinder when set.
+     *
+     * Params:
+     *   path = File path to reveal.
+     *
+     * Returns:
+     *   True if the reveal command succeeded.
+     */
+    bool revealFileInFinder(string path) {
+        if (path.length == 0) {
+            return false;
+        }
+        if (revealInFinder !is null) {
+            return revealInFinder(path);
+        }
+        version (OSX) {
+            import std.process : spawnProcess;
+
+            try {
+                spawnProcess(["/usr/bin/open", "-R", path]);
+                return true;
+            } catch (Exception) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    /**
+     * Loads a preset entry from the instrument library as a new, unwired module at (posX, posY), selects it,
+     * and sets a status message (one undo step).
+     *
+     * Params:
+     *   entry = Library entry to load.
+     *   posX = Patchbay world X coordinate.
+     *   posY = Patchbay world Y coordinate.
+     *
+     * Returns:
+     *   New module id, or 0 on failure.
+     */
+    uint addPresetFromLibrary(const ref LibraryEntry entry, float posX, float posY) {
+        string err;
+        uint id = 0;
+        if (!session.loadModulePresetFromFile(entry.path, posX, posY, id, err)) {
+            setStatus("Could not add " ~ entry.name ~ ": " ~ err);
+            return 0;
+        }
+        selectModule(id);
+        setStatus("Added " ~ entry.name);
+        return id;
     }
 
     private static FileDialogFilter[] presetFilters() {

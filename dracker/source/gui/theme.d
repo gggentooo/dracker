@@ -167,6 +167,10 @@ struct StudioTheme {
     ColorRGBA pianoKeyBorder = ColorRGBA.fromHex(0x000000FF);
     ColorRGBA pianoKeyText = ColorRGBA.fromHex(0x000000FF);
 
+    ColorRGBA rollNote = ColorRGBA.fromHex(0x004A73FF);
+    ColorRGBA rollNoteSelected = ColorRGBA.fromHex(0x00324FFF);
+    ColorRGBA padHit = ColorRGBA.fromHex(0x004A73FF);
+
     /**
      * True for light (dark-on-light) appearances; selects the emphasize() direction.
      */

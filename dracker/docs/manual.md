@@ -448,18 +448,19 @@ Editing a curve:
 The pattern editor is where you write music. Time runs downward, one **line** per row. Each **track** is a column of cells.
 
 ### 8.1 The header strip
-- **Pattern dropdown:** chooses the pattern to edit. Items show the pattern's id in hex followed by its name.
+- **View bar** (the row above the header): **Tracker**, **Piano roll** and **Drumpad**. The current view's button has a 2-point outline and a bar under its name. Normal patterns offer **Tracker** and **Piano roll** (starting in Tracker); drum patterns offer **Drumpad** and **Tracker** (starting in Drumpad). Views that the current pattern type does not offer are disabled. The chosen view is remembered per pattern while Dracker runs; it is not saved in the project.
+- **Pattern dropdown:** chooses the pattern to edit. Items show the pattern's id in hex followed by `[D] ` for drum patterns and the pattern name. Right-click (or click **`...`**) opens the pattern menu (`New Pattern`, `New Drum Pattern`, `Convert to drum pattern` / `Convert to normal pattern`, `Duplicate Pattern`, `Delete Pattern`).
 - **Renaming a pattern:** double-click the pattern dropdown. A text field opens over it with the current name selected. Type the new name and press **Return** (or click elsewhere) to confirm, or **Escape** to cancel. If another pattern already has that name, a number is added to the end (Drums, Drums1, Drums2, …). An empty name is ignored. Renaming is undoable. You can also rename from the timeline ([§9.3](#93-editing-clips)).
-- **Trk:** number of tracks, 1–64.
-- **Lin:** number of lines, 1–4096. Resizing is undoable.
-- **Add:** creates a new empty pattern the same size as the current one, and selects it.
-- **Dup:** duplicates the current pattern; the copy is named "*name* copy".
+- **Trk:** number of tracks, 1–64 (shown in **Tracker** view only). On a drum pattern, adding or removing tracks adds or removes drum lanes up to 64 lanes.
+- **Lin:** number of lines, 1–4096 (pattern length in steps for Drumpad). Resizing is undoable.
+- **Add:** creates a new empty normal pattern the same size as the current one, and selects it.
+- **+Drum:** creates a new 1-bar drum pattern with four default DrumSynth lanes (`Kick`, `Snare`, `Closed Hat`, `Open Hat`; adding and wiring a DrumSynth module named `Drums` if the project has none), and opens it in **Drumpad**.
+- **Dup:** duplicates the current pattern (keeping drum pattern type and lanes); the copy is named "*name* copy".
 - **Del:** deletes the current pattern **and every timeline clip that uses it**. Undo restores both. The last remaining pattern can't be deleted.
+- **`...`:** opens the pattern actions menu (adding normal/drum patterns, converting between normal and drum patterns, duplicating, deleting).
 - **Info text:** `Oct N  Step N`, plus **EDIT** in edit mode, **REC** while live recording, and **FOLLOW** when following.
 
 Up to 256 patterns are allowed.
-
-> **QA note:** there is currently no way to rename a pattern in the GUI.
 
 ### 8.2 Reading a cell
 Each cell of a track reads:
@@ -639,6 +640,26 @@ Live recording captures what you play on the computer keyboard, a MIDI keyboard 
 - The take becomes a new pattern named **Take NN**, trimmed to the last 16-line bar used (at least 4 tracks). A clip for it is placed at the record point on the **first timeline lane that is free** for its length, and it becomes the current pattern.
 - Adding the take is **one undo step** ("Record Take"). A take with no notes adds nothing ("Recording stopped: no notes recorded").
 - Turning edit mode on (⇧⌘R, **EDIT**, or double-clicking a row) also ends the take.
+
+### 8.12 The piano roll
+Click **Piano roll** in the view bar on any normal pattern to edit notes in a time-by-pitch grid of the same underlying pattern cells:
+
+- **Layout:** vertical piano keys (`C-1` to `G9`, octaves labelled on every C, black keys shaded and indented), horizontal bar/beat grid following the time signature (**SIG**), module picker in the top bar (defaults to the patchbay selection), playhead line with **FOLLOW**, horizontal/vertical scroll, and zoom (`⌘=` / `⌘-` / `⌘0`, `⌘` + scroll, or pinch). Notes of the picked module are filled with a border; notes of other modules are outlined in the background.
+- **Velocity strip:** the strip below the grid shows a bar for each selected note (or all picked-module notes when none are selected). Drag up/down on a bar to adjust velocity.
+- **Editing gestures (one undo step each, snapped to lines):**
+  - Click empty space to add a note (inheriting the last edited note's length, initially one beat) and audition it. Click a piano key on the left to audition pitches.
+  - Drag a note body to move it in time and pitch; **⌥-drag** copies selected notes (preserving effect columns); drag a note's right edge to resize it. Press **Escape** mid-drag to cancel.
+  - Drag across empty grid space for a rubber-band selection; **Shift-click** or **Shift-drag** toggles/adds to the selection. **Delete** / **Forward Delete** removes selected notes.
+  - Clipboard & transpose: `⌘A` selects all picked-module notes; `⌘X` / `⌘C` / `⌘V` cut, copy, and paste using plain text beginning `DRACKER-ROLL-V1` (keeping effect columns); `⌘↑` / `⌘↓` transpose ±1 semitone; `⇧⌘↑` / `⇧⌘↓` transpose ±12 semitones. Right-click opens the context menu.
+- **Track mapping and messages:** overlapping notes are placed automatically on a free same-module track, an empty track, or a new track up to 64 (reporting `"Added track N"` in the status bar). Overlapping two notes of the same module and pitch, selecting **Master Output**, or running out of tracks refuses the edit without losing existing notes and explains why in the status bar. Existing effect columns and other modules' cells remain intact.
+
+### 8.13 Drum patterns and the drumpad
+A **drum pattern** keeps the normal pattern cell grid while storing a lane table (name, module, note) per track and a `[D]` flag in the pattern dropdown and timeline.
+
+- **Creating and timeline badges:** click **+Drum** (or **New Drum Pattern** in the pattern menu) to create a 1-bar drum pattern with `Kick` (36), `Snare` (38), `Closed Hat` (42), and `Open Hat` (46) mapped to your DrumSynth (adding and wiring one named `Drums` if needed). Drum patterns appear prefixed with `[D]` in the pattern dropdown and timeline clips, and draw step dots in timeline miniatures.
+- **Lanes:** each row shows the lane name and a lane menu button (`▾`). Click a lane name to audition that drum. Use the lane menu to change **Module**, pick a GM **Note** or **Set MIDI Note…**, **Rename…**, **Move Up** / **Move Down**, or **Remove Lane**, or click **+ Lane** below the last lane to append one. If a lane's module is missing, its label shows `[unassigned]` and diagonal hatching.
+- **Step pads:** beat and bar spacing follow **SIG**, with bar numbers in the ruler and the playhead column highlighted. Click a pad to toggle a hit; drag across pads to paint or erase as one undo step; drag vertically on a hit to change velocity (or **⌥-click** to cycle soft / medium / loud), which also updates that lane's velocity for new hits. Hits whose cell module or note differs from their lane show a corner mark.
+- **Tracker view & converting:** switch between **Drumpad** and **Tracker** in the view bar at any time (adding/removing tracks in Tracker adds/removes lanes, up to 64 lanes). Open the **`...`** menu or right-click the pattern dropdown to run **Convert to normal pattern** or **Convert to drum pattern** (one undo step each).
 
 ---
 
@@ -1004,7 +1025,7 @@ Every change previews immediately:
 Built-in palettes are read-only.
 
 1. Choose a palette and click **Duplicate → Custom**. This creates "Custom N" and selects it.
-2. Pick a color group under **Edit colors**: Surfaces; Text; Accent & status; Lines & overlays; Wires & scope; Tracker fields; Categories & clips.
+2. Pick a color group under **Edit colors**: Surfaces; Text; Accent & status; Lines & overlays; Wires & scope; Tracker fields; Categories & clips; Piano; Piano roll & drumpad (colors for views that are not available yet). A palette saved by an older build still loads; the piano roll and drumpad colors it lacks take its accent colors.
 3. Pick a color, either from the second dropdown or by clicking its **swatch**.
 4. Adjust **R, G, B, A** (0–255) with the number boxes.
 
@@ -1099,13 +1120,13 @@ Opening a project or starting a new one clears the history.
 
 | Shortcut | Pattern editor | Timeline | Patchbay | Sample editor |
 |---|---|---|---|---|
-| ⌘= / ⌘- / ⌘0 | — | Zoom | Zoom | Zoom |
-| ⌫ | Clear field / selection | Delete clip | Delete selection | — |
-| ⌦ | Clear block | — | Delete selection | — |
-| ⌘X / ⌘C / ⌘V | Cut / copy / paste | — | — | — |
-| ⌘A | Select all | — | — | — |
-| ⌘↑ / ⌘↓ | Transpose ±1 | — | — | — |
-| ⇧⌘↑ / ⇧⌘↓ | Transpose ±12 | — | — | — |
+| ⌘= / ⌘- / ⌘0 | Zoom (Piano roll) | Zoom | Zoom | Zoom |
+| ⌫ | Clear field / selection / notes | Delete clip | Delete selection | — |
+| ⌦ | Clear block / notes | — | Delete selection | — |
+| ⌘X / ⌘C / ⌘V | Cut / copy / paste (Tracker & Piano roll) | — | — | — |
+| ⌘A | Select all (Tracker & Piano roll) | — | — | — |
+| ⌘↑ / ⌘↓ | Transpose ±1 (Tracker & Piano roll) | — | — | — |
+| ⇧⌘↑ / ⇧⌘↓ | Transpose ±12 (Tracker & Piano roll) | — | — | — |
 | ⌘I | Interpolate | — | — | — |
 | ⌘F | Toggle follow | Toggle follow | — | — |
 | ⌘[ / ⌘] | Previous / next pattern | — | — | — |
@@ -1119,9 +1140,10 @@ Opening a project or starting a new one clears the history.
 |---|---|---|
 | Any value drag | Shift | Fine adjustment |
 | Any slider or number box | Option-click | Reset to default |
-| Patchbay, timeline, sample editor | ⌘ + scroll / pinch | Zoom at pointer |
-| Timeline drag | ⌥ | Clone clip |
+| Patchbay, timeline, sample editor, piano roll | ⌘ + scroll / pinch | Zoom at pointer |
+| Timeline or piano roll drag | ⌥ | Clone clip / copy selected notes |
 | Timeline drag | Shift / ⌘ | Snap to line / bar |
+| Drumpad step hit | ⌥-click | Cycle velocity (soft / medium / loud) |
 | Envelope point | Option-click | Set sustain point |
 
 ---
@@ -1201,7 +1223,7 @@ These are known limitations of the current build. Please report behavior that *d
 | # | Area | Behavior in this build |
 |---|---|---|
 | 1 | Files | Logging out, restarting or shutting down quits without asking about unsaved changes (by design, [§13.8](#138-unsaved-changes)) |
-| 2 | Pattern editor | Patterns can't be renamed in the GUI |
+| 2 | Pattern editor | Double-clicking the pattern dropdown renames the pattern in place |
 | 3 | Pattern editor | The context menu shows "Cmd+J" for Interpolate; the real shortcut is ⌘I |
 | 4 | Pattern editor | New patterns are named with a decimal number ("Pattern 10") but the dropdown shows the id in hex ("0A"), so the two disagree from pattern 10 on |
 | 5 | Pattern editor | Module numbers above 255 can't be displayed or typed in the MM field |
@@ -1226,6 +1248,9 @@ These are known limitations of the current build. Please report behavior that *d
 | 24 | Panic | In the GUI, Panic stops the transport; it doesn't send a separate all-notes-off |
 | 25 | Files | The song key can only be chosen in the skeleton generator; there is no control to change it afterwards ([§13.9](#139-new-project-from-skeleton)) |
 | 26 | Files | Creating a project from a skeleton cannot be undone (like New and Open, it clears the undo history) |
+| 27 | Pattern editor | The view chosen per pattern (Tracker, Piano roll, Drumpad) resets when reopening Dracker (not saved in `.msv`), and there are no keyboard shortcuts for switching views |
+| 28 | Piano roll | Effect columns, sub-line delays (`40`–`5F`), and sub-line note timings are preserved when editing notes, but cannot be viewed or edited directly in the piano roll |
+| 29 | Drumpad | Swing, per-step probability, per-step pitch overrides, and lane mute/solo are not implemented in this version |
 
 ### Suggested QA passes
 1. **Audio path:**
@@ -1263,10 +1288,13 @@ dracker --studio-gui-selftest [--quick]  automated end-to-end GUI workflow (play
 dracker --gui-selftest [--quick]         automated window/toolkit verification
 dracker --studio-selftest [--quick]      audio/MIDI backend verification (plays audio)
 dracker --sound-check=<file.wav>         render the default bass and piano sounds to a WAV file
+dracker --sound-check-presets=<dir>      render WAV previews for bundled presets (12 instruments, 4 effects dry + wet)
+dracker --write-factory-presets=<dir>    write the bundled presets as .msym files
 dracker --help
 ```
 
 - **Sound check:** `--sound-check` needs no audio device and writes a 26-second stereo WAV in C major at 120 BPM (I–vi–ii–V7, one chord per bar): bars 1–4 the default bass alone, bars 5–8 the default piano alone, bars 9–12 both. These are the sounds the planned skeleton project generator will use when no other instrument is chosen.
+- **Preset sound check:** `--sound-check-presets` renders 20 WAV files into `<dir>` at 120 BPM (four bars plus a 3-second tail each): "*Group* - *Name*.wav" for the twelve instruments (basses a bass line, Drum Kit and Kick a beat, the others the chords C, Am, Dm, G7), and two separate files "*Effects - Name* (dry).wav" and "*Effects - Name* (wet).wav" for each effect (short Electric Piano chords with rests for Room Reverb and Tempo Delay, a dynamic Drum Kit beat for Bus Compressor, and the Electric Bass line for Warm Overdrive).
 - **Running self-tests:** run them with `caffeinate -dims` so the display doesn't sleep. They keep a floating window open, and you shouldn't use the mouse or keyboard while they run.
 - **Reading results:** each check prints `PASS` or `FAIL` with details, and the process exits with 0 when every check passed.
 - **Your files are safe:** self-tests use temporary folders and never touch your projects, clipboard or appearance preferences.

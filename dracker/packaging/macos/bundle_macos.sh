@@ -33,14 +33,39 @@ echo "[3/5] Merging Universal Mach-O binary via lipo..."
 lipo -create -output build/dracker-universal     build/dracker-arm64 build/dracker-x86_64
 
 echo "[4/5] Assembling ${APP_DIR} bundle..."
+EXPECTED_PRESETS="$(sed -nE 's/^[[:space:]]*FactoryPreset\("([^"]+)",[[:space:]]*"([^"]+)".*/\1|\2/p' source/app/factory_presets.d)"
+PRESET_COUNT=0
+while IFS='|' read -r preset_name preset_group; do
+    [[ -z "${preset_name}" ]] && continue
+    preset_file="resources/presets/${preset_group}/${preset_name}.msym"
+    if [[ ! -s "${preset_file}" ]]; then
+        echo "Error: missing bundled preset listed in source/app/factory_presets.d: ${preset_file}" >&2
+        exit 1
+    fi
+    PRESET_COUNT=$((PRESET_COUNT + 1))
+done <<< "${EXPECTED_PRESETS}"
+if [[ "${PRESET_COUNT}" -eq 0 ]]; then
+    echo "Error: failed to parse bundled presets from source/app/factory_presets.d" >&2
+    exit 1
+fi
+
 rm -rf "${APP_DIR}"
-mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Resources"
+mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Resources" "${APP_DIR}/Contents/Resources/Presets"
 cp build/dracker-universal "${APP_DIR}/Contents/MacOS/Dracker"
 cp build/ui2d.metallib           "${APP_DIR}/Contents/Resources/ui2d.metallib"
 cp packaging/macos/Info.plist    "${APP_DIR}/Contents/Info.plist"
 if [[ -f packaging/macos/AppIcon.icns ]]; then
     cp packaging/macos/AppIcon.icns "${APP_DIR}/Contents/Resources/AppIcon.icns"
 fi
+cp -R resources/presets/. "${APP_DIR}/Contents/Resources/Presets/"
+while IFS='|' read -r preset_name preset_group; do
+    [[ -z "${preset_name}" ]] && continue
+    bundled_file="${APP_DIR}/Contents/Resources/Presets/${preset_group}/${preset_name}.msym"
+    if [[ ! -s "${bundled_file}" ]]; then
+        echo "Error: preset missing in app bundle: ${bundled_file}" >&2
+        exit 1
+    fi
+done <<< "${EXPECTED_PRESETS}"
 
 echo "[5/5] Signing and verifying bundle..."
 codesign --force --deep --options runtime     --entitlements packaging/macos/entitlements.plist     --sign "${SIGN_IDENTITY}" "${APP_DIR}"

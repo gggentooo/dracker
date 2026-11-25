@@ -25,7 +25,9 @@
  *     setEngineSyncTimeout(), pendingRetiredModuleCount(), sampleRate(), changeSampleRate(), newEmptyProject(),
  *     compileAndSwapGraph(), doAddModule(), doRemoveModule(), doConnectWire(), doDisconnectWire(), doSetParam(),
  *     timeSignatureNumerator()/timeSignatureDenominator()/linesPerBeat()/linesPerBar()/countInBeats()/songKey(),
- *     doSetTimeSignature(), doSetKey(),
+ *     doSetTimeSignature(), doSetKey(), patternKind(), patternLanes(), isDrumLaneAssigned(), doAddDrumPattern(),
+ *     doAddDrumLane(), doRemoveDrumLane(), doMoveDrumLane(), doRenameDrumLane(), doRetargetDrumLane(),
+ *     doConvertToDrumPattern(), doConvertToNormalPattern(), drumHitAt(), doSetDrumHit(), doToggleDrumHit(),
  *     doPatchCell(), doResizePattern(), doReplacePatternCells(), doAddClip(), doMoveClip(), doCloneClip(),
  *     doRemoveClip(), doSetClipFlags(), doSetTempo(), doSetLoop(), doAddPattern(), doDuplicatePattern(),
  *     doRemovePattern(), doRenamePattern(), doSetModuleMuted(), doSetModuleBypassed(), doRenameModule(),
@@ -64,12 +66,14 @@ import graph.audio_graph : RetiredKind, RetiredResource;
 import graph.module_api : AssetSwap, ModuleCategory, ModuleDescriptor, ModuleInstance, ModuleVTable, ParamDescriptor,
     ParamScale;
 import graph.plan : GraphCompileError, GraphCompiler, GraphPlan, NodeSpec, WireSpec;
+import graph.port : isAudioPort, PortDirection;
 import graph.registry : ModuleRegistry;
 import io.importers.smf_importer : importMidiFile;
 import io.importers.sunvox_importer : ImportReport, importSunvoxFile;
 import io.importers.xm_importer : importXmFile;
 import io.project_format : LoadedPreset, LoadedProject, loadPreset, loadProject, loadProjectFile,
-    isValidKey, isValidMidiMapping, isValidPatternShape, isValidTempo, isValidTimeSignature, materializeProjectToEngine, MAX_EXTRA_BLOB_BYTES,
+    isValidKey, isValidMidiMapping, isValidPatternKind, isValidPatternShape, isValidTempo, isValidTimeSignature,
+    materializeProjectToEngine, MAX_LANE_NAME_LEN, MAX_TRACKS, PATTERN_KIND_DRUM, PATTERN_KIND_NORMAL, SavedDrumLane, MAX_EXTRA_BLOB_BYTES,
     MAX_LINES, MAX_MIDI_MAPPINGS, MAX_PATTERNS, MAX_STRING_LEN, SavedMidiMapping, savePreset, saveProject, SavedModule, SavedPattern, SavedWire,
     serializePreset, serializeProject;
 import modules.control.metamodule : MetaMacroBinding, MetaModuleAsset;
@@ -465,6 +469,8 @@ private struct PendingModuleRetire {
  */
 class StudioSession {
     enum uint MIN_COUNT_IN_BEATS = 2;
+    enum float DEFAULT_DRUM_VELOCITY = 0.8f;
+    enum string DRUM_KIT_TYPE = "synth.drumsynth";
     enum uint LINES_PER_WHOLE_NOTE = 16;
     enum uint MAX_TAKE_LANE = 255;
 
@@ -1119,6 +1125,10 @@ class StudioSession {
         if (sp is null || !isValidPatternShape(newTracks, newLines)) {
             return false;
         }
+        if (sp.kind == PATTERN_KIND_DRUM) {
+            SavedPattern after = reshapedPattern(*sp, newTracks, newLines);
+            return replacePatternCommand(*sp, after, "Resize Pattern");
+        }
         return history_.pushAndExecute(new ResizePatternCommand(*sp, newTracks, newLines), this);
     }
 
@@ -1270,6 +1280,385 @@ class StudioSession {
             return false;
         }
         return history_.pushAndExecute(new SetTempoCommand(doc_.bpm, doc_.ticksPerLine, newBpm, newTpl), this);
+    }
+
+    /**
+     * Returns a pattern's kind.
+     *
+     * Params:
+     *   patternId = Pattern id.
+     *
+     * Returns:
+     *   PATTERN_KIND_DRUM for a drum pattern; PATTERN_KIND_NORMAL otherwise (also for an unknown id).
+     */
+    ubyte patternKind(uint patternId) const {
+        foreach (ref sp; doc_.patterns) {
+            if (sp.patternId == patternId) {
+                return sp.kind;
+            }
+        }
+        return PATTERN_KIND_NORMAL;
+    }
+
+    /**
+     * Returns the lanes of a drum pattern; lane i is track i.
+     *
+     * Params:
+     *   patternId = Pattern id.
+     *
+     * Returns:
+     *   Lanes (empty for a normal pattern or an unknown id).
+     */
+    const(SavedDrumLane)[] patternLanes(uint patternId) const {
+        foreach (ref sp; doc_.patterns) {
+            if (sp.patternId == patternId) {
+                return sp.lanes;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Reports whether a drum lane can sound: it exists, names a module, and that module is in the project. A lane
+     * whose module was deleted is unassigned until the deletion is undone or the lane is retargeted.
+     *
+     * Params:
+     *   patternId = Drum pattern id.
+     *   lane = Lane (track) index.
+     *
+     * Returns:
+     *   True if assigned.
+     */
+    bool isDrumLaneAssigned(uint patternId, uint lane) const {
+        const(SavedDrumLane)[] lanes = patternLanes(patternId);
+        return lane < lanes.length && lanes[lane].moduleId != 0 && findModuleDocConst(lanes[lane].moduleId) !is null;
+    }
+
+    /**
+     * Undoable creation of a drum pattern with the default kit (T34): one bar long, lanes Kick (36), Snare (38),
+     * Closed Hat (42) and Open Hat (46) on the project's first DrumSynth. When the project has none, a DrumSynth
+     * named "Drums" is added and wired to the Master Output in the same undo step.
+     *
+     * Params:
+     *   name = Pattern name ("Drums NN" when empty).
+     *
+     * Returns:
+     *   New pattern id, or 0 on failure (nothing is changed then).
+     */
+    uint doAddDrumPattern(string name = "") {
+        if (doc_.patterns.length >= MAX_PATTERNS) {
+            return 0;
+        }
+        beginEditGroup("Add Drum Pattern");
+        uint kit = 0;
+        foreach (ref sm; doc_.modules) {
+            if (sm.typeId == DRUM_KIT_TYPE) {
+                kit = sm.id;
+                break;
+            }
+        }
+        bool ok = true;
+        if (kit == 0) {
+            immutable float[2] at = freeModulePosition();
+            kit = doAddModule(DRUM_KIT_TYPE, "Drums", at[0], at[1]);
+            ok = kit != 0 && connectToMaster(kit);
+        }
+        SavedPattern sp;
+        if (ok) {
+            sp.patternId = nextPatternId();
+            sp.tracks = 4;
+            sp.lines = linesPerBar();
+            sp.name = name.length > 0 ? name : format("Drums %02d", sp.patternId);
+            sp.cells = new NoteCell[cast(size_t) sp.tracks * sp.lines];
+            sp.kind = PATTERN_KIND_DRUM;
+            sp.lanes = [SavedDrumLane("Kick", kit, 36), SavedDrumLane("Snare", kit, 38),
+                SavedDrumLane("Closed Hat", kit, 42), SavedDrumLane("Open Hat", kit, 46)];
+            ok = addPatternCommand(sp, "Add Drum Pattern");
+        }
+        if (!ok) {
+            failEditGroup();
+        }
+        return endEditGroup() && ok ? sp.patternId : 0;
+    }
+
+    /**
+     * Undoable: appends a lane (and its track) to a drum pattern.
+     *
+     * Params:
+     *   patternId = Drum pattern id.
+     *   name = Lane name (trimmed; "Lane N" when empty).
+     *   moduleId = Module the lane triggers (0 = unassigned).
+     *   note = MIDI note it plays [0, 127].
+     *
+     * Returns:
+     *   False for a normal pattern, a full pattern (64 tracks), a bad note or an over-long name.
+     */
+    bool doAddDrumLane(uint patternId, string name, uint moduleId, ubyte note) {
+        SavedPattern* sp = findPatternDoc(patternId);
+        if (sp is null || sp.kind != PATTERN_KIND_DRUM || sp.tracks >= MAX_TRACKS || note > 127) {
+            return false;
+        }
+        SavedPattern after = reshapedPattern(*sp, sp.tracks + 1, sp.lines);
+        after.lanes[$ - 1] = SavedDrumLane(laneName(name, after.tracks), moduleId, note);
+        return isValidPatternKind(after) && replacePatternCommand(*sp, after, "Add Drum Lane");
+    }
+
+    /**
+     * Undoable: removes a lane and its track (its hits are deleted). The last lane cannot be removed.
+     *
+     * Params:
+     *   patternId = Drum pattern id.
+     *   lane = Lane index.
+     *
+     * Returns:
+     *   True if removed.
+     */
+    bool doRemoveDrumLane(uint patternId, uint lane) {
+        SavedPattern* sp = findPatternDoc(patternId);
+        if (sp is null || sp.kind != PATTERN_KIND_DRUM || lane >= sp.tracks || sp.tracks <= 1) {
+            return false;
+        }
+        uint[] order;
+        foreach (t; 0 .. sp.tracks) {
+            if (t != lane) {
+                order ~= t;
+            }
+        }
+        SavedPattern after = reorderedPattern(*sp, order);
+        return replacePatternCommand(*sp, after, "Remove Drum Lane");
+    }
+
+    /**
+     * Undoable: moves a lane (with its hits) to another position.
+     *
+     * Params:
+     *   patternId = Drum pattern id.
+     *   from = Current lane index.
+     *   to = New lane index.
+     *
+     * Returns:
+     *   True if moved (moving a lane onto itself succeeds without an undo step).
+     */
+    bool doMoveDrumLane(uint patternId, uint from, uint to) {
+        SavedPattern* sp = findPatternDoc(patternId);
+        if (sp is null || sp.kind != PATTERN_KIND_DRUM || from >= sp.tracks || to >= sp.tracks) {
+            return false;
+        }
+        if (from == to) {
+            return true;
+        }
+        uint[] order;
+        foreach (t; 0 .. sp.tracks) {
+            if (t != from) {
+                order ~= t;
+            }
+        }
+        order = order[0 .. to] ~ from ~ order[to .. $];
+        SavedPattern after = reorderedPattern(*sp, order);
+        return replacePatternCommand(*sp, after, "Move Drum Lane");
+    }
+
+    /**
+     * Undoable: renames a lane.
+     *
+     * Params:
+     *   patternId = Drum pattern id.
+     *   lane = Lane index.
+     *   name = New name (trimmed; an empty name is refused).
+     *
+     * Returns:
+     *   True if the lane has the name now.
+     */
+    bool doRenameDrumLane(uint patternId, uint lane, string name) {
+        SavedPattern* sp = findPatternDoc(patternId);
+        immutable string trimmed = strip(name);
+        if (sp is null || sp.kind != PATTERN_KIND_DRUM || lane >= sp.lanes.length || trimmed.length == 0
+                || trimmed.length > MAX_LANE_NAME_LEN) {
+            return false;
+        }
+        if (sp.lanes[lane].name == trimmed) {
+            return true;
+        }
+        SavedPattern after = cloneSavedPattern(*sp);
+        after.lanes[lane].name = trimmed;
+        return replacePatternCommand(*sp, after, "Rename Drum Lane");
+    }
+
+    /**
+     * Undoable: changes the module and note a lane triggers. Hits on the lane that used the old module and note
+     * follow; cells that differed from the lane are left as they are.
+     *
+     * Params:
+     *   patternId = Drum pattern id.
+     *   lane = Lane index.
+     *   moduleId = New module (0 = unassigned).
+     *   note = New MIDI note [0, 127].
+     *
+     * Returns:
+     *   True if the lane has the target now.
+     */
+    bool doRetargetDrumLane(uint patternId, uint lane, uint moduleId, ubyte note) {
+        SavedPattern* sp = findPatternDoc(patternId);
+        if (sp is null || sp.kind != PATTERN_KIND_DRUM || lane >= sp.lanes.length || note > 127 || moduleId > ushort.max) {
+            return false;
+        }
+        immutable SavedDrumLane old = sp.lanes[lane];
+        if (old.moduleId == moduleId && old.note == note) {
+            return true;
+        }
+        SavedPattern after = cloneSavedPattern(*sp);
+        after.lanes[lane].moduleId = moduleId;
+        after.lanes[lane].note = note;
+        foreach (ln; 0 .. after.lines) {
+            NoteCell* c = &after.cells[cast(size_t) ln * after.tracks + lane];
+            if (c.note == old.note + 1 && c.moduleId == old.moduleId) {
+                c.note = cast(ubyte)(note + 1);
+                c.moduleId = cast(ushort) moduleId;
+            }
+        }
+        return replacePatternCommand(*sp, after, "Change Drum Lane");
+    }
+
+    /**
+     * Undoable: turns a normal pattern into a drum pattern. Every track becomes a lane that uses the module and
+     * pitch of the track's first note and is named after that module; a track without notes becomes an unassigned
+     * lane. Cells are not changed.
+     *
+     * Params:
+     *   patternId = Normal pattern id.
+     *
+     * Returns:
+     *   False for an unknown or already-drum pattern.
+     */
+    bool doConvertToDrumPattern(uint patternId) {
+        SavedPattern* sp = findPatternDoc(patternId);
+        if (sp is null || sp.kind != PATTERN_KIND_NORMAL) {
+            return false;
+        }
+        SavedPattern after = cloneSavedPattern(*sp);
+        after.kind = PATTERN_KIND_DRUM;
+        after.lanes = new SavedDrumLane[after.tracks];
+        foreach (t; 0 .. after.tracks) {
+            after.lanes[t] = SavedDrumLane(laneName(null, t + 1), 0, 60);
+            foreach (ln; 0 .. after.lines) {
+                immutable NoteCell c = after.cells[cast(size_t) ln * after.tracks + t];
+                if (c.note >= 1 && c.note <= 128 && c.moduleId != 0) {
+                    const(SavedModule)* sm = findModuleDocConst(c.moduleId);
+                    after.lanes[t] = SavedDrumLane(sm !is null && sm.name.length > 0 ? sm.name : laneName(null, t + 1),
+                        c.moduleId, cast(ubyte)(c.note - 1));
+                    break;
+                }
+            }
+        }
+        return replacePatternCommand(*sp, after, "Convert to Drum Pattern");
+    }
+
+    /**
+     * Undoable: turns a drum pattern into a normal pattern by dropping its lane table. Cells are not changed.
+     *
+     * Params:
+     *   patternId = Drum pattern id.
+     *
+     * Returns:
+     *   False for an unknown or already-normal pattern.
+     */
+    bool doConvertToNormalPattern(uint patternId) {
+        SavedPattern* sp = findPatternDoc(patternId);
+        if (sp is null || sp.kind != PATTERN_KIND_DRUM) {
+            return false;
+        }
+        SavedPattern after = cloneSavedPattern(*sp);
+        after.kind = PATTERN_KIND_NORMAL;
+        after.lanes = null;
+        return replacePatternCommand(*sp, after, "Convert to Normal Pattern");
+    }
+
+    /**
+     * Reads one pad of a drum pattern.
+     *
+     * Params:
+     *   patternId = Drum pattern id.
+     *   lane = Lane index.
+     *   line = Line (step).
+     *   velocity = Receives the hit's velocity in [0, 1].
+     *   custom = Receives true when the cell's module or pitch differs from its lane.
+     *
+     * Returns:
+     *   True when the cell holds a note.
+     */
+    bool drumHitAt(uint patternId, uint lane, uint line, out float velocity, out bool custom) const {
+        foreach (ref sp; doc_.patterns) {
+            if (sp.patternId != patternId || lane >= sp.tracks || line >= sp.lines) {
+                continue;
+            }
+            immutable size_t idx = cast(size_t) line * sp.tracks + lane;
+            if (idx >= sp.cells.length) {
+                return false;
+            }
+            immutable NoteCell c = sp.cells[idx];
+            if (c.note < 1 || c.note > 128) {
+                return false;
+            }
+            velocity = (c.velocity > 0 ? c.velocity - 1 : 0) / 254.0f;
+            custom = lane >= sp.lanes.length || c.note != sp.lanes[lane].note + 1 || c.moduleId != sp.lanes[lane].moduleId;
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Undoable: sets or clears one pad. A hit is a note cell with the lane's module and pitch and no note-off.
+     * Setting a hit needs a lane with a module; clearing works on any cell holding a note.
+     *
+     * Params:
+     *   patternId = Drum pattern id.
+     *   lane = Lane index.
+     *   line = Line (step).
+     *   on = True to set a hit, false to clear the pad.
+     *   velocity = Hit velocity in (0, 1].
+     *
+     * Returns:
+     *   True if the pad is in the requested state now.
+     */
+    bool doSetDrumHit(uint patternId, uint lane, uint line, bool on, float velocity = DEFAULT_DRUM_VELOCITY) {
+        SavedPattern* sp = findPatternDoc(patternId);
+        if (sp is null || sp.kind != PATTERN_KIND_DRUM || lane >= sp.lanes.length || line >= sp.lines) {
+            return false;
+        }
+        float had;
+        bool custom;
+        immutable bool isOn = drumHitAt(patternId, lane, line, had, custom);
+        if (!on) {
+            return !isOn || doPatchCell(patternId, lane, line, NoteCell.init);
+        }
+        immutable SavedDrumLane l = sp.lanes[lane];
+        if (l.moduleId == 0 || l.moduleId > ushort.max) {
+            return false;
+        }
+        immutable NoteCell cell = NoteCell.makeNote(l.note, velocity, cast(ushort) l.moduleId);
+        if (isOn && !custom && sp.cells[cast(size_t) line * sp.tracks + lane].velocity == cell.velocity) {
+            return true;
+        }
+        return doPatchCell(patternId, lane, line, cell);
+    }
+
+    /**
+     * Undoable: toggles one pad (a set pad is cleared; an empty pad gets a hit at velocity).
+     *
+     * Params:
+     *   patternId = Drum pattern id.
+     *   lane = Lane index.
+     *   line = Line (step).
+     *   velocity = Velocity for a new hit.
+     *
+     * Returns:
+     *   True if the pad changed.
+     */
+    bool doToggleDrumHit(uint patternId, uint lane, uint line, float velocity = DEFAULT_DRUM_VELOCITY) {
+        float had;
+        bool custom;
+        immutable bool isOn = drumHitAt(patternId, lane, line, had, custom);
+        return doSetDrumHit(patternId, lane, line, !isOn, velocity);
     }
 
     /**
@@ -2522,6 +2911,31 @@ class StudioSession {
     }
 
     /**
+     * Undoable replacement of a normal pattern's track count and cells as one CoW snapshot swap and one undo step.
+     * Used by piano roll edits that may add tracks automatically when notes overlap.
+     *
+     * Params:
+     *   patternId = Pattern identifier.
+     *   newTracks = Target track count in [1, MAX_TRACKS].
+     *   cells = Replacement cell array (length must equal newTracks * sp.lines).
+     *   label = Undo label.
+     *
+     * Returns:
+     *   True if applied.
+     */
+    bool doReplacePatternGrid(uint patternId, uint newTracks, const(NoteCell)[] cells, string label = "Edit Notes") {
+        SavedPattern* sp = findPatternDoc(patternId);
+        if (sp is null || sp.kind != PATTERN_KIND_NORMAL || newTracks == 0 || newTracks > MAX_TRACKS
+                || cells.length != cast(size_t) newTracks * sp.lines) {
+            return false;
+        }
+        SavedPattern after = cloneSavedPattern(*sp);
+        after.tracks = newTracks;
+        after.cells = cells.dup;
+        return replacePatternCommand(*sp, after, label);
+    }
+
+    /**
      * Undoable module mute flag.
      *
      * Params:
@@ -3194,6 +3608,111 @@ class StudioSession {
         if (scopeEnabled_) {
             sendCommand(EngineCommand.makeSetScopeTaps(true, scopeTaps_));
         }
+    }
+
+    package bool replacePatternDirect(const ref SavedPattern next) {
+        SavedPattern* sp = findPatternDoc(next.patternId);
+        if (sp is null || !isValidPatternShape(next.tracks, next.lines) || !isValidPatternKind(next)
+                || next.cells.length != cast(size_t) next.tracks * next.lines) {
+            return false;
+        }
+        SavedPattern copy = cloneSavedPattern(next);
+        if (!pushPatternSnapshotDirect(copy, false)) {
+            return false;
+        }
+        *sp = copy;
+        markDirty();
+        return true;
+    }
+
+    private bool replacePatternCommand(const ref SavedPattern before, const ref SavedPattern after, string label) {
+        SavedPattern b = cloneSavedPattern(before);
+        SavedPattern a = cloneSavedPattern(after);
+        b.cells.length = cast(size_t) b.tracks * b.lines;
+        return history_.pushAndExecute(new DelegateCommand(label,
+            () => replacePatternDirect(a), () => replacePatternDirect(b)), this);
+    }
+
+    private static string laneName(string name, uint number) {
+        immutable string trimmed = strip(name);
+        return trimmed.length > 0 && trimmed.length <= MAX_LANE_NAME_LEN ? trimmed : format("Lane %d", number);
+    }
+
+    private static SavedPattern reshapedPattern(const ref SavedPattern sp, uint newTracks, uint newLines) {
+        SavedPattern next = cloneSavedPattern(sp);
+        next.tracks = newTracks;
+        next.lines = newLines;
+        next.cells = new NoteCell[cast(size_t) newTracks * newLines];
+        immutable uint copyTr = sp.tracks < newTracks ? sp.tracks : newTracks;
+        immutable uint copyLn = sp.lines < newLines ? sp.lines : newLines;
+        foreach (ln; 0 .. copyLn) {
+            foreach (tr; 0 .. copyTr) {
+                immutable size_t src = cast(size_t) ln * sp.tracks + tr;
+                if (src < sp.cells.length) {
+                    next.cells[cast(size_t) ln * newTracks + tr] = sp.cells[src];
+                }
+            }
+        }
+        if (sp.kind == PATTERN_KIND_DRUM) {
+            next.lanes.length = newTracks;
+            foreach (t; sp.lanes.length .. newTracks) {
+                next.lanes[t] = SavedDrumLane(laneName(null, cast(uint) t + 1), 0, 60);
+            }
+        }
+        return next;
+    }
+
+    private static SavedPattern reorderedPattern(const ref SavedPattern sp, const(uint)[] order) {
+        SavedPattern next = cloneSavedPattern(sp);
+        next.tracks = cast(uint) order.length;
+        next.cells = new NoteCell[order.length * sp.lines];
+        next.lanes = new SavedDrumLane[order.length];
+        foreach (dst, src; order) {
+            next.lanes[dst] = src < sp.lanes.length ? sp.lanes[src] : SavedDrumLane(laneName(null, cast(uint) dst + 1), 0, 60);
+            foreach (ln; 0 .. sp.lines) {
+                immutable size_t from = cast(size_t) ln * sp.tracks + src;
+                if (from < sp.cells.length) {
+                    next.cells[cast(size_t) ln * order.length + dst] = sp.cells[from];
+                }
+            }
+        }
+        return next;
+    }
+
+    private float[2] freeModulePosition() const {
+        float maxX = 0.0f;
+        foreach (ref sm; doc_.modules) {
+            maxX = sm.posX > maxX ? sm.posX : maxX;
+        }
+        return [maxX + 180.0f, 60.0f];
+    }
+
+    private bool connectToMaster(uint modId) {
+        const(SavedModule)* sm = findModuleDocConst(modId);
+        const(ModuleDescriptor)* d = sm is null ? null : ModuleRegistry.findByTypeId(sm.typeId);
+        if (d is null) {
+            return false;
+        }
+        uint masterId = 0;
+        foreach (ref m; doc_.modules) {
+            if (m.typeId == "core.output") {
+                masterId = m.id;
+                break;
+            }
+        }
+        if (masterId == 0) {
+            return true;
+        }
+        foreach (i, ref port; d.ports) {
+            if (port.dir == PortDirection.output && isAudioPort(port.kind)) {
+                return doConnectWire(modId, cast(ushort) i, masterId, 0, 1.0f);
+            }
+        }
+        return false;
+    }
+
+    private void failEditGroup() {
+        history_.pushAndExecute(new DelegateCommand("Failed step", () => false, () => true), this);
     }
 
     private bool addPatternCommand(SavedPattern sp, string label) {

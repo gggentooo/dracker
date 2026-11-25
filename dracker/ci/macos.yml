@@ -41,7 +41,7 @@ jobs:
           head -n 60 /tmp/dub-describe.json
           grep -q '"rootConfiguration": "boost"' /tmp/dub-describe.json
 
-      - name: Run headless tests (unit, rt_malloc_trap, golden WAV, fuzz smoke)
+      - name: Run headless tests (unit, bundled presets, rt_malloc_trap, golden WAV, fuzz smoke)
         run: dub test --compiler=ldc2 --config=headless
 
       - name: Verify headless release build
@@ -53,6 +53,10 @@ jobs:
           clang -x objective-c -fobjc-arc -mmacosx-version-min=12.0 -fsyntax-only -Wall -Wextra source/platform/macos/objc_blocks_shim.m
           plutil -lint packaging/macos/Info.plist packaging/macos/entitlements.plist
           bash -n packaging/macos/bundle_macos.sh
+          while IFS='|' read -r preset_name preset_group; do
+            [[ -z "${preset_name}" ]] && continue
+            [[ -s "resources/presets/${preset_group}/${preset_name}.msym" ]]
+          done < <(sed -nE 's/^[[:space:]]*FactoryPreset\("([^"]+)",[[:space:]]*"([^"]+)".*/\1|\2/p' source/app/factory_presets.d)
 
       - name: Verify full app configuration compilation (when Metal toolchain available)
         run: |

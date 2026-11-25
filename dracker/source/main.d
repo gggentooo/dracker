@@ -20,6 +20,8 @@
  *   - --studio-selftest -> app.studio_selftest.runStudioSelfTest() (macOS)
  *   - --sound-check=<file.wav> -> runSoundCheck(): offline render of app.skeleton_gen.instrumentPreviewProject()
  *     (default bass and piano of the skeleton project generator, for the owner's listening check)
+ *   - --sound-check-presets=<dir> -> runSoundCheckPresets(): one WAV per bundled preset (app.factory_presets)
+ *   - --write-factory-presets=<dir> -> runWriteFactoryPresets(): the bundled presets as .msym files
  *   - StudioGUI builds: no arguments / --gui / <file.msv> -> app.studio_app.runStudioApp(), --gallery ->
  *     app.gui_shell.runStudioGui(), --gui-selftest -> runGuiSelfTest()
  *   - struct CliDemoPolySynth (live @nogc ModuleAdapter polyphonic synth)
@@ -35,6 +37,8 @@ import core.stdc.stdlib : calloc, free;
 import core.sys.posix.signal : SIGINT, SIGTERM, signal;
 import core.sys.posix.time : nanosleep, timespec;
 import std.conv : to;
+
+import io.project_format : LoadedProject;
 import std.math : fabs, isFinite, pow;
 import std.stdio : stderr, stdout, writefln, writeln;
 import std.string : startsWith;
@@ -855,6 +859,8 @@ private void printUsage() {
     writeln("  dracker --cli-demo [--duration=<sec>] [--sample-rate=<hz>] [--buffer-frames=<n>] [--auto-chord] [--duplex]");
     writeln("  dracker --studio-selftest [--quick]   live session audio/MIDI backend verification (plays audio)");
     writeln("  dracker --sound-check=<file.wav>      render the skeleton generator's default bass and piano to a WAV");
+    writeln("  dracker --sound-check-presets=<dir>   render one WAV per bundled preset for listening");
+    writeln("  dracker --write-factory-presets=<dir> write the bundled presets as .msym files (resources/presets)");
 }
 
 /**
@@ -869,49 +875,165 @@ private void printUsage() {
  *   0 on success, 1 on failure (reason on stderr).
  */
 private int runSoundCheck(string path) {
-    import app.session : StudioSession;
     import app.skeleton_gen : instrumentPreviewProject, PREVIEW_BARS;
+
+    LoadedProject proj = instrumentPreviewProject();
+    immutable double seconds = PREVIEW_BARS * 4 * 60.0 / proj.bpm + 2.0;
+    float peak = 0.0f;
+    string err;
+    if (!renderProjectToWav(proj, seconds, path, peak, err)) {
+        stderr.writeln(err);
+        return 1;
+    }
+    writefln("Wrote %s (%.1f s, peak %.2f): bars 1-4 bass, 5-8 piano, 9-12 both; I-vi-ii-V7 in C major at %.0f BPM",
+        path, seconds, peak, proj.bpm);
+    return 0;
+}
+
+/**
+ * Renders a project from line 0 offline at 44.1 kHz and writes a stereo WAV. Needs no audio device.
+ *
+ * Params:
+ *   proj = Project to play.
+ *   seconds = Length to render.
+ *   path = Destination .wav path.
+ *   peak = Receives the highest absolute sample.
+ *   err = Receives the reason on failure.
+ *
+ * Returns:
+ *   True on success.
+ */
+private bool renderProjectToWav(const ref LoadedProject proj, double seconds, string path, out float peak,
+        out string err) {
+    import app.session : StudioSession;
     import foundation.memory : OwnedBuffer;
     import io.audio_io : writeWavFile;
-    import io.project_format : LoadedProject;
 
     enum uint rate = 44_100;
     StudioSession s = new StudioSession();
     if (!s.initialize(cast(float) rate)) {
-        stderr.writeln("Session initialization failed");
-        return 1;
+        err = "Session initialization failed";
+        return false;
     }
     scope (exit) s.shutdown();
-    LoadedProject proj = instrumentPreviewProject();
-    string err;
     if (!s.openProjectFromMemory(proj, err)) {
-        stderr.writeln("Could not build the preview project: ", err);
-        return 1;
+        err = "Could not build the preview project: " ~ err;
+        return false;
     }
     s.engine().reset();
     s.engine().setTempo(proj.bpm, proj.ticksPerLine);
     s.engine().seekLine(0);
     s.engine().setPlaying(true);
-    immutable double seconds = PREVIEW_BARS * 4 * 60.0 / proj.bpm + 2.0;
     immutable size_t frames = (cast(size_t)(seconds * rate) / 64 + 1) * 64;
     OwnedBuffer!float l;
     OwnedBuffer!float r;
     if (!s.engine().renderOfflineToBuffer(frames, 64, l, r)) {
-        stderr.writeln("Offline render failed");
-        return 1;
+        err = "Offline render failed";
+        return false;
     }
-    float peak = 0.0f;
+    peak = 0.0f;
     foreach (i; 0 .. l.length) {
         peak = fabs(l[i]) > peak ? fabs(l[i]) : peak;
         peak = fabs(r[i]) > peak ? fabs(r[i]) : peak;
     }
     const(float)[][2] channels = [l[], r[]];
     if (!writeWavFile(path, channels[], rate, err)) {
-        stderr.writeln("Could not write ", path, ": ", err);
+        err = "Could not write " ~ path ~ ": " ~ err;
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Writes every bundled preset as a .msym file below dir (<dir>/<Group>/<Name>.msym). Run with resources/presets
+ * after changing app.factory_presets, and commit the result.
+ *
+ * Params:
+ *   dir = Target folder.
+ *
+ * Returns:
+ *   0 on success, 1 on failure (reason on stderr).
+ */
+private int runWriteFactoryPresets(string dir) {
+    import app.factory_presets : writeFactoryPresets;
+
+    string[] written;
+    string err;
+    if (!writeFactoryPresets(dir, written, err)) {
+        stderr.writeln(err);
         return 1;
     }
-    writefln("Wrote %s (%.1f s, peak %.2f): bars 1-4 bass, 5-8 piano, 9-12 both; I-vi-ii-V7 in C major at %.0f BPM",
-        path, seconds, peak, proj.bpm);
+    foreach (w; written) {
+        writeln(w);
+    }
+    writefln("Wrote %d bundled presets to %s", written.length, dir);
+    return 0;
+}
+
+/**
+ * Renders WAV previews for bundled presets into dir ("<Group> - <Name>.wav" for instruments, and separate
+ * "(dry)" and "(wet)" WAV files for effects) for the owner's listening check. Each render has a 3 s tail.
+ *
+ * Params:
+ *   dir = Target folder (created when missing).
+ *
+ * Returns:
+ *   0 on success, 1 on failure (reason on stderr).
+ */
+private int runSoundCheckPresets(string dir) {
+    import std.file : mkdirRecurse;
+    import std.path : buildPath;
+
+    import app.factory_presets : FACTORY_PRESETS, FACTORY_PREVIEW_BPM, factoryPreviewBars, factoryPreviewProject,
+        isInstrument;
+
+    try {
+        mkdirRecurse(dir);
+    } catch (Exception ex) {
+        stderr.writeln("Could not create ", dir, ": ", ex.msg);
+        return 1;
+    }
+    size_t files = 0;
+    foreach (ref p; FACTORY_PRESETS) {
+        immutable double seconds = factoryPreviewBars(p) * 4 * 60.0 / FACTORY_PREVIEW_BPM + 3.0;
+        if (isInstrument(p)) {
+            LoadedProject proj;
+            string err;
+            if (!factoryPreviewProject(p, proj, err, true)) {
+                stderr.writeln(err);
+                return 1;
+            }
+            immutable string name = p.group ~ " - " ~ p.name ~ ".wav";
+            immutable string path = buildPath(dir, name);
+            float peak = 0.0f;
+            if (!renderProjectToWav(proj, seconds, path, peak, err)) {
+                stderr.writeln(err);
+                return 1;
+            }
+            writefln("%-40s %5.1f s  peak %.2f", name, seconds, peak);
+            files++;
+        } else {
+            foreach (wet; [false, true]) {
+                LoadedProject proj;
+                string err;
+                if (!factoryPreviewProject(p, proj, err, wet)) {
+                    stderr.writeln(err);
+                    return 1;
+                }
+                immutable string suffix = wet ? " (wet).wav" : " (dry).wav";
+                immutable string name = p.group ~ " - " ~ p.name ~ suffix;
+                immutable string path = buildPath(dir, name);
+                float peak = 0.0f;
+                if (!renderProjectToWav(proj, seconds, path, peak, err)) {
+                    stderr.writeln(err);
+                    return 1;
+                }
+                writefln("%-40s %5.1f s  peak %.2f", name, seconds, peak);
+                files++;
+            }
+        }
+    }
+    writefln("Wrote %d files to %s", files, dir);
     return 0;
 }
 
@@ -932,6 +1054,12 @@ int main(string[] args) {
         }
         if (arg.startsWith("--sound-check=")) {
             return runSoundCheck(arg["--sound-check=".length .. $]);
+        }
+        if (arg.startsWith("--sound-check-presets=")) {
+            return runSoundCheckPresets(arg["--sound-check-presets=".length .. $]);
+        }
+        if (arg.startsWith("--write-factory-presets=")) {
+            return runWriteFactoryPresets(arg["--write-factory-presets=".length .. $]);
         }
         version (StudioGUI) {
             if (arg == "--gui-selftest") {

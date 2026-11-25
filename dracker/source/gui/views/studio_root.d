@@ -207,7 +207,7 @@ final class StudioRoot : Widget {
     private bool createSkeletonProject(SkeletonPanel p, const ref SkeletonSpec spec) {
         LoadedProject proj;
         string err;
-        if (!generateSkeleton(spec, proj, err)) {
+        if (!generateSkeleton(spec, proj, err, ctx.library)) {
             p.setCreateError(err);
             return false;
         }

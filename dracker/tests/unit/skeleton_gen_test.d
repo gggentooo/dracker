@@ -131,6 +131,9 @@ version (unittest) {
         assert(piano.paramValues[paramIndex(fm, "Algorithm")] == 2.0f);
         assert(piano.paramValues[paramIndex(fm, "Op5 Ratio")] == 14.0f);
         assert(piano.paramValues[paramIndex(fm, "Op4 Level")] == 0.0f);
+        assert(piano.paramValues[paramIndex(fm, "Decay")] == 2500.0f);
+        assert(piano.paramValues[paramIndex(fm, "Sustain")] == 0.0f);
+        assert(piano.paramValues[paramIndex(fm, "Release")] == 200.0f);
         assertInRange(piano);
 
         SavedModule plain;
@@ -453,5 +456,90 @@ version (unittest) {
         immutable float neither = renderWith(true, true);
         assert(bassOnly > 0.01f && pianoOnly > 0.01f && both > 0.01f && both < 1.0f);
         assert(neither < 1e-4f);
+    }
+
+    unittest {
+        import std.file : exists, mkdirRecurse, rmdirRecurse, tempDir;
+        import std.path : buildPath;
+        import std.process : thisProcessID;
+        import std.conv : to;
+
+        import app.instrument_library : InstrumentLibrary, PresetOrigin;
+        import io.project_format : savePreset;
+
+        immutable string userDir = buildPath(tempDir(), "dracker_t52_skel_" ~ to!string(thisProcessID()));
+        mkdirRecurse(buildPath(userDir, "Bass"));
+        mkdirRecurse(buildPath(userDir, "Effects"));
+        scope (exit) if (exists(userDir)) rmdirRecurse(userDir);
+
+        string err;
+        LoadedPreset userSynth;
+        userSynth.presetName = "User Synth";
+        assert(moduleWithDefaults("synth.fm_synth", 1, "User Synth", userSynth.mod));
+        userSynth.mod.paramValues[0] = 3.0f;
+        assert(savePreset(userSynth, buildPath(userDir, "Bass", "User Synth.msym"), err), err);
+
+        LoadedPreset userFx;
+        userFx.presetName = "User FX";
+        assert(moduleWithDefaults("fx.reverb", 1, "User FX", userFx.mod));
+        assert(savePreset(userFx, buildPath(userDir, "Effects", "User FX.msym"), err), err);
+
+        auto lib = new InstrumentLibrary(["resources/presets"], userDir);
+        InstrumentChoice[] choices = instrumentChoices(lib);
+        assert(choices.length == 1 + 12 + 1);
+        assert(choices[0].source == InstrumentSource.defaultSound && choices[0].label() == "Default");
+        foreach (i; 1 .. 13) {
+            assert(choices[i].source == InstrumentSource.libraryPreset);
+            assert(choices[i].origin == PresetOrigin.bundled);
+            assert(choices[i].label() != "User FX");
+        }
+        assert(choices[$ - 1].source == InstrumentSource.libraryPreset);
+        assert(choices[$ - 1].origin == PresetOrigin.user);
+        assert(choices[$ - 1].label() == "User Synth (user)");
+
+        SkeletonSpec sp = specOf("I vi ii V7");
+        LoadedProject withLib;
+        LoadedProject fallbackProj;
+        assert(generateSkeleton(sp, withLib, err, lib), err);
+        auto emptyLib = new InstrumentLibrary(null, "");
+        assert(generateSkeleton(sp, fallbackProj, err, emptyLib), err);
+
+        assert(withLib.modules.length == fallbackProj.modules.length);
+        foreach (i; 0 .. withLib.modules.length) {
+            assert(withLib.modules[i].id == fallbackProj.modules[i].id);
+            assert(withLib.modules[i].typeId == fallbackProj.modules[i].typeId);
+            assert(withLib.modules[i].name == fallbackProj.modules[i].name);
+            assert(withLib.modules[i].paramValues == fallbackProj.modules[i].paramValues);
+        }
+        assert(withLib.wires == fallbackProj.wires && withLib.clips == fallbackProj.clips);
+        assert(withLib.loopStartLine == fallbackProj.loopStartLine && withLib.loopEndLine == fallbackProj.loopEndLine);
+        assert(withLib.patterns.length == fallbackProj.patterns.length);
+        foreach (i; 0 .. withLib.patterns.length) {
+            assert(withLib.patterns[i].cells == fallbackProj.patterns[i].cells);
+        }
+
+        void renderProj(const ref LoadedProject lp, out OwnedBuffer!float l, out OwnedBuffer!float r) {
+            StudioSession s = new StudioSession();
+            assert(s.initialize(44_100.0f));
+            scope (exit) s.shutdown();
+            string rErr;
+            assert(s.openProjectFromMemory(lp, rErr), rErr);
+            s.engine().reset();
+            s.engine().setTempo(lp.bpm, lp.ticksPerLine);
+            s.engine().seekLine(0);
+            s.engine().setPlaying(true);
+            assert(s.engine().renderOfflineToBuffer(44_100, 64, l, r));
+        }
+
+        OwnedBuffer!float l1, r1, l2, r2;
+        renderProj(withLib, l1, r1);
+        renderProj(fallbackProj, l2, r2);
+        assert(l1[] == l2[] && r1[] == r2[]);
+
+        SkeletonSpec customSp = specOf("I V");
+        customSp.bass = choices[$ - 1];
+        LoadedProject customProj;
+        assert(generateSkeleton(customSp, customProj, err, lib), err);
+        assert(customProj.modules[1].typeId == "synth.fm_synth" && customProj.modules[1].paramValues[0] == 3.0f);
     }
 }

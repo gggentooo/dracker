@@ -821,10 +821,9 @@ version (unittest) {
         assert(labels.canFind("Add Synth ▸"), "menu should contain 'Add Synth ▸'");
         assert(labels.canFind("Add Effect ▸"), "menu should contain 'Add Effect ▸'");
         assert(labels.canFind("Add Control ▸"), "menu should contain 'Add Control ▸'");
-        assert(labels.canFind("Add Core ▸"), "menu should contain 'Add Core ▸'");
+        assert(!labels.canFind("Add Core ▸"), "empty Core category should be omitted");
         assert(labels.canFind("Fit All"), "menu should contain 'Fit All'");
         assert(labels.canFind("Reset Zoom"), "menu should contain 'Reset Zoom'");
-        // Verify Fit All still works via the menu
         f.clickMenu("Fit All");
         f.frame();
         foreach (idv; [f.gen, f.amp, f.amp2, 1u]) {
@@ -924,7 +923,7 @@ version (unittest) {
         scope (exit) f.dispose();
         f.frame();
         StudioCommandSink sink = f.view;
-        immutable Point2F c = f.view.bounds.center();
+        immutable Point2F c = f.view.canvasRect().center();
         immutable Point2F wc = f.view.viewToWorld(c);
         assert(sink.handleStudioAction(StudioAction.zoomIn));
         assert(near(f.view.zoom(), 1.25f));
@@ -962,9 +961,16 @@ version (unittest) {
             f.view.setView(zs[i], Point2F(-120.0f, -60.0f));
             const dl = f.frame();
             assert(dl.instances.length > 20);
+            immutable RectF crPx = RectF(f.view.canvasRect().x * 2.0f, f.view.canvasRect().y * 2.0f,
+                f.view.canvasRect().w * 2.0f, f.view.canvasRect().h * 2.0f);
             bool glyphs = false;
             foreach (ref inst; dl.instances) {
-                glyphs = glyphs || inst.kind == InstanceKind.glyph;
+                if (inst.kind == InstanceKind.glyph) {
+                    immutable RectF ir = RectF(inst.rect[0], inst.rect[1], inst.rect[2], inst.rect[3]);
+                    if (!ir.intersect(crPx).isEmpty()) {
+                        glyphs = true;
+                    }
+                }
             }
             assert(glyphs == (zs[i] * 13.0f >= 5.0f));
             immutable RectF vb = f.view.bounds;
