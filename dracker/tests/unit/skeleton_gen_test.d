@@ -7,7 +7,9 @@
  *   Verifies app.skeleton_gen instrument handling: the dropdown choice list and labels, that every choice
  *   resolves for both roles to a valid module of a registered type, the default bass and piano parameter sets
  *   (inside each parameter's range), refusal of unlisted types, non-playable presets, mismatched presets and id 0,
- *   port lookup helpers, and that every choice renders a non-silent note through a real StudioSession.
+ *   port lookup helpers, that every choice renders a non-silent note through a real StudioSession, and (T19)
+ *   SkeletonSpec validation and generateSkeleton() cell by cell in major and minor keys, 4/4, 3/4 and 3/8, mixed
+ *   block lengths and slash basses, plus an offline render with each part muted in turn.
  *
  * Real-Time & Safety Contract:
  *   Off-RT; renders offline through StudioSession.engine().renderOfflineToBuffer().
@@ -28,6 +30,8 @@ module tests.unit.skeleton_gen_test;
 version (unittest) {
     import std.math : fabs;
 
+    import app.chord_progression : ChordBlock, parseProgression, ProgressionError;
+    import app.music_theory : KeyMode, MusicalKey;
     import app.session : StudioSession;
     import app.skeleton_gen;
     import foundation.memory : OwnedBuffer;
@@ -235,5 +239,219 @@ version (unittest) {
             immutable float peak = peakOf(l[], r[]);
             assert(peak > 0.01f && peak < 1.0f, "segment at line " ~ (startLine == 0 ? "0" : startLine == 64 ? "64" : "128"));
         }
+    }
+
+    private SkeletonSpec specOf(string chords, MusicalKey key = MusicalKey.init, uint num = 4, uint den = 4) {
+        SkeletonSpec sp;
+        sp.key = key;
+        sp.timeSigNumerator = num;
+        sp.timeSigDenominator = den;
+        ProgressionError e;
+        assert(parseProgression(chords, sp.blocks, e), e.message);
+        return sp;
+    }
+
+    private LoadedProject generate(const ref SkeletonSpec sp) {
+        LoadedProject p;
+        string err;
+        assert(generateSkeleton(sp, p, err), err);
+        return p;
+    }
+
+    private int noteAt(const ref SavedPattern pat, uint line, uint track) {
+        immutable NoteCell c = pat.cells[line * pat.tracks + track];
+        return c.note;
+    }
+
+    private int midi(int m) {
+        return NoteCell.makeNote(m, 1.0f, 0).note;
+    }
+
+    private immutable int OFF = NoteCell.makeNoteOff().note;
+
+    unittest {
+        SkeletonSpec empty;
+        LoadedProject p = generate(empty);
+        assert(p.title == "Untitled" && p.bpm == 125.0 && p.ticksPerLine == 6);
+        assert(p.timeSigNumerator == 4 && p.timeSigDenominator == 4 && p.keyTonic == 0 && p.keyMode == 0);
+        assert(p.modules.length == 1 && p.modules[0].typeId == "core.output" && p.wires.length == 0);
+        assert(p.patterns.length == 1 && p.patterns[0].tracks == 4 && p.patterns[0].lines == 64);
+        assert(p.clips.length == 1 && p.clips[0].lengthLines == 64 && p.loopEndLine == 0);
+        foreach (ref c; p.patterns[0].cells) {
+            assert(c.note == 0);
+        }
+        SkeletonSpec waltz;
+        waltz.title = "Waltz";
+        waltz.timeSigNumerator = 3;
+        waltz.key = MusicalKey(9, KeyMode.minor);
+        p = generate(waltz);
+        assert(p.title == "Waltz" && p.patterns[0].lines == 48 && p.timeSigNumerator == 3);
+        assert(p.keyTonic == 9 && p.keyMode == 1);
+        waltz.title = "";
+        assert(generate(waltz).title == "Untitled");
+    }
+
+    unittest {
+        SkeletonSpec sp = specOf("ii V7 I");
+        sp.title = "Cadence";
+        sp.bpm = 96.0;
+        LoadedProject p = generate(sp);
+        assert(p.title == "Cadence" && p.bpm == 96.0);
+        assert(p.modules.length == 3 && p.modules[1].id == 2 && p.modules[1].name == "Bass" && p.modules[2].name == "Piano");
+        assert(p.modules[1].typeId == "synth.analog_gen" && p.modules[2].typeId == "synth.fm_synth");
+        assert(p.wires.length == 2 && p.wires[0].srcMod == 2 && p.wires[0].dstMod == 1 && p.wires[0].srcPort == 2);
+        assert(p.wires[1].srcMod == 3 && p.wires[1].srcPort == 1 && p.wires[0].gain == SKELETON_BASS_GAIN);
+        assert(p.wires[1].gain == SKELETON_PIANO_GAIN);
+        assert(p.patterns.length == 2);
+        const SavedPattern bass = p.patterns[0];
+        const SavedPattern piano = p.patterns[1];
+        assert(bass.name == "Bass" && bass.tracks == 1 && bass.lines == 48);
+        assert(piano.name == "Piano" && piano.tracks == 4 && piano.lines == 48);
+        assert(noteAt(bass, 0, 0) == midi(38) && noteAt(bass, 16, 0) == midi(43) && noteAt(bass, 32, 0) == midi(36));
+        assert(noteAt(bass, 47, 0) == OFF && noteAt(bass, 1, 0) == 0 && noteAt(bass, 15, 0) == 0);
+        assert(noteAt(piano, 0, 0) == midi(62) && noteAt(piano, 0, 1) == midi(65) && noteAt(piano, 0, 2) == midi(69));
+        assert(noteAt(piano, 0, 3) == 0);
+        assert(noteAt(piano, 16, 0) == midi(67) && noteAt(piano, 16, 1) == midi(71) && noteAt(piano, 16, 2) == midi(74)
+            && noteAt(piano, 16, 3) == midi(77));
+        assert(noteAt(piano, 32, 0) == midi(60) && noteAt(piano, 32, 1) == midi(64) && noteAt(piano, 32, 2) == midi(67)
+            && noteAt(piano, 32, 3) == OFF);
+        foreach (t; 0 .. 4) {
+            assert(noteAt(piano, 47, t) == OFF);
+        }
+        foreach (ref c; bass.cells) {
+            assert(c.note == 0 || c.moduleId == 2);
+        }
+        foreach (ref c; piano.cells) {
+            assert(c.note == 0 || c.moduleId == 3);
+        }
+        assert(p.clips.length == 2 && p.clips[0].patternId == 1 && p.clips[0].laneY == 0 && p.clips[1].patternId == 2);
+        assert(p.clips[1].laneY == 1 && p.clips[0].startLine == 0 && p.clips[1].lengthLines == 48);
+        assert(p.loopStartLine == 0 && p.loopEndLine == 48);
+    }
+
+    unittest {
+        SkeletonSpec sp = specOf("i iv V", MusicalKey(9, KeyMode.minor), 3, 4);
+        LoadedProject p = generate(sp);
+        const SavedPattern bass = p.patterns[0];
+        const SavedPattern piano = p.patterns[1];
+        assert(bass.lines == 36 && piano.lines == 36 && p.timeSigNumerator == 3);
+        assert(noteAt(bass, 0, 0) == midi(45) && noteAt(bass, 12, 0) == midi(38) && noteAt(bass, 24, 0) == midi(40));
+        assert(noteAt(piano, 0, 0) == midi(69) && noteAt(piano, 0, 1) == midi(72) && noteAt(piano, 0, 2) == midi(76));
+        assert(noteAt(piano, 12, 0) == midi(62) && noteAt(piano, 12, 1) == midi(65) && noteAt(piano, 12, 2) == midi(69));
+        assert(noteAt(piano, 24, 0) == midi(64) && noteAt(piano, 24, 1) == midi(68) && noteAt(piano, 24, 2) == midi(71));
+        assert(noteAt(piano, 12, 3) == 0 && noteAt(piano, 35, 3) == OFF);
+
+        SkeletonSpec mixed = specOf("C Am F G");
+        mixed.blocks[0].halfBars = 1;
+        mixed.blocks[2].halfBars = 4;
+        mixed.blocks[3].halfBars = 8;
+        p = generate(mixed);
+        assert(p.patterns[0].lines == 8 + 16 + 32 + 64 && totalLines(mixed) == 120);
+        assert(noteAt(p.patterns[0], 0, 0) == midi(36) && noteAt(p.patterns[0], 8, 0) == midi(45));
+        assert(noteAt(p.patterns[0], 24, 0) == midi(41) && noteAt(p.patterns[0], 56, 0) == midi(43));
+
+        SkeletonSpec slash = specOf("C/E G/B");
+        p = generate(slash);
+        assert(noteAt(p.patterns[0], 0, 0) == midi(40) && noteAt(p.patterns[0], 16, 0) == midi(47));
+        assert(noteAt(p.patterns[1], 0, 0) == midi(60) && noteAt(p.patterns[1], 16, 0) == midi(67));
+
+        SkeletonSpec eighths = specOf("I V", MusicalKey.init, 3, 8);
+        eighths.blocks[0].halfBars = 1;
+        p = generate(eighths);
+        assert(specLinesPerBar(eighths) == 6 && p.patterns[0].lines == 3 + 6);
+        assert(noteAt(p.patterns[0], 3, 0) == midi(43));
+
+        SkeletonSpec tiny = specOf("I V", MusicalKey.init, 1, 8);
+        tiny.blocks[1].halfBars = 1;
+        p = generate(tiny);
+        assert(p.patterns[0].lines == 3 && noteAt(p.patterns[0], 2, 0) == midi(43));
+    }
+
+    unittest {
+        string err;
+        LoadedProject p;
+        SkeletonSpec sp = specOf("I IV V");
+        assert(validateSpec(sp, err));
+        sp.bpm = 5.0;
+        assert(!validateSpec(sp, err) && err == "Tempo must be 20–999 BPM with 1–255 ticks per line");
+        assert(!generateSkeleton(sp, p, err));
+        sp.bpm = 120.0;
+        sp.ticksPerLine = 0;
+        assert(!validateSpec(sp, err));
+        sp.ticksPerLine = 6;
+        sp.timeSigDenominator = 3;
+        assert(!validateSpec(sp, err) && err == "The time signature must be 1–16 beats over 2, 4, 8 or 16");
+        sp.timeSigDenominator = 4;
+        sp.key = MusicalKey(12, KeyMode.major);
+        assert(!validateSpec(sp, err) && err == "Unknown key");
+        sp.key = MusicalKey.init;
+        sp.blocks[0].halfBars = 3;
+        assert(!validateSpec(sp, err) && err == "A block must last ½, 1, 2 or 4 bars");
+        sp.blocks[0].halfBars = 2;
+
+        SkeletonSpec odd = specOf("I V", MusicalKey.init, 5, 16);
+        assert(validateSpec(odd, err));
+        odd.blocks[0].halfBars = 1;
+        assert(!validateSpec(odd, err));
+        assert(err == "Half-bar blocks need a bar with an even number of lines; this time signature has 5 lines per bar");
+
+        SkeletonSpec longOne = specOf("I");
+        foreach (_; 0 .. 64) {
+            longOne.blocks ~= ChordBlock(longOne.blocks[0].chord, 8);
+        }
+        longOne.blocks[0].halfBars = 8;
+        assert(totalLines(longOne) == 65 * 64);
+        assert(!validateSpec(longOne, err) && err == "The progression is 4160 lines long; the limit is 4096 lines");
+        longOne.blocks = longOne.blocks[0 .. 64];
+        assert(validateSpec(longOne, err) && generate(longOne).patterns[1].lines == 4096);
+
+        sp.bass = InstrumentChoice.ofType("synth.sampler");
+        assert(!validateSpec(sp, err) && err[0 .. 6] == "Bass: ");
+        sp.bass = InstrumentChoice.ofType("synth.spectravoice");
+        sp.piano = InstrumentChoice.ofType("fx.waveshaper");
+        assert(!validateSpec(sp, err) && err[0 .. 7] == "Piano: ");
+        sp.piano = InstrumentChoice.ofType("synth.analog_gen");
+        p = generate(sp);
+        assert(p.modules[1].typeId == "synth.spectravoice" && p.modules[2].typeId == "synth.analog_gen");
+        assert(p.wires[0].srcPort == audioOutputPort(ModuleRegistry.findByTypeId("synth.spectravoice")));
+
+        SkeletonSpec none;
+        none.bass = InstrumentChoice.ofType("synth.sampler");
+        assert(validateSpec(none, err));
+        string longTitle;
+        longTitle.length = 70_000;
+        none.title = longTitle;
+        assert(!validateSpec(none, err) && err == "The title is too long");
+    }
+
+    unittest {
+        SkeletonSpec sp = specOf("I vi ii V7");
+        LoadedProject p = generate(sp);
+        float renderWith(bool muteBass, bool mutePiano) {
+            LoadedProject q = p;
+            q.clips = p.clips.dup;
+            q.clips[0].mute = muteBass;
+            q.clips[1].mute = mutePiano;
+            StudioSession s = new StudioSession();
+            assert(s.initialize(44_100.0f));
+            scope (exit) s.shutdown();
+            string err;
+            assert(s.openProjectFromMemory(q, err), err);
+            assert(s.document().loopEndLine == 64 && s.timeSignatureNumerator() == 4);
+            s.engine().reset();
+            s.engine().setTempo(q.bpm, q.ticksPerLine);
+            s.engine().seekLine(0);
+            s.engine().setPlaying(true);
+            OwnedBuffer!float l;
+            OwnedBuffer!float r;
+            assert(s.engine().renderOfflineToBuffer(22_050, 64, l, r));
+            return peakOf(l[], r[]);
+        }
+        immutable float both = renderWith(false, false);
+        immutable float bassOnly = renderWith(false, true);
+        immutable float pianoOnly = renderWith(true, false);
+        immutable float neither = renderWith(true, true);
+        assert(bassOnly > 0.01f && pianoOnly > 0.01f && both > 0.01f && both < 1.0f);
+        assert(neither < 1e-4f);
     }
 }

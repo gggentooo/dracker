@@ -1027,6 +1027,17 @@ int runStudioGuiSelfTest(string[] args) {
         check("appearance panel (menu)", p !is null && lowOk && darkOk && fontOk && layoutOk && reverted,
             format("%s layout=%s reverted=%s", trace, layoutOk, reverted));
 
+        {
+            key(45, "N", KeyModifiers.command | KeyModifiers.shift);
+            pumpFor(0.1);
+            immutable bool opened = root.skeletonPanel() !is null && scene.ui().overlays().length == 1;
+            key(53, "\x1b");
+            pumpFor(0.1);
+            immutable bool closed = root.skeletonPanel() is null && scene.ui().overlays().length == 0;
+            check("skeleton generator panel (menu)", opened && closed,
+                format("opened=%s closed with Escape=%s", opened, closed));
+        }
+
         key(8, "c", KeyModifiers.command | KeyModifiers.alt);
         immutable bool toggledLow = ctx.theme.contrast == ContrastMode.low && !shell.app.menuItemChecked("View", "High Contrast");
         string saved;

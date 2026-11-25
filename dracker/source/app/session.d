@@ -3273,6 +3273,9 @@ class StudioSession {
         next.tracks = newTracks;
         next.lines = newLines;
         next.cells = nextCells;
+        if (next.lanes.length > newTracks) {
+            next.lanes = next.lanes[0 .. newTracks].dup;
+        }
         if (!pushPatternSnapshotDirect(next, false)) {
             return false;
         }
@@ -3873,6 +3876,8 @@ class StudioSession {
         copyPat.lines = sp.lines;
         copyPat.name = sp.name;
         copyPat.cells = sp.cells.dup;
+        copyPat.kind = sp.kind;
+        copyPat.lanes = sp.lanes.dup;
         return copyPat;
     }
 

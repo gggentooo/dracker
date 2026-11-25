@@ -169,6 +169,7 @@ private immutable MenuSpec[][] MENU_ITEMS = [
     ],
     [
         MenuSpec("New Project", "n", KeyModifiers.command, 45, null),
+        MenuSpec("New Project from Skeleton…", "N", KeyModifiers.command | KeyModifiers.shift, 45, null),
         MenuSpec("Open Project…", "o", KeyModifiers.command, 31, null),
         MenuSpec("Save Project", "s", KeyModifiers.command, 1, null),
         MenuSpec("Save Project As…", "S", KeyModifiers.command | KeyModifiers.shift, 1, null),

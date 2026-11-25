@@ -6,12 +6,18 @@
  * Purpose:
  *   Retained widget toolkit for the studio: a Widget tree (bounds, children, visibility, enablement, focus,
  *   measure/arrange hooks, IRenderer2D drawing, bubbling event handlers, hit-testing) driven by UiContext,
- *   which converts PlatformEvents into widget dispatch with topmost-first hit-testing, mouse capture during
+ *   which converts PlatformEvents into widget dispatch with topmost-first hit-testing (keys, key releases and typed
+ *   text go to the focused widget inside the top overlay, else the overlay; a click inside a modal overlay moves
+ *   focus there; a click in a lower overlay first closes the popups above it), drag-and-drop between widgets
+ *   (beginDrag() with a DragPayload; the widget under the pointer or an ancestor accepts through onDragQuery and
+ *   gets onDragEnter / onDragMove / onDragLeave / onDrop; a label follows the pointer; Escape, a second button
+ *   press or losing window focus cancels), mouse capture during
  *   drags, hover tracking, double-click detection, keyboard focus with Tab/Shift+Tab traversal, an overlay
  *   layer for popups that closes on outside click/Escape (a modal overlay blocks everything below it and an
  *   outside click closes only it and the overlays above it), right-click context-menu providers, and a
  *   needsRedraw/isAnimating pair so the host can sleep when idle. Controls: Panel, Label, Button, Toggle,
- *   Slider, RotaryKnob, NumericDragBox, Dropdown, ContextMenu, ConfirmDialog, ScrollView (with
+ *   Slider, RotaryKnob, NumericDragBox, Dropdown, ContextMenu, ConfirmDialog, GroupedList (collapsible groups of
+ *   selectable rows; rows can start drags), ScrollView (with
  *   ScrollBarModel), SplitView, CurveEditor and EnvelopeEditor.
  *
  * Real-Time & Safety Contract:
@@ -27,13 +33,17 @@
  *   - enum KeyCode / enum MouseButton / struct MouseEvent / struct ScrollEvent / struct KeyEvent
  *   - class Widget : add/remove, measure(ITextMeasurer, theme), arrange(RectF), layoutChildren(), draw(IRenderer2D, theme),
  *       paint(), hitTest(Point2F), onMouseDown/Up/Move, onScroll, onMagnify, onKeyDown/Up, onTextInput, onMouseEnter/Leave,
- *       onFocusGained/Lost, onCaptureLost, onDismissed, isModalOverlay(), isAnimating(), contextMenuProvider
+ *       onFocusGained/Lost, onCaptureLost, onDismissed, onDragQuery/Enter/Move/Leave, onDrop, onDragFinished,
+ *       isModalOverlay(), closesOnOutsideClick(), isAnimating(),
+ *       contextMenuProvider
  *   - final class UiContext : handleEvent(PlatformEvent), layout(RectF, ITextMeasurer), draw(IRenderer2D[, theme]),
  *       renderFrame(IRenderer2D, scale), needsRedraw, isAnimating(), setFocus/focusNext/focusPrevious, capture/releaseCapture,
- *       openOverlay/closeOverlay/closeAllOverlays, topModalIndex(), hitTest(Point2F), setTheme(StudioTheme)
+ *       openOverlay/closeOverlay/closeAllOverlays, topModalIndex(), hitTest(Point2F), setTheme(StudioTheme),
+ *       beginDrag()/cancelDrag()/isDragging()/dragPayload()/dragTarget(), dragThreshold; struct DragPayload
  *   - struct ValueRange; abstract class ValueWidget; class Panel / Label / Button / Toggle / Slider / RotaryKnob /
  *       NumericDragBox / TextField (openTextEditor()) / Dropdown (onDoubleClick) / DropdownList / ContextMenu
- *       (struct MenuItem) / ConfirmDialog (openConfirmDialog(), wrapTextLines()) / ScrollView (struct ScrollBarModel) / SplitView / CurveEditor / EnvelopeEditor
+ *       (struct MenuItem) / ConfirmDialog (openConfirmDialog(), wrapTextLines()) / GroupedList (struct ListRow,
+ *       struct ListGroup) / ScrollView (struct ScrollBarModel) / SplitView / CurveEditor / EnvelopeEditor
  *
  * See_Also:
  *   architecture_proposal.md, dev_plan_proposal.md
@@ -718,6 +728,73 @@ class Widget {
     }
 
     /**
+     * Asked while a drag started with UiContext.beginDrag() is over this widget: would it take the payload at
+     * pos? The widget under the pointer is asked first, then its ancestors; the first that accepts is the drop
+     * target.
+     *
+     * Params:
+     *   payload = What is being dragged.
+     *   pos = Pointer position in window coordinates.
+     *
+     * Returns:
+     *   False by default.
+     */
+    bool onDragQuery(const ref DragPayload payload, Point2F pos) {
+        return false;
+    }
+
+    /**
+     * Called when this widget becomes the drop target of the current drag.
+     *
+     * Params:
+     *   payload = What is being dragged.
+     *   pos = Pointer position.
+     */
+    void onDragEnter(const ref DragPayload payload, Point2F pos) {
+    }
+
+    /**
+     * Called when the pointer moves while this widget is the drop target.
+     *
+     * Params:
+     *   payload = What is being dragged.
+     *   pos = Pointer position.
+     */
+    void onDragMove(const ref DragPayload payload, Point2F pos) {
+    }
+
+    /**
+     * Called when this widget stops being the drop target without a drop (the pointer left, or the drag was
+     * cancelled).
+     */
+    void onDragLeave() {
+    }
+
+    /**
+     * Called when the payload is released over this widget while it is the drop target.
+     *
+     * Params:
+     *   payload = What was dragged.
+     *   pos = Drop position in window coordinates.
+     *
+     * Returns:
+     *   True if the widget took the payload.
+     */
+    bool onDrop(const ref DragPayload payload, Point2F pos) {
+        return false;
+    }
+
+    /**
+     * Called on the widget that started a drag when the drag ends.
+     *
+     * Params:
+     *   payload = What was dragged.
+     *   accepted = True if a drop target took it; false if it was cancelled, refused or dropped on nothing.
+     */
+    void onDragFinished(const ref DragPayload payload, bool accepted) {
+    }
+
+    /**
      * Reports whether this widget, when open as an overlay, blocks the overlays below it and the root.
      *
      * A modal overlay takes every key press; clicks, scrolls and hover below it do not reach other widgets,
@@ -729,6 +806,27 @@ class Widget {
     bool isModalOverlay() const {
         return false;
     }
+
+    /**
+     * Reports whether a click outside this modal overlay closes it (and cancels it). A modal overlay that returns
+     * false stays open: the outside click only closes popups above it and is otherwise ignored.
+     *
+     * Returns:
+     *   True by default.
+     */
+    bool closesOnOutsideClick() const {
+        return true;
+    }
+}
+
+/**
+ * What a drag-and-drop gesture carries: a kind that drop targets test (for example "preset"), the object being
+ * dragged, and the text shown next to the pointer while dragging.
+ */
+struct DragPayload {
+    string kind;
+    Object data;
+    string label;
 }
 
 /**
@@ -738,11 +836,16 @@ final class UiContext {
     StudioTheme theme;
     double doubleClickInterval = 0.4;
     float doubleClickDistance = 4.0f;
+    float dragThreshold = 5.0f;
     private Widget root_;
     private Widget[] overlays_;
     private Widget focused_;
     private Widget hovered_;
     private Widget captured_;
+    private bool dragging_ = false;
+    private DragPayload dragPayload_;
+    private Widget dragSource_;
+    private Widget dragTarget_;
     private bool needsRedraw_ = true;
     private RectF viewport_;
     private ITextMeasurer measurer_;
@@ -960,6 +1063,9 @@ final class UiContext {
         foreach (o; overlays_) {
             o.draw(r, theme);
         }
+        if (dragging_) {
+            drawDragLabel(r);
+        }
         needsRedraw_ = false;
     }
 
@@ -1037,6 +1143,7 @@ final class UiContext {
             windowFocused_ = ev.focused;
             if (!ev.focused) {
                 cancelCapture();
+                cancelDrag();
             }
             needsRedraw_ = true;
             return true;
@@ -1162,6 +1269,78 @@ final class UiContext {
     }
 
     /**
+     * Starts a drag-and-drop gesture from source, normally from its onMouseMove once the pointer has moved
+     * dragThreshold points from the press. The context takes over the pointer: source loses its mouse capture
+     * (onCaptureLost), moves pick the drop target (onDragQuery, then onDragEnter / onDragMove / onDragLeave), the
+     * payload label is drawn next to the pointer, releasing the button drops (onDrop) and Escape cancels. The
+     * source hears the result through onDragFinished.
+     *
+     * Params:
+     *   source = Widget the drag starts from (told when it ends).
+     *   payload = What is dragged.
+     *
+     * Returns:
+     *   False when a drag is already running or source is null.
+     */
+    bool beginDrag(Widget source, DragPayload payload) {
+        if (dragging_ || source is null) {
+            return false;
+        }
+        cancelCapture();
+        dragging_ = true;
+        dragPayload_ = payload;
+        dragSource_ = source;
+        dragTarget_ = null;
+        updateDragTarget(mousePos_);
+        needsRedraw_ = true;
+        return true;
+    }
+
+    /**
+     * Cancels the running drag: the target (if any) gets onDragLeave and the source onDragFinished(false).
+     *
+     * Returns:
+     *   True if a drag was running.
+     */
+    bool cancelDrag() {
+        if (!dragging_) {
+            return false;
+        }
+        finishDrag(false, mousePos_);
+        return true;
+    }
+
+    /**
+     * Reports whether a drag-and-drop gesture is running.
+     *
+     * Returns:
+     *   True between beginDrag() and the drop or cancel.
+     */
+    bool isDragging() const {
+        return dragging_;
+    }
+
+    /**
+     * Returns the payload of the running drag.
+     *
+     * Returns:
+     *   Payload (DragPayload.init when no drag is running).
+     */
+    DragPayload dragPayload() {
+        return dragging_ ? dragPayload_ : DragPayload.init;
+    }
+
+    /**
+     * Returns the widget that would take the payload if it were released now.
+     *
+     * Returns:
+     *   Drop target, or null.
+     */
+    Widget dragTarget() {
+        return dragTarget_;
+    }
+
+    /**
      * Opens (or raises) a popup in the overlay layer. Callers set the overlay bounds first.
      *
      * Params:
@@ -1246,6 +1425,12 @@ final class UiContext {
      *   w = Subtree root.
      */
     void widgetDetached(Widget w) {
+        if (dragTarget_ !is null && w.isAncestorOf(dragTarget_)) {
+            dragTarget_ = null;
+        }
+        if (dragSource_ !is null && w.isAncestorOf(dragSource_)) {
+            dragSource_ = null;
+        }
         if (focused_ !is null && w.isAncestorOf(focused_)) {
             Widget old = focused_;
             focused_ = null;
@@ -1265,16 +1450,37 @@ final class UiContext {
     private bool handleMouseDown(const ref PlatformEvent ev) {
         immutable Point2F p = Point2F(ev.x, ev.y);
         mousePos_ = p;
+        if (dragging_) {
+            finishDrag(false, p);
+            return true;
+        }
         immutable MouseButton button = toButton(ev.mouseButton);
         immutable uint clicks = registerClick(p, button);
         Widget hit = hitTest(p);
         immutable ptrdiff_t modal = topModalIndex();
         if (modal >= 0 && overlayIndexOf(hit) < modal) {
-            while (cast(ptrdiff_t) overlays_.length > modal) {
+            immutable ptrdiff_t keep = overlays_[modal].closesOnOutsideClick() ? modal : modal + 1;
+            while (cast(ptrdiff_t) overlays_.length > keep) {
                 closeOverlay(overlays_[$ - 1]);
             }
             updateHover(p);
             return true;
+        }
+        immutable ptrdiff_t hitIdx = overlayIndexOf(hit);
+        if (hitIdx >= 0 && hitIdx + 1 < cast(ptrdiff_t) overlays_.length) {
+            Dropdown own = cast(Dropdown) hit;
+            immutable bool ownList = own !is null && own.isOpen();
+            while (cast(ptrdiff_t) overlays_.length > hitIdx + 1) {
+                closeOverlay(overlays_[$ - 1]);
+            }
+            if (ownList) {
+                updateHover(p);
+                if (clicks >= 2 && own.onDoubleClick !is null && own.isEffectivelyEnabled()) {
+                    own.onDoubleClick();
+                }
+                needsRedraw_ = true;
+                return true;
+            }
         }
         immutable bool inOverlay = hit !is null && overlayOf(hit) !is null;
         if (overlays_.length > 0 && !inOverlay) {
@@ -1288,7 +1494,7 @@ final class UiContext {
             }
             return true;
         }
-        if (!inOverlay) {
+        if (!inOverlay || overlayOf(hit).isModalOverlay()) {
             focusForClick(hit);
         }
         MouseEvent me = MouseEvent(p, button, ev.modifiers, clicks);
@@ -1318,6 +1524,12 @@ final class UiContext {
     private bool handleMouseUp(const ref PlatformEvent ev) {
         immutable Point2F p = Point2F(ev.x, ev.y);
         mousePos_ = p;
+        if (dragging_) {
+            updateDragTarget(p, false);
+            finishDrag(true, p);
+            updateHover(p);
+            return true;
+        }
         MouseEvent me = MouseEvent(p, toButton(ev.mouseButton), ev.modifiers, clickCount_);
         if (captured_ !is null) {
             Widget c = captured_;
@@ -1337,6 +1549,11 @@ final class UiContext {
     private bool handleMouseMove(const ref PlatformEvent ev) {
         immutable Point2F p = Point2F(ev.x, ev.y);
         mousePos_ = p;
+        if (dragging_) {
+            updateDragTarget(p);
+            needsRedraw_ = true;
+            return true;
+        }
         MouseEvent me = MouseEvent(p, toButton(ev.mouseButton), ev.modifiers, 0);
         if (captured_ !is null) {
             captured_.onMouseMove(me);
@@ -1378,6 +1595,12 @@ final class UiContext {
 
     private bool handleKeyDown(const ref PlatformEvent ev) {
         KeyEvent ke = KeyEvent(ev.keyCode, ev.modifiers, ev.isRepeat);
+        if (dragging_) {
+            if (ev.keyCode == KeyCode.escape) {
+                cancelDrag();
+            }
+            return true;
+        }
         if (overlays_.length > 0) {
             Widget top = overlays_[$ - 1];
             Widget target = focused_ !is null && top.isAncestorOf(focused_) ? focused_ : top;
@@ -1410,13 +1633,13 @@ final class UiContext {
 
     private bool handleKeyUp(const ref PlatformEvent ev) {
         KeyEvent ke = KeyEvent(ev.keyCode, ev.modifiers, ev.isRepeat);
-        Widget target = overlays_.length > 0 ? overlays_[$ - 1] : (focused_ !is null ? focused_ : root_);
+        Widget target = inputTarget();
         return bubble(target, (Widget w) => w.onKeyUp(ke)) !is null;
     }
 
     private bool handleTextInput(const ref PlatformEvent ev) {
         immutable dchar c = ev.utf32Char;
-        Widget target = overlays_.length > 0 ? overlays_[$ - 1] : (focused_ !is null ? focused_ : root_);
+        Widget target = inputTarget();
         immutable bool handled = bubble(target, (Widget w) => w.onTextInput(c)) !is null;
         if (handled) {
             needsRedraw_ = true;
@@ -1493,6 +1716,74 @@ final class UiContext {
             }
         }
         return null;
+    }
+
+    private void updateDragTarget(Point2F p, bool notifyMove = true) {
+        Widget next = null;
+        for (Widget w = hitTest(p); w !is null; w = w.parent_) {
+            if (w.isEffectivelyEnabled() && w.onDragQuery(dragPayload_, p)) {
+                next = w;
+                break;
+            }
+        }
+        if (next is dragTarget_) {
+            if (next !is null && notifyMove) {
+                next.onDragMove(dragPayload_, p);
+            }
+            return;
+        }
+        if (dragTarget_ !is null) {
+            dragTarget_.onDragLeave();
+        }
+        dragTarget_ = next;
+        if (next !is null) {
+            next.onDragEnter(dragPayload_, p);
+        }
+    }
+
+    private void finishDrag(bool drop, Point2F p) {
+        Widget target = dragTarget_;
+        Widget source = dragSource_;
+        DragPayload payload = dragPayload_;
+        dragging_ = false;
+        dragTarget_ = null;
+        dragSource_ = null;
+        dragPayload_ = DragPayload.init;
+        bool accepted = false;
+        if (target !is null) {
+            if (drop) {
+                accepted = target.onDrop(payload, p);
+            } else {
+                target.onDragLeave();
+            }
+        }
+        if (source !is null) {
+            source.onDragFinished(payload, accepted);
+        }
+        needsRedraw_ = true;
+    }
+
+    private void drawDragLabel(IRenderer2D r) {
+        immutable string text = dragPayload_.label.length > 0 ? dragPayload_.label : dragPayload_.kind;
+        immutable float size = theme.fontSizeBody;
+        immutable float w = r.measureText(text, FontId.ui, size) + 2.0f * theme.spacingLg;
+        immutable float h = r.lineHeight(FontId.ui, size) + 6.0f;
+        RectF box = RectF(mousePos_.x + 12.0f, mousePos_.y + 14.0f, w, h);
+        if (!viewport_.isEmpty()) {
+            box = clampRectInside(box, viewport_);
+        }
+        r.fillRoundedRect(box, theme.radiusSm, theme.panelRaised);
+        r.strokeRoundedRect(box, theme.radiusSm, 2.0f, dragTarget_ !is null ? theme.accent : theme.borderStrong);
+        r.drawText(Point2F(box.x + theme.spacingLg, box.y + 3.0f), text, FontId.ui, size,
+            dragTarget_ !is null ? theme.text : theme.textDim);
+    }
+
+    private Widget inputTarget() {
+        if (overlays_.length > 0) {
+            Widget top = overlays_[$ - 1];
+            return focused_ !is null && top.isAncestorOf(focused_) ? focused_ : top;
+        }
+        return focused_ !is null ? focused_ : root_;
     }
 
     private ptrdiff_t overlayIndexOf(Widget w) {
@@ -2782,10 +3073,15 @@ class NumericDragBox : ValueWidget {
  * Left/Right/Home/End, Backspace, Forward Delete and Cmd+A edit. It starts with all text selected, so the first
  * typed character replaces it. Every key press is consumed while it is shown, so shortcuts and piano keys do not
  * fire. Opened as an overlay with openTextEditor(), it commits when dismissed by a click elsewhere.
+ * With persistent set (a field that stays inside a form), Return calls onCommit and the field stays editable,
+ * Escape and Tab are not consumed (they reach the form), every change calls onEdit, and the caret is drawn
+ * only while the field has focus.
  */
 class TextField : Widget {
     void delegate(string) onCommit;
     void delegate() onCancel;
+    void delegate(string) onEdit;
+    bool persistent = false;
     size_t maxLength = 128;
     private dchar[] buf_;
     private size_t caret_ = 0;
@@ -2868,6 +3164,12 @@ class TextField : Widget {
      * Ends editing and reports the text through onCommit (closing the field first when it is an overlay).
      */
     void commit() {
+        if (persistent) {
+            if (onCommit !is null) {
+                onCommit(text());
+            }
+            return;
+        }
         if (finished_) {
             return;
         }
@@ -2883,6 +3185,12 @@ class TextField : Widget {
      * Ends editing without reporting the text (closing the field first when it is an overlay).
      */
     void cancel() {
+        if (persistent) {
+            if (onCancel !is null) {
+                onCancel();
+            }
+            return;
+        }
         if (finished_) {
             return;
         }
@@ -2906,6 +3214,7 @@ class TextField : Widget {
             buf_ = buf_[0 .. caret_] ~ c ~ buf_[caret_ .. $];
             caret_++;
         }
+        notifyEdit();
         invalidate();
         return true;
     }
@@ -2913,6 +3222,9 @@ class TextField : Widget {
     override bool onKeyDown(const ref KeyEvent e) {
         if (finished_) {
             return true;
+        }
+        if (persistent && (e.keyCode == KeyCode.escape || e.keyCode == KeyCode.tab)) {
+            return false;
         }
         if (hasModifier(e.modifiers, KeyModifiers.command)) {
             if (e.keyCode == KeyCode.a) {
@@ -2937,6 +3249,7 @@ class TextField : Widget {
                 buf_ = buf_[0 .. caret_ - 1] ~ buf_[caret_ .. $];
                 caret_--;
             }
+            notifyEdit();
             break;
         case KeyCode.forwardDelete:
             if (allSelected_) {
@@ -2944,6 +3257,7 @@ class TextField : Widget {
             } else if (caret_ < buf_.length) {
                 buf_ = buf_[0 .. caret_] ~ buf_[caret_ + 1 .. $];
             }
+            notifyEdit();
             break;
         case KeyCode.left:
             caret_ = allSelected_ ? 0 : (caret_ > 0 ? caret_ - 1 : 0);
@@ -3000,7 +3314,11 @@ class TextField : Widget {
 
     override void paint(IRenderer2D r, const ref StudioTheme theme) {
         r.fillRoundedRect(bounds, theme.radiusSm, theme.panelRaised);
-        r.strokeRoundedRect(bounds, theme.radiusSm, theme.focusRingWidth, theme.focusRing);
+        if (!persistent || isFocused()) {
+            r.strokeRoundedRect(bounds, theme.radiusSm, theme.focusRingWidth, theme.focusRing);
+        } else {
+            r.strokeRoundedRect(bounds, theme.radiusSm, theme.borderWidth, theme.border);
+        }
         immutable string txt = text();
         immutable float size = theme.fontSizeBody;
         immutable float lh = r.lineHeight(FontId.ui, size);
@@ -3015,10 +3333,16 @@ class TextField : Widget {
             r.fillRect(RectF(tx - shift, ty, tw, lh), theme.selection);
         }
         r.drawText(Point2F(tx - shift, ty), txt, FontId.ui, size, theme.text);
-        if (!allSelected_) {
+        if (!allSelected_ && (!persistent || isFocused())) {
             r.fillRect(RectF(tx - shift + cw, ty, 1.5f, lh), theme.accentHot);
         }
         r.popClip();
+    }
+
+    private void notifyEdit() {
+        if (onEdit !is null) {
+            onEdit(text());
+        }
     }
 
     private void clearAll() {
@@ -3318,6 +3642,572 @@ ConfirmDialog openConfirmDialog(UiContext ctx, string title, string message, str
     dlg.bounds = vp.isEmpty() ? RectF(0.0f, 0.0f, ConfirmDialog.WIDTH, h) : clampRectInside(want, vp);
     ctx.openOverlay(dlg);
     return dlg;
+}
+
+/**
+ * One row of a GroupedList: main text, dimmer secondary text, an optional short tag drawn in an outlined box,
+ * and a caller-owned object.
+ */
+struct ListRow {
+    string text;
+    string detail;
+    string tag;
+    Object data;
+}
+
+/**
+ * A titled group of rows in a GroupedList; a collapsed group shows only its header.
+ */
+struct ListGroup {
+    string title;
+    ListRow[] rows;
+    bool collapsed = false;
+}
+
+/**
+ * Scrolling list of rows under collapsible group headers.
+ *
+ * Mouse: a click selects a row; a click on a header selects it and collapses or expands its group; a
+ * double-click on a row activates it; a right-click selects the row and asks rowMenuProvider for a context
+ * menu; dragging a row past UiContext.dragThreshold starts a drag-and-drop with dragPayloadProvider's payload;
+ * the wheel scrolls. Keyboard (with focus): Up / Down move through headers and visible rows, Left collapses the
+ * group (from a row it first goes to the header), Right expands it, Home / End jump, Return activates a row or
+ * toggles a header. The selection is drawn as a filled bar with a 2-point border and a marker at its left edge,
+ * and the focused list gets the focus ring, so neither relies on color alone.
+ */
+class GroupedList : Widget {
+    enum float ROW_H = 22.0f;
+    enum float HEADER_H = 24.0f;
+    enum float INDENT = 18.0f;
+    enum float BAR_W = 4.0f;
+
+    /**
+     * Called when the selection changes; row is -1 when a group header is selected.
+     */
+    void delegate(size_t group, ptrdiff_t row) onSelect;
+
+    /**
+     * Called when a row is activated (double-click or Return).
+     */
+    void delegate(size_t group, size_t row) onActivate;
+
+    /**
+     * Supplies the context menu of a row (null or empty: no menu).
+     */
+    MenuItem[] delegate(size_t group, size_t row) rowMenuProvider;
+
+    /**
+     * Supplies the payload for dragging a row; a payload with an empty kind means the row cannot be dragged.
+     */
+    DragPayload delegate(size_t group, size_t row) dragPayloadProvider;
+
+    private ListGroup[] groups_;
+    private ptrdiff_t selGroup_ = -1;
+    private ptrdiff_t selRow_ = -1;
+    private float scrollY_ = 0.0f;
+    private bool pressed_ = false;
+    private Point2F pressPos_;
+    private size_t pressGroup_ = 0;
+    private size_t pressRow_ = 0;
+
+    /**
+     * Creates an empty list.
+     */
+    this() {
+        focusable = true;
+        contextMenuProvider = &menuAt;
+    }
+
+    /**
+     * Replaces the groups. The selection is kept when the same group title and row text still exist, otherwise
+     * cleared; the scroll position is clamped.
+     *
+     * Params:
+     *   groups = New groups (the list keeps the array).
+     */
+    void setGroups(ListGroup[] groups) {
+        string keepTitle;
+        string keepText;
+        immutable bool hadRow = selGroup_ >= 0 && selRow_ >= 0;
+        if (selGroup_ >= 0) {
+            keepTitle = groups_[selGroup_].title;
+            keepText = hadRow ? groups_[selGroup_].rows[selRow_].text : null;
+        }
+        immutable ptrdiff_t oldGroup = selGroup_;
+        groups_ = groups;
+        selGroup_ = -1;
+        selRow_ = -1;
+        if (oldGroup >= 0) {
+            foreach (g, ref grp; groups_) {
+                if (grp.title != keepTitle) {
+                    continue;
+                }
+                if (!hadRow) {
+                    selGroup_ = cast(ptrdiff_t) g;
+                    break;
+                }
+                foreach (r, ref row; grp.rows) {
+                    if (row.text == keepText) {
+                        selGroup_ = cast(ptrdiff_t) g;
+                        selRow_ = cast(ptrdiff_t) r;
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        scrollTo(scrollY_);
+        invalidate();
+    }
+
+    /**
+     * Returns the groups shown.
+     *
+     * Returns:
+     *   Groups.
+     */
+    ListGroup[] groups() {
+        return groups_;
+    }
+
+    /**
+     * Returns the selected group.
+     *
+     * Returns:
+     *   Group index, or -1 when nothing is selected.
+     */
+    ptrdiff_t selectedGroup() const {
+        return selGroup_;
+    }
+
+    /**
+     * Returns the selected row inside selectedGroup().
+     *
+     * Returns:
+     *   Row index, or -1 when a header or nothing is selected.
+     */
+    ptrdiff_t selectedRow() const {
+        return selRow_;
+    }
+
+    /**
+     * Selects a row (row >= 0) or a group header (row = -1), expands the group for a row, scrolls it into view
+     * and calls onSelect when the selection changed. Invalid indices clear the selection.
+     *
+     * Params:
+     *   group = Group index.
+     *   row = Row index or -1.
+     */
+    void select(ptrdiff_t group, ptrdiff_t row) {
+        immutable ptrdiff_t og = selGroup_;
+        immutable ptrdiff_t oldRow = selRow_;
+        if (group < 0 || group >= cast(ptrdiff_t) groups_.length || row >= cast(ptrdiff_t) groups_[group].rows.length) {
+            selGroup_ = -1;
+            selRow_ = -1;
+        } else {
+            selGroup_ = group;
+            selRow_ = row < 0 ? -1 : row;
+            if (selRow_ >= 0) {
+                groups_[group].collapsed = false;
+            }
+            ensureVisible(cast(size_t) group, selRow_);
+        }
+        invalidate();
+        if ((og != selGroup_ || oldRow != selRow_) && selGroup_ >= 0 && onSelect !is null) {
+            onSelect(cast(size_t) selGroup_, selRow_);
+        }
+    }
+
+    /**
+     * Collapses or expands a group; a selected row of a group being collapsed moves the selection to its header.
+     *
+     * Params:
+     *   group = Group index.
+     *   collapsed = New state.
+     */
+    void setCollapsed(size_t group, bool collapsed) {
+        if (group >= groups_.length || groups_[group].collapsed == collapsed) {
+            return;
+        }
+        groups_[group].collapsed = collapsed;
+        if (collapsed && selGroup_ == cast(ptrdiff_t) group && selRow_ >= 0) {
+            select(cast(ptrdiff_t) group, -1);
+        }
+        scrollTo(scrollY_);
+        invalidate();
+    }
+
+    /**
+     * Activates the selected row (calls onActivate); on a header, toggles the group.
+     *
+     * Returns:
+     *   True if a row was activated.
+     */
+    bool activateSelected() {
+        if (selGroup_ < 0) {
+            return false;
+        }
+        if (selRow_ < 0) {
+            setCollapsed(cast(size_t) selGroup_, !groups_[selGroup_].collapsed);
+            return false;
+        }
+        if (onActivate !is null) {
+            onActivate(cast(size_t) selGroup_, cast(size_t) selRow_);
+        }
+        return true;
+    }
+
+    /**
+     * Returns the height of all headers and visible rows.
+     *
+     * Returns:
+     *   Points.
+     */
+    float contentHeight() const {
+        float h = 0.0f;
+        foreach (ref g; groups_) {
+            h += HEADER_H + (g.collapsed ? 0.0f : ROW_H * g.rows.length);
+        }
+        return h;
+    }
+
+    /**
+     * Returns the vertical scroll offset.
+     *
+     * Returns:
+     *   Points scrolled from the top.
+     */
+    float scrollOffset() const {
+        return scrollY_;
+    }
+
+    /**
+     * Scrolls to an offset, clamped to the content.
+     *
+     * Params:
+     *   y = Offset from the top.
+     *
+     * Returns:
+     *   True if the offset changed.
+     */
+    bool scrollTo(float y) {
+        immutable float maxY = contentHeight() > bounds.h ? contentHeight() - bounds.h : 0.0f;
+        immutable float ny = clampf(y, 0.0f, maxY);
+        if (ny == scrollY_) {
+            return false;
+        }
+        scrollY_ = ny;
+        invalidate();
+        return true;
+    }
+
+    /**
+     * Returns the rectangle of a group header in window coordinates (it may lie outside the list's bounds when
+     * scrolled away).
+     *
+     * Params:
+     *   group = Group index.
+     *
+     * Returns:
+     *   Rectangle (empty for a bad index).
+     */
+    RectF headerRect(size_t group) const {
+        if (group >= groups_.length) {
+            return RectF.init;
+        }
+        float y = bounds.y - scrollY_;
+        foreach (g; 0 .. group) {
+            y += HEADER_H + (groups_[g].collapsed ? 0.0f : ROW_H * groups_[g].rows.length);
+        }
+        return RectF(bounds.x, y, bounds.w, HEADER_H);
+    }
+
+    /**
+     * Returns the rectangle of a row in window coordinates.
+     *
+     * Params:
+     *   group = Group index.
+     *   row = Row index.
+     *
+     * Returns:
+     *   Rectangle (empty for a bad index or a collapsed group).
+     */
+    RectF rowRect(size_t group, size_t row) const {
+        if (group >= groups_.length || row >= groups_[group].rows.length || groups_[group].collapsed) {
+            return RectF.init;
+        }
+        immutable RectF h = headerRect(group);
+        return RectF(bounds.x, h.bottom() + ROW_H * row, bounds.w, ROW_H);
+    }
+
+    /**
+     * Finds the header or row at a point.
+     *
+     * Params:
+     *   p = Point in window coordinates.
+     *   group = Receives the group.
+     *   row = Receives the row, or -1 for the header.
+     *
+     * Returns:
+     *   False when the point is outside the list or below the last row.
+     */
+    bool itemAt(Point2F p, out size_t group, out ptrdiff_t row) const {
+        if (!bounds.contains(p)) {
+            return false;
+        }
+        foreach (g, ref grp; groups_) {
+            if (headerRect(g).contains(p)) {
+                group = g;
+                row = -1;
+                return true;
+            }
+            if (grp.collapsed) {
+                continue;
+            }
+            foreach (r; 0 .. grp.rows.length) {
+                if (rowRect(g, r).contains(p)) {
+                    group = g;
+                    row = cast(ptrdiff_t) r;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    override bool onMouseDown(const ref MouseEvent e) {
+        size_t g;
+        ptrdiff_t r;
+        immutable bool hit = itemAt(e.pos, g, r);
+        if (e.button == MouseButton.right) {
+            if (hit && r >= 0) {
+                select(cast(ptrdiff_t) g, r);
+            }
+            return false;
+        }
+        if (e.button != MouseButton.left) {
+            return false;
+        }
+        if (!hit) {
+            return true;
+        }
+        if (r < 0) {
+            select(cast(ptrdiff_t) g, -1);
+            setCollapsed(g, !groups_[g].collapsed);
+            return true;
+        }
+        select(cast(ptrdiff_t) g, r);
+        if (e.clickCount >= 2) {
+            activateSelected();
+            return true;
+        }
+        pressed_ = true;
+        pressPos_ = e.pos;
+        pressGroup_ = g;
+        pressRow_ = cast(size_t) r;
+        return true;
+    }
+
+    override bool onMouseMove(const ref MouseEvent e) {
+        auto c = context();
+        if (!pressed_ || c is null || dragPayloadProvider is null) {
+            return pressed_;
+        }
+        if ((e.pos - pressPos_).length() < c.dragThreshold) {
+            return true;
+        }
+        pressed_ = false;
+        DragPayload payload = dragPayloadProvider(pressGroup_, pressRow_);
+        if (payload.kind.length > 0) {
+            c.beginDrag(this, payload);
+        }
+        return true;
+    }
+
+    override bool onMouseUp(const ref MouseEvent e) {
+        pressed_ = false;
+        return true;
+    }
+
+    override void onCaptureLost() {
+        pressed_ = false;
+    }
+
+    override bool onScroll(const ref ScrollEvent e) {
+        return scrollTo(scrollY_ - e.deltaY);
+    }
+
+    override bool onKeyDown(const ref KeyEvent e) {
+        if (groups_.length == 0 || (e.modifiers & (KeyModifiers.command | KeyModifiers.control | KeyModifiers.alt)) != 0) {
+            return false;
+        }
+        switch (e.keyCode) {
+            case KeyCode.down:
+                step(1);
+                return true;
+            case KeyCode.up:
+                step(-1);
+                return true;
+            case KeyCode.home:
+                select(0, -1);
+                return true;
+            case KeyCode.end: {
+                immutable ptrdiff_t g = cast(ptrdiff_t) groups_.length - 1;
+                select(g, groups_[g].collapsed ? -1 : cast(ptrdiff_t) groups_[g].rows.length - 1);
+                return true;
+            }
+            case KeyCode.left:
+                if (selGroup_ >= 0) {
+                    if (selRow_ >= 0) {
+                        select(selGroup_, -1);
+                    } else {
+                        setCollapsed(cast(size_t) selGroup_, true);
+                    }
+                }
+                return true;
+            case KeyCode.right:
+                if (selGroup_ >= 0) {
+                    if (groups_[selGroup_].collapsed) {
+                        setCollapsed(cast(size_t) selGroup_, false);
+                    } else if (selRow_ < 0 && groups_[selGroup_].rows.length > 0) {
+                        select(selGroup_, 0);
+                    }
+                }
+                return true;
+            case KeyCode.returnKey:
+            case KeyCode.keypadEnter:
+                activateSelected();
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    override void layoutChildren() {
+        scrollTo(scrollY_);
+    }
+
+    override void paint(IRenderer2D r, const ref StudioTheme theme) {
+        r.fillRect(bounds, theme.panelSunken);
+        r.pushClip(bounds);
+        immutable float bodySize = theme.fontSizeBody;
+        immutable float small = theme.fontSizeSmall;
+        immutable float lh = r.lineHeight(FontId.ui, bodySize);
+        immutable float slh = r.lineHeight(FontId.ui, small);
+        foreach (g, ref grp; groups_) {
+            immutable RectF h = headerRect(g);
+            if (h.bottom() >= bounds.y && h.y <= bounds.bottom()) {
+                immutable bool sel = selGroup_ == cast(ptrdiff_t) g && selRow_ < 0;
+                r.fillRect(h, theme.panelRaised);
+                r.fillRect(RectF(h.x, h.bottom() - 1.0f, h.w, 1.0f), theme.border);
+                drawDisclosure(r, theme, Point2F(h.x + 10.0f, h.y + h.h * 0.5f), grp.collapsed);
+                r.drawText(Point2F(h.x + INDENT + 2.0f, h.y + (h.h - lh) * 0.5f), grp.title, FontId.ui, bodySize, theme.text);
+                if (sel) {
+                    drawSelection(r, theme, h, false);
+                }
+            }
+            if (grp.collapsed) {
+                continue;
+            }
+            foreach (i, ref row; grp.rows) {
+                immutable RectF b = rowRect(g, i);
+                if (b.bottom() < bounds.y || b.y > bounds.bottom()) {
+                    continue;
+                }
+                immutable bool sel = selGroup_ == cast(ptrdiff_t) g && selRow_ == cast(ptrdiff_t) i;
+                if (sel) {
+                    drawSelection(r, theme, b, true);
+                }
+                float x = b.x + INDENT + 2.0f;
+                r.drawText(Point2F(x, b.y + (b.h - lh) * 0.5f), row.text, FontId.ui, bodySize, theme.text);
+                x += r.measureText(row.text, FontId.ui, bodySize) + 8.0f;
+                if (row.tag.length > 0) {
+                    immutable float tw = r.measureText(row.tag, FontId.ui, small) + 8.0f;
+                    immutable RectF tb = RectF(x, b.y + 3.0f, tw, b.h - 6.0f);
+                    r.strokeRoundedRect(tb, theme.radiusSm, theme.borderWidth, theme.borderStrong);
+                    r.drawText(Point2F(tb.x + 4.0f, tb.y + (tb.h - slh) * 0.5f), row.tag, FontId.ui, small, theme.text);
+                    x += tw + 8.0f;
+                }
+                if (row.detail.length > 0) {
+                    r.drawText(Point2F(x, b.y + (b.h - slh) * 0.5f), row.detail, FontId.ui, small, theme.textDim);
+                }
+            }
+        }
+        immutable float content = contentHeight();
+        if (content > bounds.h && bounds.h > 0.0f) {
+            immutable float th = bounds.h * bounds.h / content < 16.0f ? 16.0f : bounds.h * bounds.h / content;
+            immutable float ty = bounds.y + (bounds.h - th) * scrollY_ / (content - bounds.h);
+            r.fillRoundedRect(RectF(bounds.right() - 5.0f, ty, 4.0f, th), 2.0f, theme.borderStrong);
+        }
+        r.popClip();
+        if (isFocused()) {
+            drawFocusRing(r, theme, bounds, 0.0f);
+        }
+    }
+
+    private void drawSelection(IRenderer2D r, const ref StudioTheme theme, RectF b, bool fill) {
+        if (fill) {
+            r.fillRect(b, theme.selection);
+        }
+        r.strokeRoundedRect(b.inset(1.0f), 0.0f, 2.0f, theme.accent);
+        r.fillRect(RectF(b.x, b.y, BAR_W, b.h), theme.accent);
+    }
+
+    private static void drawDisclosure(IRenderer2D r, const ref StudioTheme theme, Point2F c, bool collapsed) {
+        if (collapsed) {
+            foreach (i; 0 .. 4) {
+                r.fillRect(RectF(c.x - 3.0f + i * 1.5f, c.y - 4.0f + i, 1.5f, 8.0f - 2.0f * i), theme.text);
+            }
+        } else {
+            foreach (i; 0 .. 4) {
+                r.fillRect(RectF(c.x - 4.0f + i, c.y - 3.0f + i * 1.5f, 8.0f - 2.0f * i, 1.5f), theme.text);
+            }
+        }
+    }
+
+    private void ensureVisible(size_t group, ptrdiff_t row) {
+        immutable RectF b = row < 0 ? headerRect(group) : rowRect(group, cast(size_t) row);
+        if (b.isEmpty() || bounds.h <= 0.0f) {
+            return;
+        }
+        if (b.y < bounds.y) {
+            scrollTo(scrollY_ - (bounds.y - b.y));
+        } else if (b.bottom() > bounds.bottom()) {
+            scrollTo(scrollY_ + (b.bottom() - bounds.bottom()));
+        }
+    }
+
+    private void step(int dir) {
+        ptrdiff_t[2][] items;
+        foreach (g, ref grp; groups_) {
+            items ~= [cast(ptrdiff_t) g, -1];
+            if (!grp.collapsed) {
+                foreach (i; 0 .. grp.rows.length) {
+                    items ~= [cast(ptrdiff_t) g, cast(ptrdiff_t) i];
+                }
+            }
+        }
+        ptrdiff_t at = -1;
+        foreach (i, it; items) {
+            if (it[0] == selGroup_ && it[1] == selRow_) {
+                at = cast(ptrdiff_t) i;
+            }
+        }
+        ptrdiff_t next = at < 0 ? (dir > 0 ? 0 : cast(ptrdiff_t) items.length - 1) : at + dir;
+        if (next < 0 || next >= cast(ptrdiff_t) items.length) {
+            return;
+        }
+        select(items[next][0], items[next][1]);
+    }
+
+    private MenuItem[] menuAt(Point2F p) {
+        size_t g;
+        ptrdiff_t r;
+        if (rowMenuProvider is null || !itemAt(p, g, r) || r < 0) {
+            return null;
+        }
+        return rowMenuProvider(g, cast(size_t) r);
+    }
 }
 
 /**

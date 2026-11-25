@@ -53,6 +53,7 @@ version (unittest) {
         Expect(StudioAction.loadModulePreset, 31, CMD | ALT),
         Expect(StudioAction.openProject, 31, CMD),
         Expect(StudioAction.newProject, 45, CMD),
+        Expect(StudioAction.newSkeletonProject, 45, CMD | SHIFT),
         Expect(StudioAction.panic, 47, CMD),
         Expect(StudioAction.noteOffEntry, 48, 0),
         Expect(StudioAction.deleteCell, 51, 0),
@@ -86,6 +87,7 @@ version (unittest) {
 
     private immutable Expect[] APPKIT_MENU_TABLE = [
         Expect(StudioAction.newProject, 45, CMD),
+        Expect(StudioAction.newSkeletonProject, 45, CMD | SHIFT),
         Expect(StudioAction.openProject, 31, CMD),
         Expect(StudioAction.saveProject, 1, CMD),
         Expect(StudioAction.saveProjectAs, 1, CMD | SHIFT),
@@ -154,7 +156,8 @@ version (unittest) {
         assert(km.resolveAction(8, CMD | ALT) == StudioAction.toggleContrast);
         assert(km.resolveAction(15, CMD | SHIFT) == StudioAction.editToggle);
         assert(km.resolveAction(1, CMD | ALT) == StudioAction.saveModulePreset);
-        assert(km.resolveAction(31, CMD | ALT) == StudioAction.max && StudioAction.max == StudioAction.loadModulePreset);
+        assert(km.resolveAction(31, CMD | ALT) == StudioAction.loadModulePreset);
+        assert(km.resolveAction(45, CMD | SHIFT) == StudioAction.max && StudioAction.max == StudioAction.newSkeletonProject);
     }
 
     unittest {
@@ -218,7 +221,7 @@ version (unittest) {
             StudioAction.saveProjectAs, StudioAction.openProject, StudioAction.newProject, StudioAction.panic,
             StudioAction.playPattern, StudioAction.toggleLoop, StudioAction.exportWav, StudioAction.quit,
             StudioAction.openAppearance, StudioAction.toggleContrast, StudioAction.saveModulePreset,
-            StudioAction.loadModulePreset
+            StudioAction.loadModulePreset, StudioAction.newSkeletonProject
         ];
         immutable StudioAction[] viewLevel = [
             StudioAction.noteOffEntry, StudioAction.deleteCell, StudioAction.cut, StudioAction.copy,

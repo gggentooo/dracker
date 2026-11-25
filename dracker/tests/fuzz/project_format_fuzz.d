@@ -4,7 +4,7 @@
  * Phase:        Phase 6.4 — Project, Preset & Importer Fuzz Harness
  *
  * Purpose:
- *   Exercises 100,000+ seeded mutated, truncated, corrupted-length, non-finite-float, and deeply nested inputs across .msv (including the MIDI-mapping and MUSC time-signature/key chunks, whose four MUSC bytes are also swept through every value), .msym, .mid, .xm, and .sunvox parsers to guarantee zero panics or OOB reads, then materializes and renders every accepted project to prove parser acceptance implies Engine-loadability.
+ *   Exercises 100,000+ seeded mutated, truncated, corrupted-length, non-finite-float, and deeply nested inputs across .msv (including the MIDI-mapping, MUSC time-signature/key and DRUM pattern-kind/lane chunks; the four MUSC bytes and every byte of the DRUM chunk are also swept through every value), .msym, .mid, .xm, and .sunvox parsers to guarantee zero panics or OOB reads, then materializes and renders every accepted project to prove parser acceptance implies Engine-loadability.
  *
  * Real-Time & Safety Contract:
  *   Off-RT verification harness (parsers under test are @safe nothrow) reusing bounded scratch buffers for fast 100k+ execution in Debug and Release/O3 builds.
@@ -31,9 +31,9 @@ import io.importers.sunvox_importer : ImportReport, importSunvoxFile;
 import io.importers.xm_importer : importXmFile;
 import foundation.types : FIXED_BLOCK_FRAMES;
 import graph.module_api : ModuleInstance;
-import io.project_format : isValidKey, isValidTimeSignature, KEY_MODE_MINOR, LoadedPreset, LoadedProject, loadPreset,
-    loadProject, materializeProjectToEngine, MSV_FORMAT_VERSION, SavedMidiMapping, SavedModule, SavedPattern,
-    SavedWire, serializePreset, serializeProject;
+import io.project_format : isValidKey, isValidPatternKind, isValidTimeSignature, KEY_MODE_MINOR, LoadedPreset,
+    LoadedProject, loadPreset, loadProject, materializeProjectToEngine, MSV_FORMAT_VERSION, PATTERN_KIND_DRUM,
+    SavedDrumLane, SavedMidiMapping, SavedModule, SavedPattern, SavedWire, serializePreset, serializeProject;
 import modules.control.metamodule : MAX_METAMODULE_DEPTH, MetaModuleAsset;
 import sequencer.engine : Engine;
 import sequencer.note : NoteCell;
@@ -55,6 +55,7 @@ struct FuzzStats {
     size_t materializedOk = 0;
     size_t materializedRejected = 0;
     size_t invalidMusicAccepted = 0;
+    size_t invalidPatternKindAccepted = 0;
     bool deepMetaAccepted = false;
 }
 
@@ -109,6 +110,8 @@ private ubyte[] buildSeedMsv() @safe nothrow {
     pat.name = "P1";
     pat.cells = new NoteCell[8];
     pat.cells[0] = NoteCell.makeNote(60, 0.9f, 2);
+    pat.kind = PATTERN_KIND_DRUM;
+    pat.lanes = [SavedDrumLane("Kick", 2, 60), SavedDrumLane("Hat", 0, 42)];
     p.patterns = [pat];
     p.clips = [TimelineClip(1, 1, 0, 0, 4, 0, 0, false, false, false)];
     p.midiMappings = [SavedMidiMapping(0, 7, 1, 0, 0.0f, 1.0f), SavedMidiMapping(3, 74, 2, 1, 0.25f, 0.75f)];
@@ -476,6 +479,13 @@ FuzzStats runProjectFormatFuzz(ulong seed, size_t iterations = 100_000) {
                         || !isValidKey(tmpProj.keyTonic, tmpProj.keyMode))) {
                     stats.invalidMusicAccepted++;
                 }
+                if (ok) {
+                    foreach (ref fp; tmpProj.patterns) {
+                        if (!isValidPatternKind(fp)) {
+                            stats.invalidPatternKindAccepted++;
+                        }
+                    }
+                }
                 stats.msvRuns++;
                 break;
             case 1:
@@ -532,6 +542,41 @@ version (unittest) {
         assert(stats.mutatedAccepted > 0);
         assert(stats.materializedOk > 0);
         assert(stats.invalidMusicAccepted == 0);
+        assert(stats.invalidPatternKindAccepted == 0);
+    }
+
+    unittest {
+        const(ubyte)[] seed = buildSeedMsv();
+        size_t at = size_t.max;
+        foreach (i; 0 .. seed.length - 3) {
+            if (seed[i .. i + 4] == cast(const(ubyte)[]) "DRUM") {
+                at = i;
+            }
+        }
+        assert(at != size_t.max);
+        immutable size_t len = seed[at + 4] | (seed[at + 5] << 8) | (seed[at + 6] << 16) | (seed[at + 7] << 24);
+        LoadedProject p;
+        string err;
+        assert(loadProject(seed, p, err) && p.patterns[0].kind == PATTERN_KIND_DRUM && p.patterns[0].lanes.length == 2);
+        ubyte[] buf = seed.dup;
+        size_t accepted = 0;
+        size_t rejected = 0;
+        foreach (off; 0 .. len) {
+            foreach (v; 0 .. 256) {
+                buf[] = seed[];
+                buf[at + 8 + off] = cast(ubyte) v;
+                if (loadProject(buf, p, err)) {
+                    accepted++;
+                    foreach (ref fp; p.patterns) {
+                        assert(isValidPatternKind(fp));
+                    }
+                } else {
+                    rejected++;
+                    assert(err.length > 0);
+                }
+            }
+        }
+        assert(accepted > len && rejected > len);
     }
 
     unittest {

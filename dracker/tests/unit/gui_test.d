@@ -7,7 +7,11 @@
  *   Headless verification of the pure-D UI stack: UTF-8 decoding, shelf atlas packing, glyph cache lookup /
  *   dirty rows / growth, clip stack nesting and scissor merging, Bezier tessellation bounds, theme tokens,
  *   rectangle/flex/split-pane layout math and splitter drags, UiContext hit-testing, bubbling, capture, hover,
- *   focus traversal, double-click detection, overlays (including modal overlays and ConfirmDialog), text wrapping,
+ *   focus traversal, double-click detection, overlays (including modal overlays and ConfirmDialog; input routed to
+ *   the focused widget of the top overlay, click focus and popup closing inside modal overlays, overlays that stay
+ *   open on outside clicks), persistent TextFields, drag-and-drop (targets, enter/move/leave/drop order, cancel by
+ *   Escape, focus loss and removal), GroupedList (selection, keyboard, collapsing, scrolling, row menus, row
+ *   drags), text wrapping,
  *   and every widget's interaction and drawing.
  *
  * Real-Time & Safety Contract:
@@ -2509,6 +2513,420 @@ version (unittest) {
         assert(wrapTextLines(null, "abcdefghijklmnop q", FontId.ui, 10.0f, 30.0f) == ["abcdefghijklmnop", "q"]);
         assert(wrapTextLines(null, "  x   y ", FontId.ui, 10.0f, 100.0f) == ["x y"]);
         assert(wrapTextLines(null, "", FontId.ui, 10.0f, 100.0f) == [""]);
+    }
+
+    private final class ModalBox : Panel {
+        bool closeOutside = true;
+
+        override bool isModalOverlay() const {
+            return true;
+        }
+
+        override bool closesOnOutsideClick() const {
+            return closeOutside;
+        }
+
+        override bool onMouseDown(const ref MouseEvent e) {
+            return true;
+        }
+    }
+
+    unittest {
+        auto root = new Panel();
+        auto behind = root.add(new Probe(RectF(0, 0, 50, 50), true));
+        auto h = new Harness(root, RectF(0, 0, 400, 300));
+        auto box = new ModalBox();
+        box.closeOutside = false;
+        box.bounds = RectF(100, 50, 200, 200);
+        auto field = box.add(new Probe(RectF(110, 60, 80, 20), true));
+        field.handleKeys = true;
+        auto other = box.add(new Probe(RectF(110, 100, 80, 20), true));
+        auto dd = box.add(new Dropdown(["A", "B", "C"], 0));
+        dd.bounds = RectF(110, 140, 80, 22);
+        h.ctx.openOverlay(box);
+        h.ctx.layout(RectF(0, 0, 400, 300));
+        assert(h.ctx.topModalIndex() == 0 && !box.closesOnOutsideClick());
+
+        h.click(150, 70);
+        assert(h.ctx.focused is field);
+        h.type("ab"d);
+        assert(field.texts == 2 && field.lastChar == 'b');
+        h.keyUp(6);
+        assert(field.keyUps == 1);
+        h.click(150, 110);
+        assert(h.ctx.focused is other);
+
+        h.click(5, 5);
+        assert(h.ctx.overlays().length == 1 && behind.downs == 0);
+
+        auto popup = new Probe(RectF(320, 260, 40, 20));
+        h.ctx.openOverlay(popup);
+        assert(h.ctx.overlays().length == 2);
+        h.click(150, 70);
+        assert(h.ctx.overlays().length == 1 && h.ctx.focused is field);
+        auto popup2 = new Probe(RectF(320, 260, 40, 20));
+        h.ctx.openOverlay(popup2);
+        h.click(5, 5);
+        assert(h.ctx.overlays().length == 1 && h.ctx.overlays()[0] is box && behind.downs == 0);
+
+        h.click(150, 150);
+        assert(dd.isOpen() && h.ctx.overlays().length == 2);
+        h.click(150, 150);
+        assert(!dd.isOpen() && h.ctx.overlays().length == 1);
+        h.click(150, 150);
+        assert(dd.isOpen());
+        h.click(150, 230);
+        assert(!dd.isOpen() && h.ctx.overlays().length == 1);
+
+        box.closeOutside = true;
+        h.click(5, 5);
+        assert(h.ctx.overlays().length == 0 && behind.downs == 0);
+    }
+
+    unittest {
+        auto root = new Panel();
+        auto h = new Harness(root, RectF(0, 0, 400, 300));
+        auto box = new ModalBox();
+        box.closeOutside = false;
+        box.bounds = RectF(50, 50, 300, 200);
+        auto tf = box.add(new TextField("Song"));
+        tf.persistent = true;
+        tf.setText("Song", false);
+        tf.bounds = RectF(60, 60, 200, 22);
+        string[] edits;
+        string[] commits;
+        int cancels = 0;
+        tf.onEdit = (string t) { edits ~= t; };
+        tf.onCommit = (string t) { commits ~= t; };
+        tf.onCancel = () { cancels++; };
+        h.ctx.openOverlay(box);
+        h.click(100, 70);
+        assert(h.ctx.focused is tf);
+        h.type("s"d);
+        h.key(KeyCode.deleteBackward);
+        h.type("!"d);
+        assert(tf.text() == "Song!" && edits == ["Songs", "Song", "Song!"]);
+        assert(h.key(KeyCode.returnKey));
+        assert(commits == ["Song!"] && !tf.finished() && h.ctx.overlays().length == 1);
+        h.type("?"d);
+        assert(tf.text() == "Song!?");
+        tf.cancel();
+        assert(cancels == 1 && !tf.finished());
+        h.key(KeyCode.tab);
+        assert(h.ctx.overlays().length == 1);
+        h.ctx.renderFrame(h.renderer, 1.0f);
+        h.key(KeyCode.escape);
+        assert(cancels == 1 && h.ctx.overlays().length == 0);
+    }
+
+    private class DropProbe : Probe {
+        string accepts;
+        bool takeDrop = true;
+        string[] log;
+        Point2F lastPos;
+
+        this(RectF b, string kind) {
+            super(b, false);
+            accepts = kind;
+        }
+
+        override bool onDragQuery(const ref DragPayload p, Point2F pos) {
+            return p.kind == accepts;
+        }
+
+        override void onDragEnter(const ref DragPayload p, Point2F pos) {
+            log ~= "enter";
+        }
+
+        override void onDragMove(const ref DragPayload p, Point2F pos) {
+            log ~= "move";
+            lastPos = pos;
+        }
+
+        override void onDragLeave() {
+            log ~= "leave";
+        }
+
+        override bool onDrop(const ref DragPayload p, Point2F pos) {
+            log ~= "drop:" ~ p.label;
+            lastPos = pos;
+            return takeDrop;
+        }
+    }
+
+    private class DragSource : Probe {
+        string kind = "preset";
+        int finished = 0;
+        bool lastAccepted = false;
+        Point2F press;
+        bool armed = false;
+
+        this(RectF b) {
+            super(b, false);
+        }
+
+        override bool onMouseDown(const ref MouseEvent e) {
+            press = e.pos;
+            armed = true;
+            return super.onMouseDown(e);
+        }
+
+        override bool onMouseMove(const ref MouseEvent e) {
+            auto c = context();
+            if (armed && (e.pos - press).length() >= c.dragThreshold) {
+                armed = false;
+                c.beginDrag(this, DragPayload(kind, this, "Warm Pad"));
+            }
+            return true;
+        }
+
+        override void onDragFinished(const ref DragPayload p, bool accepted) {
+            finished++;
+            lastAccepted = accepted;
+        }
+    }
+
+    unittest {
+        auto root = new Panel();
+        auto src = root.add(new DragSource(RectF(0, 0, 60, 30)));
+        auto holder = root.add(new Panel());
+        holder.bounds = RectF(100, 0, 200, 200);
+        auto target = new DropProbe(RectF(100, 0, 200, 200), "preset");
+        auto inner = target.add(new Probe(RectF(150, 50, 40, 40)));
+        holder.add(target);
+        auto other = root.add(new DropProbe(RectF(100, 220, 100, 60), "sample"));
+        auto h = new Harness(root, RectF(0, 0, 400, 300));
+        assert(!h.ctx.isDragging() && h.ctx.dragTarget() is null && h.ctx.dragThreshold == 5.0f);
+
+        h.down(10, 10);
+        h.move(12, 11);
+        assert(!h.ctx.isDragging() && h.ctx.captured is src);
+        h.move(30, 15);
+        assert(h.ctx.isDragging() && h.ctx.captured is null && src.captureLost == 1);
+        assert(h.ctx.dragPayload().kind == "preset" && h.ctx.dragPayload().data is src && h.ctx.dragTarget() is null);
+        h.ctx.renderFrame(h.renderer, 1.0f);
+        h.move(120, 20);
+        assert(h.ctx.dragTarget() is target && target.log == ["enter"]);
+        h.move(160, 60);
+        assert(h.ctx.dragTarget() is target && target.log == ["enter", "move"] && inner.moves == 0);
+        h.ctx.renderFrame(h.renderer, 1.0f);
+        h.move(120, 240);
+        assert(h.ctx.dragTarget() is null && target.log == ["enter", "move", "leave"] && other.log.length == 0);
+        h.move(170, 70);
+        h.up(170, 70);
+        assert(target.log == ["enter", "move", "leave", "enter", "drop:Warm Pad"] && target.lastPos == Point2F(170, 70));
+        assert(!h.ctx.isDragging() && src.finished == 1 && src.lastAccepted && inner.ups == 0 && target.ups == 0);
+        assert(h.ctx.dragPayload() == DragPayload.init);
+
+        target.takeDrop = false;
+        h.down(10, 10);
+        h.move(40, 10);
+        h.move(150, 20);
+        h.up(150, 20);
+        assert(src.finished == 2 && !src.lastAccepted);
+
+        target.log = null;
+        h.down(10, 10);
+        h.move(40, 10);
+        h.move(150, 20);
+        assert(h.key(KeyCode.escape));
+        assert(!h.ctx.isDragging() && src.finished == 3 && !src.lastAccepted && target.log == ["enter", "leave"]);
+        h.up(150, 20);
+        assert(target.log == ["enter", "leave"]);
+
+        h.down(10, 10);
+        h.move(40, 10);
+        h.up(60, 250);
+        assert(src.finished == 4 && !src.lastAccepted && other.log.length == 0);
+
+        h.down(10, 10);
+        h.move(40, 10);
+        h.move(150, 20);
+        assert(h.key(KeyCode.a));
+        assert(h.ctx.isDragging());
+        PlatformEvent blur;
+        blur.kind = PlatformEventKind.focusChanged;
+        blur.focused = false;
+        h.ctx.handleEvent(blur);
+        assert(!h.ctx.isDragging() && src.finished == 5);
+        PlatformEvent back;
+        back.kind = PlatformEventKind.focusChanged;
+        back.focused = true;
+        h.ctx.handleEvent(back);
+
+        h.down(10, 10);
+        h.move(40, 10);
+        h.move(150, 20);
+        assert(h.ctx.dragTarget() is target);
+        holder.remove(target);
+        assert(h.ctx.dragTarget() is null);
+        h.up(150, 20);
+        assert(src.finished == 6 && !src.lastAccepted);
+        assert(!h.ctx.beginDrag(null, DragPayload("x", null, "x")) && !h.ctx.cancelDrag());
+
+        src.kind = "sample";
+        h.down(10, 10);
+        h.move(40, 10);
+        h.move(120, 240);
+        assert(h.ctx.dragTarget() is other);
+        h.up(120, 240);
+        assert(other.log == ["enter", "drop:Warm Pad"] && src.lastAccepted);
+        h.click(10, 10);
+        assert(!h.ctx.isDragging() && src.downs > 0);
+    }
+
+    private ListGroup[] sampleGroups() {
+        return [
+            ListGroup("Bass", [ListRow("Electric Bass", "Analog Generator", "", null), ListRow("Synth Bass", "Analog Generator", "user", null)]),
+            ListGroup("Keys", [ListRow("Electric Piano", "FM Synth", "", null)]),
+            ListGroup("Effects", [ListRow("Room Reverb", "Reverb", "", null), ListRow("Tempo Delay", "Delay", "", null),
+                ListRow("Warm Overdrive", "Distortion", "", null)])
+        ];
+    }
+
+    unittest {
+        auto root = new Panel();
+        auto list = root.add(new GroupedList());
+        list.bounds = RectF(0, 0, 200, 300);
+        auto h = new Harness(root, RectF(0, 0, 400, 300));
+        list.setGroups(sampleGroups());
+        string[] selects;
+        string[] activations;
+        list.onSelect = (size_t g, ptrdiff_t r) {
+            selects ~= list.groups()[g].title ~ (r < 0 ? "" : ":" ~ list.groups()[g].rows[r].text);
+        };
+        list.onActivate = (size_t g, size_t r) { activations ~= list.groups()[g].rows[r].text; };
+        assert(list.selectedGroup() == -1 && list.contentHeight() == 3 * GroupedList.HEADER_H + 6 * GroupedList.ROW_H);
+        assert(list.headerRect(0) == RectF(0, 0, 200, GroupedList.HEADER_H));
+        assert(list.rowRect(0, 1) == RectF(0, GroupedList.HEADER_H + GroupedList.ROW_H, 200, GroupedList.ROW_H));
+        assert(list.rowRect(0, 2).isEmpty() && list.headerRect(3).isEmpty());
+
+        immutable RectF r01 = list.rowRect(0, 1);
+        h.click(50, r01.y + 5);
+        assert(list.selectedGroup() == 0 && list.selectedRow() == 1 && h.ctx.focused is list);
+        assert(selects == ["Bass:Synth Bass"] && activations.length == 0);
+        h.click(50, r01.y + 5);
+        assert(selects.length == 1);
+        h.doubleClick(50, list.rowRect(1, 0).y + 5);
+        assert(activations == ["Electric Piano"] && list.selectedGroup() == 1 && list.selectedRow() == 0);
+
+        assert(h.key(KeyCode.down));
+        assert(list.selectedGroup() == 2 && list.selectedRow() == -1);
+        assert(h.key(KeyCode.down) && list.selectedRow() == 0);
+        assert(h.key(KeyCode.up) && h.key(KeyCode.up));
+        assert(list.selectedGroup() == 1 && list.selectedRow() == 0);
+        assert(h.key(KeyCode.left) && list.selectedRow() == -1 && !list.groups()[1].collapsed);
+        assert(h.key(KeyCode.left) && list.groups()[1].collapsed && list.rowRect(1, 0).isEmpty());
+        assert(list.contentHeight() == 3 * GroupedList.HEADER_H + 5 * GroupedList.ROW_H);
+        assert(h.key(KeyCode.down) && list.selectedGroup() == 2 && list.selectedRow() == -1);
+        assert(h.key(KeyCode.up) && list.selectedGroup() == 1 && list.selectedRow() == -1);
+        assert(h.key(KeyCode.right) && !list.groups()[1].collapsed);
+        assert(h.key(KeyCode.right) && list.selectedRow() == 0);
+        assert(h.key(KeyCode.returnKey) && activations == ["Electric Piano", "Electric Piano"]);
+        assert(h.key(KeyCode.home) && list.selectedGroup() == 0 && list.selectedRow() == -1);
+        assert(h.key(KeyCode.returnKey) && list.groups()[0].collapsed && activations.length == 2);
+        assert(h.key(KeyCode.returnKey) && !list.groups()[0].collapsed);
+        assert(h.key(KeyCode.end) && list.selectedGroup() == 2 && list.selectedRow() == 2);
+        h.key(KeyCode.down);
+        assert(list.selectedGroup() == 2 && list.selectedRow() == 2);
+
+        immutable RectF hdr = list.headerRect(2);
+        h.click(50, hdr.y + 5);
+        assert(list.groups()[2].collapsed && list.selectedGroup() == 2 && list.selectedRow() == -1);
+        h.click(50, hdr.y + 5);
+        assert(!list.groups()[2].collapsed);
+        list.select(2, 1);
+        list.setCollapsed(2, true);
+        assert(list.selectedRow() == -1);
+        list.setCollapsed(2, false);
+
+        size_t g;
+        ptrdiff_t r;
+        assert(list.itemAt(Point2F(10, list.rowRect(2, 2).y + 2), g, r) && g == 2 && r == 2);
+        assert(!list.itemAt(Point2F(10, 290), g, r) && !list.itemAt(Point2F(300, 10), g, r));
+        list.select(9, 0);
+        assert(list.selectedGroup() == -1);
+        assert(!list.activateSelected());
+
+        list.select(0, 1);
+        ListGroup[] changed = sampleGroups();
+        changed[0].rows = [ListRow("Acoustic Bass", "", "", null)] ~ changed[0].rows;
+        list.setGroups(changed);
+        assert(list.selectedGroup() == 0 && list.selectedRow() == 2);
+        changed = sampleGroups();
+        changed[0].rows = changed[0].rows[0 .. 1];
+        list.setGroups(changed);
+        assert(list.selectedGroup() == -1 && list.selectedRow() == -1);
+        h.ctx.renderFrame(h.renderer, 1.0f);
+        list.setGroups(null);
+        assert(list.contentHeight() == 0.0f);
+        h.ctx.renderFrame(h.renderer, 1.0f);
+    }
+
+    unittest {
+        auto root = new Panel();
+        auto list = root.add(new GroupedList());
+        list.bounds = RectF(0, 0, 200, 100);
+        auto drop = root.add(new DropProbe(RectF(220, 0, 150, 200), "preset"));
+        auto h = new Harness(root, RectF(0, 0, 400, 300));
+        ListGroup[] many;
+        foreach (gi; 0 .. 3) {
+            ListGroup grp = ListGroup("G" ~ cast(char)('0' + gi), null);
+            foreach (ri; 0 .. 6) {
+                grp.rows ~= ListRow("row" ~ cast(char)('0' + gi) ~ cast(char)('0' + ri), "", "", null);
+            }
+            many ~= grp;
+        }
+        list.setGroups(many);
+        assert(list.contentHeight() > 100.0f && list.scrollOffset() == 0.0f);
+        assert(h.scroll(50, 50, 0, -60));
+        assert(list.scrollOffset() == 60.0f && list.headerRect(0).y == -60.0f);
+        assert(h.scroll(50, 50, 0, -100000));
+        assert(list.scrollOffset() == list.contentHeight() - 100.0f);
+        assert(!h.scroll(50, 50, 0, -10));
+        list.select(0, 0);
+        assert(list.rowRect(0, 0).y >= 0.0f && list.rowRect(0, 0).bottom() <= 100.0f);
+        list.select(2, 5);
+        assert(list.rowRect(2, 5).bottom() <= 100.01f && list.scrollOffset() > 0.0f);
+        h.ctx.renderFrame(h.renderer, 1.0f);
+        StudioTheme low = makeTheme(builtinPalettes()[$ - 1], ContrastMode.low);
+        h.ctx.setTheme(low);
+        h.ctx.renderFrame(h.renderer, 1.0f);
+
+        string[] menuFor;
+        list.rowMenuProvider = (size_t g, size_t r) {
+            menuFor ~= list.groups()[g].rows[r].text;
+            return [MenuItem("Rename", null)];
+        };
+        immutable RectF last = list.rowRect(2, 4);
+        h.click(50, last.y + 5, 1);
+        assert(menuFor == ["row24"] && list.selectedGroup() == 2 && list.selectedRow() == 4);
+        assert(h.ctx.overlays().length == 1 && cast(ContextMenu) h.ctx.overlays()[0] !is null);
+        h.ctx.closeAllOverlays();
+        list.scrollTo(0.0f);
+        h.click(50, list.headerRect(0).y + 5, 1);
+        assert(menuFor.length == 1 && h.ctx.overlays().length == 0);
+
+        int dragsAsked = 0;
+        list.dragPayloadProvider = (size_t g, size_t r) {
+            dragsAsked++;
+            return r == 5 ? DragPayload.init : DragPayload("preset", null, list.groups()[g].rows[r].text);
+        };
+        list.select(2, 5);
+        immutable RectF src = list.rowRect(2, 4);
+        h.down(50, src.y + 5);
+        h.move(52, src.y + 6);
+        assert(!h.ctx.isDragging() && dragsAsked == 0);
+        h.move(90, src.y + 20);
+        assert(h.ctx.isDragging() && dragsAsked == 1 && h.ctx.dragPayload().label == "row24");
+        h.move(260, 40);
+        h.up(260, 40);
+        assert(drop.log == ["enter", "drop:row24"] && !h.ctx.isDragging());
+        immutable RectF fixed = list.rowRect(2, 5);
+        h.down(50, fixed.y + 5);
+        h.move(120, fixed.y + 5);
+        assert(!h.ctx.isDragging() && dragsAsked == 2);
+        h.up(120, fixed.y + 5);
     }
 
     private enum float PI_F = 3.14159265358979f;

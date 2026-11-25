@@ -7,8 +7,11 @@
  *   Reads and writes versioned IFF-style 4CC chunked .msv (project) and .msym (module/MetaModule preset) files, skipping unknown chunks gracefully for forward compatibility.
  *   Optional chunks are written only when they carry non-default data: MIDI (MIDI-learn mappings) and MUSC (time
  *   signature and song key, four bytes: numerator, denominator, tonic pitch class, mode; bytes after the fourth
- *   are ignored so later builds can append fields). A file without MUSC is 4/4, C major. Neither chunk raised
- *   MSV_FORMAT_VERSION; older builds skip them.
+ *   are ignored so later builds can append fields). A file without MUSC is 4/4, C major. DRUM (pattern kinds
+ *   and drum lanes) holds one length-prefixed entry per drum pattern: pattern id, kind, lane count, then per lane
+ *   a name, module id and note; bytes after the lanes of an entry are ignored, entries of unknown kinds or for
+ *   unknown patterns are skipped, and a file without DRUM has only normal patterns. None of these chunks raised
+ *   MSV_FORMAT_VERSION; older builds skip them (and load drum patterns as normal patterns).
  *
  * Real-Time & Safety Contract:
  *   Off-RT @safe parser/serializer; fuzz-hardened against truncated, overflowing, or deeply nested chunk payloads.
@@ -19,7 +22,8 @@
  *
  * Planned API (Types, Functions & Hooks):
  *   - enum uint MSV_FORMAT_VERSION = 1
- *   - struct SavedModule / SavedWire / SavedPattern / SavedMidiMapping / LoadedProject / LoadedPreset
+ *   - struct SavedModule / SavedWire / SavedPattern (kind, lanes) / SavedDrumLane / SavedMidiMapping / LoadedProject /
+ *     LoadedPreset; PATTERN_KIND_NORMAL / PATTERN_KIND_DRUM; isValidPatternKind()
  *   - serializeProject(), saveProject(), loadProject(), loadProjectFile()
  *   - serializePreset(), savePreset(), loadPreset(), loadPresetFile()
  *   - isValidTempo(), isValidTimeSignature(), isValidKey(), hasNonDefaultMusicSettings(), isValidPatternShape(),
@@ -67,6 +71,10 @@ enum ubyte KEY_MODE_MAJOR = 0;
 enum ubyte KEY_MODE_MINOR = 1;
 enum ubyte DEFAULT_KEY_TONIC = 0;
 enum ubyte DEFAULT_KEY_MODE = KEY_MODE_MAJOR;
+enum ubyte PATTERN_KIND_NORMAL = 0;
+enum ubyte PATTERN_KIND_DRUM = 1;
+enum size_t MAX_LANE_NAME_LEN = 256;
+enum size_t MAX_DRUM_ENTRY_BYTES = 64 * (MAX_LANE_NAME_LEN + 16) + 64;
 
 /**
  * Serializable representation of one modular node, its @Param floats, optional extraBlob, and optional child MetaModule project.
@@ -100,7 +108,18 @@ struct SavedWire {
 }
 
 /**
- * Serializable representation of a tracker pattern matrix and display title.
+ * One lane of a drum pattern: the drum a track triggers. moduleId 0 means the lane is unassigned.
+ */
+struct SavedDrumLane {
+    string name;
+    uint moduleId = 0;
+    ubyte note = 60;
+}
+
+/**
+ * Serializable representation of a tracker pattern matrix and display title. A drum pattern (kind =
+ * PATTERN_KIND_DRUM) is the same cell matrix with one lane per track (lanes[i] describes track i; at most
+ * tracks lanes); normal patterns have no lanes.
  */
 struct SavedPattern {
     uint patternId = 0;
@@ -108,6 +127,8 @@ struct SavedPattern {
     uint lines = 64;
     string name;
     NoteCell[] cells;
+    ubyte kind = PATTERN_KIND_NORMAL;
+    SavedDrumLane[] lanes;
 }
 
 /**
@@ -194,6 +215,32 @@ bool isValidTimeSignature(uint numerator, uint denominator) @safe nothrow pure @
  */
 bool isValidKey(uint tonic, uint mode) @safe nothrow pure @nogc {
     return tonic < 12 && (mode == KEY_MODE_MAJOR || mode == KEY_MODE_MINOR);
+}
+
+/**
+ * Reports whether a pattern's kind and lane table are storable: the kind is normal or drum, a normal pattern has
+ * no lanes, and a drum pattern has at most one lane per track, each with a name of at most MAX_LANE_NAME_LEN
+ * bytes and a MIDI note in [0, 127].
+ *
+ * Params:
+ *   pat = Pattern.
+ *
+ * Returns:
+ *   True if valid.
+ */
+bool isValidPatternKind(scope const ref SavedPattern pat) @safe nothrow pure @nogc {
+    if (pat.kind == PATTERN_KIND_NORMAL) {
+        return pat.lanes.length == 0;
+    }
+    if (pat.kind != PATTERN_KIND_DRUM || pat.lanes.length > pat.tracks) {
+        return false;
+    }
+    foreach (ref l; pat.lanes) {
+        if (l.name.length > MAX_LANE_NAME_LEN || l.note > 127) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /**
@@ -350,6 +397,10 @@ bool validateProjectForSave(scope const ref LoadedProject proj, out string err, 
     foreach (i, ref pat; proj.patterns) {
         if (!isValidPatternShape(pat.tracks, pat.lines) || pat.name.length > MAX_STRING_LEN) {
             err = "Invalid pattern dimensions or name";
+            return false;
+        }
+        if (!isValidPatternKind(pat)) {
+            err = "Invalid pattern kind or drum lanes";
             return false;
         }
         foreach (ref other; proj.patterns[0 .. i]) {
@@ -601,6 +652,31 @@ bool serializeProject(const ref LoadedProject proj, out ubyte[] bytes, out strin
         }
     });
 
+    size_t drumCount = 0;
+    foreach (ref pat; proj.patterns) {
+        drumCount += pat.kind == PATTERN_KIND_DRUM ? 1 : 0;
+    }
+    if (drumCount > 0) {
+        w.writeChunk(['D', 'R', 'U', 'M'], (ref BinaryWriter cw) @safe nothrow {
+            cw.writeU32(cast(uint) drumCount);
+            foreach (ref pat; proj.patterns) {
+                if (pat.kind != PATTERN_KIND_DRUM) {
+                    continue;
+                }
+                BinaryWriter entry;
+                entry.writeU32(pat.patternId);
+                entry.writeU8(pat.kind);
+                entry.writeU32(cast(uint) pat.lanes.length);
+                foreach (ref l; pat.lanes) {
+                    entry.writeString(l.name);
+                    entry.writeU32(l.moduleId);
+                    entry.writeU8(l.note);
+                }
+                cw.writeLengthPrefixedBytes(entry.bytes());
+            }
+        });
+    }
+
     if (hasNonDefaultMusicSettings(proj)) {
         w.writeChunk(['M', 'U', 'S', 'C'], (ref BinaryWriter cw) @safe nothrow {
             cw.writeU8(proj.timeSigNumerator);
@@ -716,6 +792,7 @@ bool loadProject(
     proj.formatVersion = versionNum;
     bool hasMeta = false;
     bool hasMods = false;
+    SavedPattern[] drumEntries;
 
     while (!r.atEnd()) {
         char[4] chunkId;
@@ -839,6 +916,27 @@ bool loadProject(
                     proj.patterns[i] = pat;
                 }
             }
+        } else if (chunkId == ['D', 'R', 'U', 'M']) {
+            uint entryCount = 0;
+            if (!sub.readU32(entryCount) || entryCount > MAX_PATTERNS) {
+                err = "Invalid entry count in DRUM chunk";
+                return false;
+            }
+            foreach (_; 0 .. entryCount) {
+                const(ubyte)[] entryBytes;
+                if (!sub.readLengthPrefixedBytes(MAX_DRUM_ENTRY_BYTES, entryBytes)) {
+                    err = "Truncated or oversized DRUM chunk entry";
+                    return false;
+                }
+                SavedPattern info;
+                bool known = false;
+                if (!readDrumEntry(entryBytes, info, known, err)) {
+                    return false;
+                }
+                if (known) {
+                    drumEntries ~= info;
+                }
+            }
         } else if (chunkId == ['M', 'U', 'S', 'C']) {
             ubyte num = 0;
             ubyte den = 0;
@@ -931,6 +1029,65 @@ bool loadProject(
         err = "Duplicate module or pattern identifier";
         return false;
     }
+    foreach (ref info; drumEntries) {
+        foreach (ref pat; proj.patterns) {
+            if (pat.patternId != info.patternId) {
+                continue;
+            }
+            if (info.lanes.length > pat.tracks) {
+                err = "DRUM chunk entry has more lanes than its pattern has tracks";
+                return false;
+            }
+            pat.kind = info.kind;
+            pat.lanes = info.lanes;
+        }
+    }
+    return true;
+}
+
+/**
+ * Parses one DRUM chunk entry: pattern id, kind, lane count and lanes (name, module id, note). Bytes after the
+ * lanes are ignored so later builds can append fields. An entry of a kind this build does not know is skipped
+ * (known = false), so its pattern loads as a normal pattern.
+ *
+ * Params:
+ *   bytes = Entry payload.
+ *   info = Receives patternId, kind and lanes.
+ *   known = Receives false when the entry must be ignored.
+ *   err = Receives the reason on failure.
+ *
+ * Returns:
+ *   False for a truncated entry, too many lanes, an over-long lane name or a note above 127.
+ */
+private bool readDrumEntry(const(ubyte)[] bytes, out SavedPattern info, out bool known, out string err)
+        @safe nothrow {
+    BinaryReader r = BinaryReader(bytes);
+    uint laneCount = 0;
+    if (!r.readU32(info.patternId) || !r.readU8(info.kind) || !r.readU32(laneCount)) {
+        err = "Truncated DRUM chunk entry";
+        return false;
+    }
+    if (info.kind != PATTERN_KIND_DRUM) {
+        known = false;
+        return true;
+    }
+    if (laneCount > MAX_TRACKS) {
+        err = "Too many lanes in DRUM chunk entry";
+        return false;
+    }
+    info.lanes = new SavedDrumLane[laneCount];
+    foreach (i; 0 .. laneCount) {
+        if (!r.readString(MAX_LANE_NAME_LEN, info.lanes[i].name) || !r.readU32(info.lanes[i].moduleId)
+                || !r.readU8(info.lanes[i].note)) {
+            err = "Truncated or over-long lane in DRUM chunk entry";
+            return false;
+        }
+        if (info.lanes[i].note > 127) {
+            err = "Invalid lane note in DRUM chunk entry";
+            return false;
+        }
+    }
+    known = true;
     return true;
 }
 

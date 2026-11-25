@@ -438,6 +438,7 @@ int runGuiSelfTest(string[] args) {
         }
         immutable MenuExpect[] expect = [
             MenuExpect("Dracker", "Quit Dracker", "q", KeyModifiers.command),
+            MenuExpect("File", "New Project from Skeleton…", "N", KeyModifiers.command | KeyModifiers.shift),
             MenuExpect("File", "Open Project…", "o", KeyModifiers.command),
             MenuExpect("File", "Save Project", "s", KeyModifiers.command),
             MenuExpect("Edit", "Undo", "z", KeyModifiers.command),

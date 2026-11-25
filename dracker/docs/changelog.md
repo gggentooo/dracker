@@ -10,7 +10,111 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
 
 ---
 
-## [2026-11-25 18:30:00 KST]
+## [2026-11-25 18:58:52 KST]
+- **Author:** Claude Fable 5.2
+- **Affected Files:** `source/io/project_format.d`, `source/app/session.d`, `source/gui/widgets.d`, `tests/unit/persistence_test.d`, `tests/fuzz/project_format_fuzz.d`, `tests/unit/gui_test.d`, `docs/todo.md`, `docs/changelog.md`
+- **Reason / Summary:** First build tasks of two new features planned in `docs/todo.md`: pattern editor views (tracker, piano roll, drumpad) and the instrument library in the patchbay. The owner accepted the proposals of decision tasks T30–T37 (Rule 5). Nothing here is visible in the app yet.
+  - **Pattern kind and drum lanes in `.msv` (`io/project_format.d`, `app/session.d`, T38):**
+    - `SavedPattern` gains `kind` (`PATTERN_KIND_NORMAL`, `PATTERN_KIND_DRUM`) and `lanes` (`SavedDrumLane`: name, module id, note; lane i describes track i).
+    - New optional `DRUM` chunk with one length-prefixed entry per drum pattern, written only when a drum pattern exists. `MSV_FORMAT_VERSION` stays 1; older builds load drum patterns as normal patterns.
+    - Loading skips entries for unknown patterns and unknown kinds, ignores bytes after an entry's lanes, and refuses truncated entries, notes above 127, over-long names and more lanes than tracks.
+    - New `isValidPatternKind()`, also used by `validateProjectForSave()`.
+    - Session: `cloneSavedPattern` copies the new fields, and `resizePatternDirect` trims lanes to the new track count. Undoing that resize does not restore a trimmed lane yet (T41).
+  - **Drag-and-drop (`gui/widgets.d`, T39):**
+    - New `DragPayload` and `UiContext.beginDrag()` / `cancelDrag()` / `isDragging()` / `dragPayload()` / `dragTarget()` / `dragThreshold`.
+    - New `Widget` hooks `onDragQuery`, `onDragEnter`, `onDragMove`, `onDragLeave`, `onDrop`, `onDragFinished`.
+    - During a drag the context owns the pointer and draws the payload label beside it. Escape, a second button press or losing window focus cancels.
+    - Nothing starts a drag yet except `GroupedList`.
+  - **Grouped list (`gui/widgets.d`, T40):**
+    - New `GroupedList`, `ListGroup`, `ListRow`: collapsible groups, row selection, activation, keyboard navigation, wheel scrolling with a position indicator, row context menus, and rows as drag sources.
+    - Not used by any view yet.
+  - **Corrected timestamps:** four earlier entries in this file carried times that were not read from the clock (16:50, 18:30, 20:00, 21:30). They now show approximate real times from file modification times (16:45, 17:40, 18:08, 18:15).
+  - **Tests:**
+    - `persistence_test.d`: DRUM round trips (byte-identical re-save), each refusal on save and load, forward-compatibility cases, session load / save / duplicate / resize.
+    - `project_format_fuzz.d`: the seed has a drum pattern; the 100k run counts accepted projects with invalid kinds or lanes (must be 0); every byte of the DRUM chunk is swept through all 256 values.
+    - `gui_test.d`: drag targets and event order, refused drops, every cancel path, removal mid-drag; list selection, keys, collapsing, scrolling, menus and row drags.
+  - **Verification:**
+    - `dub test --compiler=ldc2 --config=headless`: 30 of 31 modules pass. The failure is the existing `tests/unit/views_patchbay_test.d:824` failure.
+    - `dub test --compiler=ldc2 --config=app`: 4 of 4 modules pass.
+    - `dub build --config=app` succeeds.
+    - The changed files compile with `ldc2 -w`.
+
+## [2026-11-25 18:15:00 KST]
+- **Author:** Claude Opus 5.5
+- **Affected Files:** `source/platform/macos/appkit.d`, `source/app/keymap.d`, `source/app/gui_shell.d`, `source/app/studio_app.d`, `source/gui/views/studio_root.d`, `source/gui/views/skeleton_panel.d`, `tests/unit/keymap_test.d`, `tests/unit/views_skeleton_panel_test.d`, `docs/manual.md`, `docs/todo.md`, `../architecture.md` (not tracked by git)
+- **Reason / Summary:** Skeleton project generator tasks T23–T26 (`docs/todo.md`). The generator is now usable in the app: **File ▸ New Project from Skeleton…** (⇧⌘N) opens the panel and **Create** makes the project.
+  - **Menu item (T23):**
+    - `MENU_ITEMS`: "New Project from Skeleton…" below New Project, ⇧⌘N.
+    - New `StudioAction.newSkeletonProject` (document-level), its default binding, and `StudioRoot.executeAction` → `openSkeletonPanel()`.
+    - The keymap test tables and the `--gui-selftest` menu check include it.
+  - **Create (T24):**
+    - `StudioRoot` connects `SkeletonPanel.onCreate`. Create generates the project, asks "Discard unsaved changes?" only when the open project is modified, opens it with `openProjectFromMemory()`, closes the panel, selects the Piano pattern, and shows "Created project <title>".
+    - Cancel in the question keeps the old project and the panel. Failures appear in the panel footer.
+    - New `SkeletonPanel.setCreateError()`, `createError()` and `close()`.
+  - **End-to-end check (T25):**
+    - Headless test from ⇧⌘N to Create with typed title and BPM, 3/4, G major, the circle-of-fifths preset and an FM bass. It checks the document, the pattern editor's 12-line bars, a save and reopen in a new session (compared field by field) and an offline render.
+    - New `--studio-gui-selftest` step "skeleton generator panel (menu)": ⇧⌘N opens the panel, Escape closes it. This step was compiled but not run; the GUI self-test drives the real window and plays audio.
+  - **Docs (T26):**
+    - `docs/manual.md`: new §13.9 *New Project from Skeleton*; File menu row; Appendix A ⇧⌘N; §1.3; §13.1; Appendix C rows 25–26.
+    - `../architecture.md`: new §7 (components, data flow, owner decisions, `MUSC` chunk) and the new files in the §3 tree.
+    - `docs/todo.md`: T23, T24, T26 done; T25 waits for the owner's GUI self-test run and hand check.
+  - **Verification:**
+    - `dub test --compiler=ldc2 --config=headless`: 30 of 31 modules pass. The failure is the existing `tests/unit/views_patchbay_test.d:824` failure.
+    - `dub test --compiler=ldc2 --config=app`: 4 of 4 modules pass.
+    - `dub build --config=app` succeeds.
+    - All changed files compile with `ldc2 -w`.
+    - Not run: `--studio-gui-selftest` and a hand check in the app.
+
+## [2026-11-25 18:08:00 KST]
+- **Author:** Claude Opus 5.5
+- **Affected Files:**
+  - New: `source/gui/views/skeleton_panel.d`, `tests/unit/views_skeleton_panel_test.d`
+  - Modified: `source/app/skeleton_gen.d`, `source/gui/views/studio_root.d`, `source/gui/widgets.d`, `tests/unit/skeleton_gen_test.d`, `tests/unit/gui_test.d`, `docs/todo.md`, `agents.md`
+- **Reason / Summary:** Skeleton project generator tasks T19–T22 (`docs/todo.md`): the generator itself and its panel. The panel cannot be opened from the menu yet (T23), and *Create* is not connected yet (T24), so there is no user-visible change in the app. The manual section follows with T26.
+  - **Generator (`app/skeleton_gen.d`, T19):**
+    - New: `SkeletonSpec`, `validateSpec()` (one sentence per problem), `specLinesPerBeat()`, `specLinesPerBar()`, `blockLines()`, `totalLines()`, `generateSkeleton()`.
+    - Output: Master Output plus Bass (one track, bass note in MIDI 36–47) and Piano (four tracks, root-position close voicing from MIDI 60–71), each wired to the master. One pattern and one clip per part (lanes 0 and 1), and a loop over the progression. Without chords the project has one empty 4-bar pattern.
+    - Choices beyond T05 (also listed in `docs/todo.md` → T19):
+      - Every note carries its module id.
+      - A triad after a seventh chord puts a note-off on piano track 4.
+      - The last-line note-off goes only into empty cells.
+      - An empty title becomes "Untitled".
+      - Wire gains are the approved sound-check levels (0.3 bass, 0.22 piano).
+      - Half-bar blocks are refused when a bar has an odd number of lines.
+  - **Panel (`gui/views/skeleton_panel.d`, `gui/views/studio_root.d`, T20–T22):**
+    - New `SkeletonPanel`, opened by `StudioRoot.openSkeletonPanel()`. It is a modal overlay that stays open on outside clicks and consumes every key; Escape and *Cancel* close it. The body scrolls in small windows, and Tab / Shift+Tab move through the controls.
+    - The footer shows why *Create* is disabled. *Create* calls `onCreate(spec)`, which T24 will connect. The last values are kept for the next opening.
+    - *Project* (T20): title, BPM, ticks per line, time signature, and key (tonic names follow the mode).
+    - *Chord progression* (T21):
+      - Chord field (Return or *Add*); parse errors are shown under it.
+      - Preset dropdown with *Insert* after the selected block.
+      - `ChordBlockStrip`: click to select; ←/→ select, ⌥←/⌥→ move, Delete removes; it scrolls horizontally.
+      - *Move* buttons, *Remove*, a length dropdown (½, 1, 2, 4 bars), *Clear*, and the total length.
+      - Labels follow the key; named chords keep their spelling.
+    - *Instruments* (T22): Bass and Piano dropdowns, enabled only when there are chords. *Load preset file…* loads a `.msym` that can play notes as "Preset: <name>". Failures are explained and keep the earlier choice.
+  - **Toolkit (`gui/widgets.d`), needed for a form inside an overlay:**
+    - Typed text and key releases now go to the focused widget inside the top overlay (before, to the overlay itself).
+    - A click inside a modal overlay moves focus.
+    - A click in a lower overlay closes the popups above it. Clicking a dropdown whose list is open just closes the list.
+    - New `Widget.closesOnOutsideClick()` (default true, so `ConfirmDialog` is unchanged).
+    - New `TextField.persistent` and `onEdit`: the field stays editable after Return, Escape and Tab reach the form, and the caret and focus ring show only while focused.
+    - Overlay behaviour outside modal overlays is otherwise unchanged; all earlier toolkit tests pass.
+  - **Tests:**
+    - `skeleton_gen_test.d` (T19): defaults and empty projects, cell-by-cell checks in C major 4/4 and A minor 3/4, mixed lengths, slash basses, 3/8 and 1/8 half bars, every validation message, the 4096-line limit, and offline renders with each part muted in turn.
+    - `views_skeleton_panel_test.d` (new):
+      - modality, editing, Escape / Cancel / Create, the reason text, remembered values, Tab order, and scrolling in a 800 × 420 window;
+      - chord entry, presets, strip mouse and keys, buttons, lengths, totals, key and mode relabelling, horizontal scrolling;
+      - instrument dropdowns with a fake dialog and real `.msym` files (success, cancel, unreadable, effect preset, no dialogs).
+    - `gui_test.d`: input routing and click focus in a modal overlay, popups closed by clicks below them, an overlay that stays open on outside clicks, dropdown toggling inside it, and persistent `TextField`.
+  - **Docs:** `docs/todo.md` updated; `agents.md` package map lists `skeleton_panel.d`.
+  - **Verification:**
+    - `dub test --compiler=ldc2 --config=headless`: 30 of 31 modules pass. The failure is the existing `tests/unit/views_patchbay_test.d:824` failure.
+    - `dub test --compiler=ldc2 --config=app`: 4 of 4 modules pass.
+    - `dub build --config=app` succeeds.
+    - All changed and new files compile with `ldc2 -w`.
+    - The panel has not been seen in the running app; it cannot be opened there until T23.
+
+## [2026-11-25 17:40:00 KST]
 - **Author:** Claude Opus 5.5
 - **Affected Files:** `source/app/chord_progression.d`, `source/app/session.d`, `source/gui/views/studio_context.d`, `source/gui/views/pattern_editor.d`, `source/gui/views/timeline_view.d`, `source/gui/views/transport_bar.d`, `tests/unit/chord_progression_test.d`, `tests/unit/studio_backend_test.d`, `tests/unit/views_pattern_editor_test.d`, `tests/unit/views_timeline_test.d`, `tests/unit/views_transport_test.d`, `docs/manual.md`, `docs/todo.md`
 - **Reason / Summary:** Skeleton project generator tasks T16, T17, T18 and the T29 count-in rule (`docs/todo.md`). Owner decisions (Rule 5): the default bass and piano are approved after listening to `build/default-sounds.wav`, so T13 is done; the count-in is one bar with at least two beats (T29).
@@ -49,7 +153,7 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
     - The changed files compile with `ldc2 -w`.
     - Not checked by hand in the running app: the SIG controls and the redrawn views.
 
-## [2026-11-25 16:50:00 KST]
+## [2026-11-25 16:45:00 KST]
 - **Author:** Claude Opus 5.5
 - **Affected Files:**
   - New: `source/app/chord_progression.d`, `tests/unit/chord_progression_test.d`, `tests/fuzz/chord_progression_fuzz.d`

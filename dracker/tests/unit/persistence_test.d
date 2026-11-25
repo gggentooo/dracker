@@ -4,7 +4,7 @@
  * Phase:        Phase 6 — Persistence, Undo/Redo, Keymap, Session & Importer Tests
  *
  * Purpose:
- *   Verifies bounds-checked BinaryReader/BinaryWriter, bit-exact .msv/.msym WAV round-trips (including Sampler PCM, WaveShaper custom curve, unknown chunks, and MetaModule child projects), UndoHistory + StudioSession bridge, opening a project built in memory (StudioSession.openProjectFromMemory), time signature and key storage (MUSC chunk), Keymap, and SMF/XM/SunVox importers.
+ *   Verifies bounds-checked BinaryReader/BinaryWriter, bit-exact .msv/.msym WAV round-trips (including Sampler PCM, WaveShaper custom curve, unknown chunks, and MetaModule child projects), UndoHistory + StudioSession bridge, opening a project built in memory (StudioSession.openProjectFromMemory), time signature and key storage (MUSC chunk), pattern kinds and drum lanes (DRUM chunk), Keymap, and SMF/XM/SunVox importers.
  *
  * Real-Time & Safety Contract:
  *   Executes RT audio quantum verification inside verifyZeroRtAllocationsNothrow and cleans up all temporary files via scope(exit).
@@ -35,9 +35,9 @@ version (unittest) {
     import io.audio_io : writeWavMemory;
     import io.binary_stream : BinaryReader, BinaryWriter;
     import io.importers.sunvox_importer : ImportReport;
-    import io.project_format : hasNonDefaultMusicSettings, KEY_MODE_MAJOR, KEY_MODE_MINOR, LoadedPreset,
-        LoadedProject, loadPreset, loadProject, SavedModule, SavedPattern, SavedWire, serializePreset,
-        serializeProject;
+    import io.project_format : hasNonDefaultMusicSettings, isValidPatternKind, KEY_MODE_MAJOR, KEY_MODE_MINOR,
+        LoadedPreset, LoadedProject, loadPreset, loadProject, PATTERN_KIND_DRUM, PATTERN_KIND_NORMAL, SavedDrumLane,
+        SavedModule, SavedPattern, SavedWire, serializePreset, serializeProject;
     import modules.control.metamodule : MetaMacroBinding, MetaModuleAsset;
     import modules.effects.waveshaper : WaveShaperCurveAsset;
     import modules.synths.sampler : createSamplerAssetFromMemory, SamplerSlotAsset;
@@ -936,5 +936,147 @@ version (unittest) {
         assert(s.openProjectFromMemory(waltz, err) && s.document().keyMode == KEY_MODE_MINOR);
         s.newEmptyProject(true);
         assert(s.document().timeSigNumerator == 4 && s.document().keyTonic == 0);
+    }
+
+    private LoadedProject makeDrumProject() {
+        LoadedProject proj = makeMemoryProject();
+        SavedPattern drums;
+        drums.patternId = 2;
+        drums.tracks = 3;
+        drums.lines = 16;
+        drums.name = "Beat";
+        drums.cells = new NoteCell[48];
+        drums.cells[0] = NoteCell.makeNote(36, 0.9f, 2);
+        drums.cells[4 * 3 + 1] = NoteCell.makeNote(38, 0.8f, 2);
+        drums.kind = PATTERN_KIND_DRUM;
+        drums.lanes = [SavedDrumLane("Kick", 2, 36), SavedDrumLane("Snare", 2, 38), SavedDrumLane("", 0, 60)];
+        proj.patterns ~= drums;
+        return proj;
+    }
+
+    private ubyte[] drumEntry(uint patternId, ubyte kind, const(SavedDrumLane)[] lanes, const(ubyte)[] extra = null) {
+        BinaryWriter e;
+        e.writeU32(patternId);
+        e.writeU8(kind);
+        e.writeU32(cast(uint) lanes.length);
+        foreach (ref l; lanes) {
+            e.writeString(l.name);
+            e.writeU32(l.moduleId);
+            e.writeU8(l.note);
+        }
+        e.writeBytes(extra);
+        return e.bytes().dup;
+    }
+
+    private ubyte[] withDrumChunk(const(ubyte)[] base, const(ubyte[])[] entries) {
+        BinaryWriter c;
+        c.writeU32(cast(uint) entries.length);
+        foreach (e; entries) {
+            c.writeLengthPrefixedBytes(e);
+        }
+        BinaryWriter w;
+        w.writeBytes(base);
+        w.writeChunk(['D', 'R', 'U', 'M'], c.bytes());
+        return w.bytes().dup;
+    }
+
+    unittest {
+        string err;
+        LoadedProject plain = makeMemoryProject();
+        assert(plain.patterns[0].kind == PATTERN_KIND_NORMAL && plain.patterns[0].lanes.length == 0);
+        ubyte[] plainBytes;
+        assert(serializeProject(plain, plainBytes, err) && !hasChunk(plainBytes, "DRUM"));
+
+        LoadedProject proj = makeDrumProject();
+        ubyte[] bytes;
+        assert(serializeProject(proj, bytes, err), err);
+        assert(hasChunk(bytes, "DRUM"));
+        LoadedProject back;
+        assert(loadProject(bytes, back, err), err);
+        assert(back.patterns.length == 2 && back.patterns[0].kind == PATTERN_KIND_NORMAL && back.patterns[0].lanes.length == 0);
+        assert(back.patterns[1].kind == PATTERN_KIND_DRUM && back.patterns[1].lanes == proj.patterns[1].lanes);
+        assert(back.patterns[1].cells == proj.patterns[1].cells && back.patterns[1].name == "Beat");
+        ubyte[] again;
+        assert(serializeProject(back, again, err) && again == bytes);
+
+        LoadedProject noLanes = makeDrumProject();
+        noLanes.patterns[1].lanes = null;
+        ubyte[] b2;
+        assert(serializeProject(noLanes, b2, err) && loadProject(b2, back, err));
+        assert(back.patterns[1].kind == PATTERN_KIND_DRUM && back.patterns[1].lanes.length == 0);
+
+        LoadedProject bad = makeDrumProject();
+        bad.patterns[1].lanes ~= SavedDrumLane("Extra", 2, 40);
+        assert(!isValidPatternKind(bad.patterns[1]));
+        assert(!serializeProject(bad, b2, err) && err == "Invalid pattern kind or drum lanes");
+        bad = makeDrumProject();
+        bad.patterns[1].lanes[0].note = 128;
+        assert(!serializeProject(bad, b2, err));
+        bad = makeDrumProject();
+        bad.patterns[1].kind = 2;
+        assert(!serializeProject(bad, b2, err));
+        bad = makeDrumProject();
+        bad.patterns[0].lanes = [SavedDrumLane("Stray", 2, 36)];
+        assert(!serializeProject(bad, b2, err));
+        bad = makeDrumProject();
+        char[] longName = new char[257];
+        longName[] = 'x';
+        bad.patterns[1].lanes[0].name = longName.idup;
+        assert(!serializeProject(bad, b2, err));
+        bad.patterns[1].lanes[0].name = longName[0 .. 256].idup;
+        assert(serializeProject(bad, b2, err) && loadProject(b2, back, err) && back.patterns[1].lanes[0].name.length == 256);
+
+        LoadedProject twoNormal = makeDrumProject();
+        twoNormal.patterns[1].kind = PATTERN_KIND_NORMAL;
+        twoNormal.patterns[1].lanes = null;
+        ubyte[] base;
+        assert(serializeProject(twoNormal, base, err) && !hasChunk(base, "DRUM"));
+        immutable SavedDrumLane[] two = [SavedDrumLane("Kick", 2, 36), SavedDrumLane("Hat", 2, 42)];
+
+        assert(loadProject(withDrumChunk(base, [drumEntry(2, PATTERN_KIND_DRUM, two, [0xAA, 0xBB, 0xCC])]), back, err), err);
+        assert(back.patterns[1].kind == PATTERN_KIND_DRUM && back.patterns[1].lanes == two);
+        assert(loadProject(withDrumChunk(base, [drumEntry(99, PATTERN_KIND_DRUM, two)]), back, err));
+        assert(back.patterns[0].kind == PATTERN_KIND_NORMAL && back.patterns[1].kind == PATTERN_KIND_NORMAL);
+        assert(loadProject(withDrumChunk(base, [drumEntry(2, 7, two)]), back, err));
+        assert(back.patterns[1].kind == PATTERN_KIND_NORMAL && back.patterns[1].lanes.length == 0);
+        assert(loadProject(withDrumChunk(base, [drumEntry(2, PATTERN_KIND_DRUM, two[0 .. 1]), drumEntry(2, PATTERN_KIND_DRUM, two)]),
+            back, err));
+        assert(back.patterns[1].lanes == two);
+        assert(loadProject(withDrumChunk(base, null), back, err) && back.patterns[1].kind == PATTERN_KIND_NORMAL);
+
+        immutable SavedDrumLane[] four = [SavedDrumLane("a", 2, 1), SavedDrumLane("b", 2, 2), SavedDrumLane("c", 2, 3),
+            SavedDrumLane("d", 2, 4)];
+        assert(!loadProject(withDrumChunk(base, [drumEntry(2, PATTERN_KIND_DRUM, four)]), back, err));
+        assert(err == "DRUM chunk entry has more lanes than its pattern has tracks");
+        assert(!loadProject(withDrumChunk(base, [drumEntry(2, PATTERN_KIND_DRUM, [SavedDrumLane("k", 2, 200)])]), back, err));
+        assert(err == "Invalid lane note in DRUM chunk entry");
+        ubyte[] cut = drumEntry(2, PATTERN_KIND_DRUM, two);
+        assert(!loadProject(withDrumChunk(base, [cut[0 .. $ - 2]]), back, err) && err.length > 0);
+        assert(!loadProject(withDrumChunk(base, [cut[0 .. 3]]), back, err) && err == "Truncated DRUM chunk entry");
+        BinaryWriter liar;
+        liar.writeBytes(base);
+        liar.writeChunk(['D', 'R', 'U', 'M'], cast(const(ubyte)[]) [cast(ubyte) 5, 0, 0, 0]);
+        assert(!loadProject(liar.bytes(), back, err) && err.length > 0);
+
+        StudioSession s = new StudioSession();
+        assert(s.initialize(44_100.0f));
+        scope (exit) s.shutdown();
+        assert(s.loadProjectFromBytes(bytes, err), err);
+        assert(s.document().patterns[1].kind == PATTERN_KIND_DRUM && s.document().patterns[1].lanes.length == 3);
+        ubyte[] saved;
+        assert(s.saveProjectToBytes(saved, err), err);
+        assert(loadProject(saved, back, err) && back.patterns[1].lanes == proj.patterns[1].lanes);
+        assert(s.doResizePattern(2, 2, 16));
+        assert(s.document().patterns[1].lanes.length == 2);
+        assert(s.saveProjectToBytes(saved, err), err);
+        assert(loadProject(saved, back, err) && back.patterns[1].tracks == 2 && back.patterns[1].lanes.length == 2);
+        assert(s.openProjectFromMemory(proj, err) && s.document().patterns[1].lanes[1].name == "Snare");
+        immutable uint dup = s.doDuplicatePattern(2);
+        assert(dup != 0);
+        foreach (ref pat; s.document().patterns) {
+            if (pat.patternId == dup) {
+                assert(pat.kind == PATTERN_KIND_DRUM && pat.lanes.length == 3 && pat.lanes[0].name == "Kick");
+            }
+        }
     }
 }

@@ -64,7 +64,9 @@ Startup sequence:
 - One module, **Master Output**. Everything you want to hear must eventually be wired into it.
 - One pattern, **Pattern 01**: 4 tracks × 64 lines.
 - One timeline clip that plays Pattern 01 from line 0.
-- Tempo **125 BPM**, **6 ticks per line**.
+- Tempo **125 BPM**, **6 ticks per line**, time signature **4/4**, key **C major**.
+
+To start from chords instead, use **File ▸ New Project from Skeleton…** ([§13.9](#139-new-project-from-skeleton)).
 
 ### 1.4 Core concepts
 
@@ -146,6 +148,7 @@ Closing the window with its close button works like **Quit Dracker**.
 | Item | Shortcut | What it does |
 |---|---|---|
 | New Project | ⌘N | Replaces the current project with an empty one ([§1.3](#13-what-a-new-project-contains)). Undo history is cleared. If there are unsaved changes, asks first ([§13.8](#138-unsaved-changes)). |
+| New Project from Skeleton… | ⇧⌘N | Opens the skeleton generator: set tempo, time signature, key and chords, and get a new project with a bass and a piano already playing them ([§13.9](#139-new-project-from-skeleton)). Asks first if there are unsaved changes. |
 | Open Project… | ⌘O | Opens an `.msv` project. If the file is invalid, the current project is kept and the error is shown in the status bar. If there are unsaved changes, asks first, before the file dialog ([§13.8](#138-unsaved-changes)). |
 | Save Project | ⌘S | Saves to the current file, or asks for a name if the project has never been saved |
 | Save Project As… | ⇧⌘S | Saves under a new name |
@@ -826,7 +829,7 @@ A project file stores everything about the song:
 - every timeline clip;
 - MIDI mappings;
 - the loop range;
-- the time signature (set with **SIG** in the transport bar, [§5](#5-the-transport-bar)) and the key of the song. The key has no control yet: new projects are in C major, and a project that sets a key keeps it when saved again. New projects are 4/4.
+- the time signature (set with **SIG** in the transport bar, [§5](#5-the-transport-bar)) and the key of the song. The key is chosen in the skeleton generator ([§13.9](#139-new-project-from-skeleton)) and has no other control yet; it is kept when the project is saved again. New projects are 4/4 in C major.
 
 It does **not** store editor state: edit octave, edit step, edit/follow, selection or zoom.
 
@@ -885,6 +888,75 @@ Appearance settings are saved separately from projects, in `~/Library/Applicatio
 While the question is shown, other shortcuts, piano keys and clicks elsewhere in the window do nothing. **Tab** moves between the two buttons. Open Project asks before the file dialog appears.
 
 **Logging out, restarting or shutting down** the Mac quits Dracker **without asking**, so that macOS is not held up: unsaved changes are lost, and a WAV export that is still running is cancelled. Save before you log out.
+
+
+### 13.9 New Project from Skeleton
+**File ▸ New Project from Skeleton…** (⇧⌘N) opens a panel that builds a starting project from a few musical choices: the tempo, time signature and key, and a chord progression played by a bass and a piano.
+
+The panel stays open until you press **Create**, **Cancel** or **Escape**; clicks outside it and keyboard shortcuts do nothing while it is open. **Tab** and **⇧Tab** move between its controls. In a small window its contents scroll. When you open it again, it shows the values you used last (until Dracker quits).
+
+**Project**
+
+| Field | Values |
+|---|---|
+| Title | Any text; empty becomes "Untitled" |
+| Tempo | BPM 20–999 and ticks per line 1–255, as in the transport bar |
+| Time signature | 1–16 beats over 2, 4, 8 or 16 ([§5](#5-the-transport-bar)) |
+| Key | Tonic and **Major** / **Minor** (natural minor). Tonic names follow the key: F, B♭, E♭, A♭ and D♭ major and their relative minors use flats (shown as "b"), the other keys sharps. |
+
+**Chord progression**
+
+Type chords into **Chords** and press **Return** (or **Add**). Each chord becomes a block of one bar at the end of the progression. Separate chords with spaces, commas, `-` or `->`. Two ways of writing a chord can be mixed:
+
+| Form | How to write it | Examples |
+|---|---|---|
+| Roman numeral (follows the key) | I–VII, counted on the key's own scale. Upper case = major family, lower case = minor family. Optional `b` or `#` before it (or ♭ / ♯). Upper-case endings: none (major), `7`, `maj7`, `aug` or `+`, `sus2`, `sus4`. Lower-case endings: none (minor), `7` (minor 7), `dim` or `°`, `dim7` or `°7`, `m7b5` or `ø`, `sus2`, `sus4`. No slash. | `ii V7 I`, `bVII`, `vii°`, `iiø7`; in A minor `III` is C major |
+| Chord name (stays as written) | A–G (capital) with `#` or `b`, then nothing (major), `m`, `dim`, `aug`, `sus2`, `sus4`, `7`, `maj7`, `m7`, `m7b5`, `dim7`. Optional bass note after `/`. | `Dm7, G7, Cmaj7`, `C/E`, `F#m`, `Bbmaj7` |
+
+If a chord can't be read, nothing is added and the reason appears under the field, for example *"Idim": Write diminished and half-diminished chords in lower case (vii°)*.
+
+**Presets:** choose one and press **Insert**. Its chords are inserted after the selected block, or at the end. Presets are written as Roman numerals, so they follow the key; only the presets of the key's mode are listed.
+
+| Major keys | Minor keys |
+|---|---|
+| Circle of fifths: iii - vi - ii - V - I | Minor pop: i - VI - III - VII |
+| Pop: I - V - vi - IV | Minor three chords: i - iv - v |
+| Fifties: I - vi - IV - V | Andalusian cadence: i - VII - VI - V |
+| Pop (minor start): vi - IV - I - V | |
+| Three chords: I - IV - V | |
+| Jazz ii-V-I: ii - V - I | |
+| Canon: I - V - vi - iii - IV - I - IV - V | |
+| 12-bar blues: I7 ×4, IV7 ×2, I7 ×2, V7, IV7, I7, V7 | |
+
+**Blocks:** the strip shows every block with both forms of its chord (for example **ii · Dm**) and its length; a longer block is a wider box. Click a block to select it, then:
+
+| To | Do this |
+|---|---|
+| Select the previous / next block | ← / → (click the strip first) |
+| Move the selected block | ⌥← / ⌥→, or **◀ Move** / **Move ▶** |
+| Remove it | Delete / ⌫, or **Remove** |
+| Change its length | The length menu: ½, 1, 2 or 4 bars |
+| Remove every block | **Clear** |
+
+The total length is shown next to the buttons ("6½ bars · 104 lines"). Changing the key relabels Roman-numeral blocks (ii is Dm in C major, Am in G major); chord names keep their names but get the numeral of the new key. Half-bar blocks need a bar with an even number of lines (not possible in 5/16, for example). The whole progression can be at most 4096 lines.
+
+**Instruments**
+
+**Bass** and **Piano** each offer **Default** (the built-in bass and electric-piano sounds), **Analog Generator**, **FM Synth**, **SpectraVoice**, or **Load preset file…**, which loads a module preset (`.msym`, [§13.6](#136-module-presets-msym)) that can play notes; it then appears in the list as "Preset: *name*". A file that can't be read, or a preset of a module that can't play notes (an effect, for example), is refused with a message and the earlier choice stays. The instrument menus are only available when there are chords.
+
+**Create**
+
+If anything is not valid, **Create** is disabled and the reason is shown at the bottom of the panel. Otherwise **Create** replaces the open project (asking first if it has unsaved changes; **Cancel** there keeps both the project and the panel). The new project contains:
+
+- the title, tempo, time signature and key you chose, and the **Master Output**;
+- with chords: a **Bass** module and a **Piano** module, both wired to the Master Output;
+- with chords: a **Bass** pattern (1 track) and a **Piano** pattern (4 tracks), each as long as the whole progression, one clip each at the start of lanes 1 and 2, and the loop set over the progression.
+  - The bass plays each chord's root (or the note after the slash), between C2 and B2, held until the next chord.
+  - The piano plays every note of the chord in root position, one note per track, from a root between C4 and B4; three-note chords leave track 4 empty.
+  - The last line of both patterns stops every note.
+- without chords: one empty 4-track pattern of 4 bars and no instruments.
+
+The project is new and unsaved (no file name), its undo history is empty, and the pattern editor shows the **Piano** pattern. The status bar shows "Created project *title*".
 
 ---
 
@@ -1016,6 +1088,7 @@ Opening a project or starting a new one clears the history.
 | ⌘L | Toggle loop (whole song) |
 | ⌘Z / ⇧⌘Z | Undo / redo |
 | ⌘N / ⌘O / ⌘S / ⇧⌘S | New / open / save / save as |
+| ⇧⌘N | New project from skeleton (generator panel) |
 | ⌥⌘S / ⌥⌘O | Save the selected module as a preset / load a preset as a new module |
 | ⌘E | Export WAV |
 | ⌘, | Appearance panel |
@@ -1151,6 +1224,8 @@ These are known limitations of the current build. Please report behavior that *d
 | 22 | Vorbis Player | There is no way to load a file |
 | 23 | Export | Stems, MIDI/XM/SunVox import and autosave are not exposed in the GUI |
 | 24 | Panic | In the GUI, Panic stops the transport; it doesn't send a separate all-notes-off |
+| 25 | Files | The song key can only be chosen in the skeleton generator; there is no control to change it afterwards ([§13.9](#139-new-project-from-skeleton)) |
+| 26 | Files | Creating a project from a skeleton cannot be undone (like New and Open, it clears the undo history) |
 
 ### Suggested QA passes
 1. **Audio path:**

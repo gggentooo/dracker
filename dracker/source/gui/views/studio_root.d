@@ -29,7 +29,8 @@
  * Planned API (Types, Functions & Hooks):
  *   - class StudioRoot : Widget (views, appCommandHandler, executeAction(), activeSink(), noteInteraction(),
  *     openAppearancePanel(), appearancePanel(), onAppearanceChanged, requestClose(), confirmDiscardThen(),
- *     unsavedPrompt())
+ *     unsavedPrompt(), openSkeletonPanel() (newSkeletonProject action, ⇧⌘N; Create generates and opens the project),
+ *     skeletonPanel())
  *
  * See_Also:
  *   architecture.md, dev_plan.md (Phase 8.6)
@@ -41,6 +42,8 @@ import foundation.types : ModuleId;
 import gui.layout : Axis, SplitPaneNode;
 import gui.renderer : FontId, IRenderer2D, Point2F, RectF;
 import gui.theme : ContrastMode, StudioTheme;
+import app.skeleton_gen : generateSkeleton, SkeletonSpec;
+import io.project_format : LoadedProject;
 import gui.views.appearance_panel : AppearancePanel;
 import gui.views.param_rack : ParamRackView;
 import gui.views.patchbay_view : PatchbayView;
@@ -48,6 +51,7 @@ import gui.views.pattern_editor : PatternEditorView;
 import gui.views.piano_view : PianoKeyboardView;
 import gui.views.sample_editor : SampleEditorView;
 import gui.views.scope_view : ScopeView;
+import gui.views.skeleton_panel : SkeletonPanel;
 import gui.views.studio_context : StudioContext;
 import gui.views.timeline_view : TimelineView;
 import gui.views.transport_bar : TransportBarView;
@@ -86,6 +90,8 @@ final class StudioRoot : Widget {
     private Widget lastSink_;
     private AppearancePanel appearancePanel_;
     private ConfirmDialog unsavedPrompt_;
+    private SkeletonPanel skeletonPanel_;
+    private SkeletonSpec skeletonSpec_;
     private uint[uint] heldPianoKeys_;
 
     /**
@@ -151,6 +157,90 @@ final class StudioRoot : Widget {
         appearancePanel_ = p;
         c.openOverlay(p);
         return p;
+    }
+
+    /**
+     * Opens the "New Project from Skeleton" panel centred in the window (at most SkeletonPanel.WIDTH × HEIGHT,
+     * smaller in a small window, where its body scrolls), showing the values it had when it was last closed in
+     * this run of the app. Does nothing when it is already open.
+     *
+     * Returns:
+     *   The open panel, or null when the root is not attached to a UiContext.
+     */
+    SkeletonPanel openSkeletonPanel() {
+        auto c = context;
+        if (c is null) {
+            return null;
+        }
+        if (skeletonPanel_ !is null) {
+            return skeletonPanel_;
+        }
+        SkeletonPanel p = new SkeletonPanel(ctx, skeletonSpec_);
+        immutable RectF vp = c.viewport().isEmpty() ? bounds : c.viewport();
+        immutable float w = SkeletonPanel.WIDTH < vp.w ? SkeletonPanel.WIDTH : vp.w;
+        immutable float h = SkeletonPanel.HEIGHT < vp.h ? SkeletonPanel.HEIGHT : vp.h;
+        p.bounds = RectF(vp.x + (vp.w - w) * 0.5f, vp.y + (vp.h - h) * 0.5f, w, h);
+        p.onClosed = (SkeletonSpec last) {
+            skeletonSpec_ = last;
+            skeletonPanel_ = null;
+            invalidate();
+        };
+        p.onCreate = (ref const SkeletonSpec spec) => createSkeletonProject(p, spec);
+        skeletonPanel_ = p;
+        c.openOverlay(p);
+        return p;
+    }
+
+    /**
+     * Create handler of the skeleton panel (T24): generates the project, asks "Discard unsaved changes?" when the
+     * open project is modified (Cancel keeps the old project and the panel), then opens it as a new unsaved
+     * document, closes the panel, selects the Piano pattern (or the only pattern) in the pattern editor and shows
+     * "Created project <title>". A failure keeps the old project and shows the reason in the panel.
+     *
+     * Params:
+     *   p = Panel.
+     *   spec = Settings from the panel.
+     *
+     * Returns:
+     *   Always false: the panel is closed here once the project is open (possibly after the question).
+     */
+    private bool createSkeletonProject(SkeletonPanel p, const ref SkeletonSpec spec) {
+        LoadedProject proj;
+        string err;
+        if (!generateSkeleton(spec, proj, err)) {
+            p.setCreateError(err);
+            return false;
+        }
+        confirmDiscardThen("Creating a new project discards them.", () { openSkeletonProject(p, proj); });
+        return false;
+    }
+
+    private void openSkeletonProject(SkeletonPanel p, LoadedProject proj) {
+        string err;
+        if (!ctx.session.openProjectFromMemory(proj, err)) {
+            p.setCreateError("Could not create the project: " ~ err);
+            return;
+        }
+        p.close();
+        uint show = proj.patterns.length > 0 ? proj.patterns[0].patternId : 1;
+        foreach (ref pat; proj.patterns) {
+            if (pat.name == "Piano") {
+                show = pat.patternId;
+            }
+        }
+        ctx.selectPattern(show);
+        ctx.setStatus("Created project " ~ proj.title);
+        invalidate();
+    }
+
+    /**
+     * Returns the open skeleton generator panel.
+     *
+     * Returns:
+     *   Panel, or null when closed.
+     */
+    SkeletonPanel skeletonPanel() {
+        return skeletonPanel_;
     }
 
     /**
@@ -353,6 +443,9 @@ final class StudioRoot : Widget {
                 break;
             case StudioAction.openAppearance:
                 openAppearancePanel();
+                break;
+            case StudioAction.newSkeletonProject:
+                openSkeletonPanel();
                 break;
             case StudioAction.toggleContrast:
                 ctx.toggleContrast();
