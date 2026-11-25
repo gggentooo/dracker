@@ -453,4 +453,82 @@ version (unittest) {
         assert(parentMeta.desc.vtable.serializeExtra(parentMeta.state, metaBlob) && metaBlob.length > 0);
         assert(parentMeta.desc.vtable.deserializeExtra(parentMeta.state, metaBlob, 44_100.0f));
     }
+
+    unittest {
+        Engine eng;
+        assert(eng.tryInit(44_100.0f));
+        scope (exit) eng.releaseAllOwnedResources();
+        eng.setTempo(125.0, 6);
+        enum size_t lineFrames = 5292;
+        enum size_t total = 18 * lineFrames;
+        float[] mono = new float[total + 64];
+        float[64] bl = 0.0f;
+        float[64] br = 0.0f;
+        float[][2] outs = [bl[], br[]];
+        const(float[])[2] ins = [null, null];
+        EngineTelemetry tel;
+
+        assert(eng.pushCommand(EngineCommand.makePlayCountIn(0, 16, 4)));
+        eng.processHostBuffer(outs, ins, 64);
+        assert(eng.readTelemetry(tel) && tel.playing && tel.countingIn && tel.currentLine == -16);
+        mono[0 .. 64] = bl[];
+        verifyZeroRtAllocationsNothrow(() @nogc nothrow {
+            size_t pos = 64;
+            while (pos < total) {
+                eng.processHostBuffer(outs, ins, 64);
+                mono[pos .. pos + 64] = bl[];
+                pos += 64;
+            }
+        });
+        assert(eng.countInClicks() == 4 && !eng.isCountingIn() && eng.isPlaying());
+        assert(eng.readTelemetry(tel) && !tel.countingIn && tel.currentLine >= 1);
+
+        size_t[] onsets;
+        size_t lastLoud = 0;
+        bool any = false;
+        foreach (i; 0 .. total) {
+            if (fabs(mono[i]) > 1.0e-3f) {
+                if (!any || i - lastLoud > 2000) {
+                    onsets ~= i;
+                }
+                lastLoud = i;
+                any = true;
+            }
+        }
+        assert(onsets.length == 4);
+        foreach (k, o; onsets) {
+            immutable size_t expected = k * 4 * lineFrames;
+            assert(o >= expected && o <= expected + 2);
+        }
+        float peak0 = 0.0f;
+        float peak1 = 0.0f;
+        foreach (i; 0 .. 2000) {
+            peak0 = fabs(mono[i]) > peak0 ? fabs(mono[i]) : peak0;
+            peak1 = fabs(mono[onsets[1] + i]) > peak1 ? fabs(mono[onsets[1] + i]) : peak1;
+        }
+        assert(peak0 > peak1 * 1.2f && peak0 < 0.4f);
+        assert(lastLoud < 13 * lineFrames);
+        foreach (i; 16 * lineFrames .. total) {
+            assert(mono[i] == 0.0f);
+        }
+
+        assert(eng.pushCommand(EngineCommand.makePlayCountIn(40, 16, 4)));
+        eng.processHostBuffer(outs, ins, 64);
+        assert(eng.readTelemetry(tel) && tel.currentLine == 24 && tel.countingIn && eng.countInClicks() == 1);
+        assert(eng.pushCommand(EngineCommand.makeStop()));
+        eng.processHostBuffer(outs, ins, 64);
+        assert(!eng.isCountingIn() && !eng.isPlaying());
+        foreach (_; 0 .. 40) {
+            eng.processHostBuffer(outs, ins, 64);
+            foreach (v; bl) {
+                assert(v == 0.0f);
+            }
+        }
+
+        assert(eng.pushCommand(EngineCommand.makePlayCountIn(40, 16, 4)));
+        eng.processHostBuffer(outs, ins, 64);
+        assert(eng.pushCommand(EngineCommand.makeSeekLine(5)));
+        eng.processHostBuffer(outs, ins, 64);
+        assert(!eng.isCountingIn() && eng.readTelemetry(tel) && tel.currentLine == 5);
+    }
 }

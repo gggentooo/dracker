@@ -418,6 +418,7 @@ final class PianoKeyboardView : Widget {
         if (pressedMod_ != 0) {
             ctx_.session.releaseLiveNote(ModuleId(pressedMod_), Engine.PIANO_KEY_TAG_BASE | cast(uint) pressedMidi_);
         }
+        ctx_.liveInputNoteOff(StudioContext.PIANO_TAKE_TAG | cast(uint) pressedMidi_);
         pressedMidi_ = -1;
         pressedMod_ = 0;
         invalidate();
@@ -565,9 +566,10 @@ final class PianoKeyboardView : Widget {
             ctx_.session.triggerLiveNote(ModuleId(pressedMod_), Engine.PIANO_KEY_TAG_BASE | cast(uint) midi,
                 cast(float) midi, DEFAULT_VELOCITY);
         }
-        if (ctx_.recording) {
+        if (ctx_.editMode) {
             ctx_.injectMidiNote(MidiNoteEvent(0, midi, RECORD_VELOCITY, ctx_.telemetry.engine.currentLine));
         }
+        ctx_.liveInputNoteOn(StudioContext.PIANO_TAKE_TAG | midi, midi, RECORD_VELOCITY / 127.0f, pressedMod_);
         invalidate();
     }
 

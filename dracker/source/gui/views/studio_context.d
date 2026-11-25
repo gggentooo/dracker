@@ -5,14 +5,18 @@
  *
  * Purpose:
  *   The single object every studio view is constructed with. It exposes the StudioSession (all document edits go
- *   through it), the theme, shared selection state (selected module, current pattern, recording, follow-playhead,
+ *   through it), the theme, shared selection state (selected module, current pattern, edit mode, follow-playhead,
  *   edit step, edit octave), per-frame telemetry (StudioTelemetry + ScopeHistory), scope-tap allocation, live MIDI
- *   note events for recording, a status line, and platform services behind small interfaces (audio/MIDI control,
+ *   note events for edit-mode entry, a status line, and platform services behind small interfaces (audio/MIDI control,
  *   file dialogs, clipboard, appearance backend and preferences store) so every view stays headless-testable with
  *   fakes. Phase 8.5: applyAppearance() is the one place an appearance switch happens (theme build, renderer
  *   clear color and glyph gamma, font families and glyph-cache flush, themeRevision bump, listener notification
  *   for UiContext relayout, persistence); loadAppearance() restores preferences before the first frame and falls
  *   back to defaults with a status message when they are missing or corrupt.
+ *   Edit mode vs. live record mode: editMode (setEditMode()) writes played notes at the pattern editor cursor;
+ *   live record (startLiveRecord()/stopLiveRecord()/toggleLiveRecord()) runs a session take with a count-in and
+ *   captures every QWERTY, MIDI and on-screen piano note (setQwertyNote()/clearQwertyNote(), MIDI packets,
+ *   liveInputNoteOn()/liveInputNoteOff()) into a new pattern. The two modes are mutually exclusive.
  *
  * Real-Time & Safety Contract:
  *   UI thread only. tick() is called once per frame by the studio scene before input dispatch and drawing.
@@ -26,7 +30,9 @@
  *   - class StudioContext : tick(), selectModule(), selectPattern(), requestScopeTaps(), takeMidiNotes(),
  *     setStatus(), revision counters, setEditOctave(), octaveRevision(), setQwertyNote(), clearQwertyNote(),
  *     clearVisualNotes(), hasHeldExternalNotes(), noteHighlightRevision(), activeNoteMask(), isNoteHighlighted(),
- *     applyAppearance(), loadAppearance(), saveAppearance(), toggleContrast(), themeRevision(), onThemeChanged()
+ *     applyAppearance(), loadAppearance(), saveAppearance(), toggleContrast(), themeRevision(), onThemeChanged(),
+ *     setEditMode(), liveRecording(), countingIn(), startLiveRecord(), stopLiveRecord(), toggleLiveRecord(),
+ *     liveInputNoteOn(), liveInputNoteOff()
  *
  * See_Also:
  *   architecture.md, dev_plan.md (Phase 8)
@@ -37,6 +43,7 @@ import app.audio_host : AudioLoadTelemetry;
 import app.session : MidiNoteEvent, StudioSession;
 import app.telemetry : makeStudioTelemetry, ScopeHistory, StudioTelemetry;
 import foundation.types : ModuleId;
+import std.format : format;
 import gui.appearance : AppearanceSettings, decodeAppearance, encodeAppearance, FontResolution, IAppearanceBackend,
     IAppearanceStore, themeFor;
 import gui.theme : ContrastMode, StudioTheme;
@@ -165,7 +172,11 @@ final class StudioContext {
     ScopeHistory scopes;
     StudioTelemetry telemetry;
 
-    bool recording = false;
+    enum uint QWERTY_TAKE_TAG = 0x1000_0000u;
+    enum uint MIDI_TAKE_TAG = 0x2000_0000u;
+    enum uint PIANO_TAKE_TAG = 0x3000_0000u;
+
+    bool editMode = false;
     bool followPlayhead = true;
     uint editStep = 1;
     int editOctave = 4;
@@ -186,6 +197,7 @@ final class StudioContext {
     private uint[128][16] midiHeldMod_;
     private ulong noteHighlightRevision_ = 1;
     private ulong octaveRevision_ = 1;
+    private long countInBeatShown_ = long.min;
 
     /**
      * Creates a context over session.
@@ -235,6 +247,7 @@ final class StudioContext {
             }
         }
         telemetry = makeStudioTelemetry(session.engine(), haveLoad ? &load : null);
+        updateLiveTake();
         const doc = session.document();
         if (selectedModule_ != 0 && !moduleExists(selectedModule_)) {
             selectModule(0);
@@ -447,6 +460,7 @@ final class StudioContext {
         }
         qwertyHeld_[keyCode] = HeldQwerty(moduleId, midi);
         noteHighlightRevision_++;
+        liveInputNoteOn(QWERTY_TAKE_TAG | (keyCode & 0xFFFFu), midi, 1.0f, moduleId);
     }
 
     /**
@@ -460,6 +474,167 @@ final class StudioContext {
             qwertyHeld_.remove(keyCode);
             noteHighlightRevision_++;
         }
+        liveInputNoteOff(QWERTY_TAKE_TAG | (keyCode & 0xFFFFu));
+    }
+
+    /**
+     * Turns edit mode (played notes are written at the pattern editor cursor) on or off; turning it on ends a
+     * running live-record take first.
+     *
+     * Params:
+     *   on = New edit-mode state.
+     */
+    void setEditMode(bool on) {
+        if (on && liveRecording()) {
+            stopLiveRecord();
+        }
+        editMode = on;
+        setStatus(on ? "Edit on" : "Edit off");
+    }
+
+    /**
+     * Reports whether a live-record take (count-in or capture) is running.
+     *
+     * Returns:
+     *   True while recording.
+     */
+    bool liveRecording() const {
+        return session.liveTakeActive();
+    }
+
+    /**
+     * Reports whether the live-record count-in is still running.
+     *
+     * Returns:
+     *   True during the count-in of an active take.
+     */
+    bool countingIn() const {
+        return liveRecording() && telemetry.engine.countingIn;
+    }
+
+    /**
+     * Starts a live-record take at the playhead line with the selected module (edit mode is turned off).
+     *
+     * Returns:
+     *   True if the take started; false (with a status message) when no instrument module is selected.
+     */
+    bool startLiveRecord() {
+        if (liveRecording()) {
+            return false;
+        }
+        if (!isInstrumentModule(selectedModule_)) {
+            setStatus("Select an instrument module to record");
+            return false;
+        }
+        immutable double pos = session.liveSongPosition();
+        immutable long start = pos > 0.0 ? cast(long) pos : 0;
+        editMode = false;
+        if (!session.beginLiveTake(start)) {
+            setStatus("Could not start recording");
+            return false;
+        }
+        countInBeatShown_ = long.min;
+        setStatus(format("Count-in %d", StudioSession.COUNT_IN_BEATS));
+        return true;
+    }
+
+    /**
+     * Ends the running take; a non-empty take becomes the current pattern.
+     *
+     * Returns:
+     *   New pattern id, or 0 when nothing was recorded or no take was running.
+     */
+    uint stopLiveRecord() {
+        if (!liveRecording()) {
+            return 0;
+        }
+        immutable size_t notes = session.liveTakeNoteCount();
+        immutable uint pid = session.endLiveTake();
+        clearVisualNotes();
+        if (pid != 0) {
+            selectPattern(pid);
+            string name;
+            foreach (ref p; session.document().patterns) {
+                if (p.patternId == pid) name = p.name;
+            }
+            setStatus(format("Recorded %s (%d notes)", name, notes));
+        } else {
+            setStatus("Recording stopped: no notes recorded");
+        }
+        return pid;
+    }
+
+    /**
+     * Starts or stops a live-record take.
+     */
+    void toggleLiveRecord() {
+        if (liveRecording()) {
+            stopLiveRecord();
+        } else {
+            startLiveRecord();
+        }
+    }
+
+    /**
+     * Feeds a live note-on into the running take (no-op without one).
+     *
+     * Params:
+     *   tag = Unique source tag (QWERTY_TAKE_TAG / MIDI_TAKE_TAG / PIANO_TAKE_TAG plus the key or note).
+     *   midi = MIDI note.
+     *   velocity = Normalized velocity.
+     *   moduleId = Module playing the note.
+     */
+    void liveInputNoteOn(uint tag, ubyte midi, float velocity, uint moduleId) {
+        if (liveRecording()) {
+            session.liveTakeNoteOn(tag, midi, velocity, moduleId);
+        }
+    }
+
+    /**
+     * Feeds a live note release into the running take (no-op without one).
+     *
+     * Params:
+     *   tag = Tag passed to liveInputNoteOn().
+     */
+    void liveInputNoteOff(uint tag) {
+        if (liveRecording()) {
+            session.liveTakeNoteOff(tag);
+        }
+    }
+
+    private bool isInstrumentModule(uint modId) const {
+        if (modId == 0) {
+            return false;
+        }
+        foreach (ref m; session.document().modules) {
+            if (m.id == modId) {
+                return m.typeId != "core.output";
+            }
+        }
+        return false;
+    }
+
+    private void updateLiveTake() {
+        if (!liveRecording()) {
+            return;
+        }
+        if (session.liveTakeShouldEnd()) {
+            stopLiveRecord();
+            return;
+        }
+        immutable double remaining = cast(double) session.liveTakeStartLine() - session.liveSongPosition();
+        if (!telemetry.engine.playing) {
+            return;
+        }
+        long beat = 0;
+        if (telemetry.engine.countingIn && remaining > 0.0) {
+            beat = cast(long)((remaining + StudioSession.LINES_PER_BEAT - 1e-9) / StudioSession.LINES_PER_BEAT);
+        }
+        if (beat == countInBeatShown_) {
+            return;
+        }
+        countInBeatShown_ = beat;
+        setStatus(beat > 0 ? format("Count-in %d", beat) : "Recording");
     }
 
     /**
@@ -677,12 +852,15 @@ final class StudioContext {
             immutable ubyte ch = pkt.status() & 0x0F;
             if (kind == 0x90 && pkt.data2() > 0) {
                 immutable ubyte note = pkt.data1() & 0x7F;
+                liveInputNoteOn(MIDI_TAKE_TAG | (cast(uint) ch << 7) | note, note, (pkt.data2() & 0x7F) / 127.0f,
+                    selectedModule_);
                 if (midiHeldMod_[ch][note] != selectedModule_) {
                     midiHeldMod_[ch][note] = selectedModule_;
                     changed = true;
                 }
             } else if (kind == 0x80 || kind == 0x90) {
                 immutable ubyte note = pkt.data1() & 0x7F;
+                liveInputNoteOff(MIDI_TAKE_TAG | (cast(uint) ch << 7) | note);
                 if (midiHeldMod_[ch][note] != 0) {
                     midiHeldMod_[ch][note] = 0;
                     changed = true;

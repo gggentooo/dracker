@@ -42,6 +42,7 @@ version (unittest) {
         Expect(StudioAction.playToggle, 36, CMD),
         Expect(StudioAction.stop, 53, 0),
         Expect(StudioAction.recordToggle, 15, CMD),
+        Expect(StudioAction.editToggle, 15, CMD | SHIFT),
         Expect(StudioAction.octaveDown, 122, 0),
         Expect(StudioAction.octaveUp, 120, 0),
         Expect(StudioAction.undo, 6, CMD),
@@ -94,6 +95,7 @@ version (unittest) {
         Expect(StudioAction.selectAll, 0, CMD),
         Expect(StudioAction.playToggle, 36, CMD),
         Expect(StudioAction.recordToggle, 15, CMD),
+        Expect(StudioAction.editToggle, 15, CMD | SHIFT),
         Expect(StudioAction.panic, 47, CMD),
         Expect(StudioAction.zoomIn, 24, CMD),
         Expect(StudioAction.zoomOut, 27, CMD),
@@ -145,7 +147,8 @@ version (unittest) {
             }
             assert(bound);
         }
-        assert(km.resolveAction(8, CMD | ALT) == StudioAction.max && StudioAction.max == StudioAction.toggleContrast);
+        assert(km.resolveAction(8, CMD | ALT) == StudioAction.toggleContrast);
+        assert(km.resolveAction(15, CMD | SHIFT) == StudioAction.max && StudioAction.max == StudioAction.editToggle);
     }
 
     unittest {
@@ -203,7 +206,8 @@ version (unittest) {
 
     unittest {
         immutable StudioAction[] documentLevel = [
-            StudioAction.playToggle, StudioAction.stop, StudioAction.recordToggle, StudioAction.octaveUp,
+            StudioAction.playToggle, StudioAction.stop, StudioAction.recordToggle, StudioAction.editToggle,
+            StudioAction.octaveUp,
             StudioAction.octaveDown, StudioAction.undo, StudioAction.redo, StudioAction.saveProject,
             StudioAction.saveProjectAs, StudioAction.openProject, StudioAction.newProject, StudioAction.panic,
             StudioAction.playPattern, StudioAction.toggleLoop, StudioAction.exportWav, StudioAction.quit,

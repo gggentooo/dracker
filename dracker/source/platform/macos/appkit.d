@@ -180,6 +180,7 @@ private immutable MenuSpec[][] MENU_ITEMS = [
     [
         MenuSpec("Play / Stop", "\r", KeyModifiers.command, 36, null),
         MenuSpec("Record", "r", KeyModifiers.command, 15, null),
+        MenuSpec("Edit Mode", "R", KeyModifiers.command | KeyModifiers.shift, 15, null),
         MenuSpec("Panic (All Notes Off)", ".", KeyModifiers.command, 47, null)
     ],
     [

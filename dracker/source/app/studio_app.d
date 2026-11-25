@@ -307,7 +307,7 @@ final class StudioScene : IGuiScene {
 
     override bool isAnimating() {
         return ui_.isAnimating() || ctx_.session.isPlaying() || exportWatch_
-            || (ctx_.recording && ctx_.audio !is null && ctx_.audio.running());
+            || ((ctx_.editMode || ctx_.liveRecording()) && ctx_.audio !is null && ctx_.audio.running());
     }
 
     /**
@@ -718,7 +718,7 @@ int runStudioGuiSelfTest(string[] args) {
     }
 
     {
-        click(root.transport.controlRect("transport.record").center());
+        click(root.transport.controlRect("transport.edit").center());
         immutable ushort[8] pianoKeys = [6, 1, 7, 2, 8, 9, 5, 11];
         immutable string[8] pianoChars = ["z", "s", "x", "d", "c", "v", "g", "b"];
         string cursorTrace;
@@ -737,12 +737,12 @@ int runStudioGuiSelfTest(string[] args) {
             click(cell.center());
             Widget fw = scene.ui().focused;
             cursorTrace ~= format(" t%s->cursor%s focus=%s rec=%s", track, root.pattern.cursorTrack(),
-                fw is null ? "none" : fw.id, ctx.recording);
+                fw is null ? "none" : fw.id, ctx.editMode);
             foreach (n; 0 .. 16) {
                 key(pianoKeys[(n + track * 2) % 8], pianoChars[(n + track * 2) % 8]);
             }
         }
-        click(root.transport.controlRect("transport.record").center());
+        click(root.transport.controlRect("transport.edit").center());
         size_t notes = 0;
         size_t[4] perTrack;
         foreach (ref p; doc().patterns) {
@@ -767,7 +767,7 @@ int runStudioGuiSelfTest(string[] args) {
                 cursorTrace ~= format(" cursorLineEnd=%s step=%s", root.pattern.cursorLine(), ctx.editStep);
             }
         }
-        check("record notes (QWERTY)", notes >= 64 && !ctx.recording, format("%s notes written;%s", notes, cursorTrace));
+        check("record notes (QWERTY)", notes >= 64 && !ctx.editMode, format("%s notes written;%s", notes, cursorTrace));
     }
 
     {

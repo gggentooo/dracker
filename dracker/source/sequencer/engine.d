@@ -10,7 +10,7 @@
  *   @nogc nothrow on RT playback and command dispatch; zero global mutable state so MetaModule child Engines nest safely. Off-RT WAV/stem helpers reside prior to the @nogc attribute block.
  *
  * Dependencies:
- *   Internal: foundation.*, graph.*, io.audio_io, sequencer.{clock,note,pattern,timeline,track_effects}
+ *   Internal: foundation.*, graph.*, io.audio_io, sequencer.{clock,count_in,note,pattern,timeline,track_effects}
  *   External: core.lifetime (move), std.math (fabs, isFinite)
  *
  * Planned API (Types, Functions & Hooks):
@@ -18,6 +18,9 @@
  *     / struct MidiMapSnapshot / struct ScopeBlock
  *   - struct Engine : tryInit(), reset(), pushCommand(), drainRetireRing(), tryPopRetired(), applyPendingCommandsOffRT(), appliedFence(), liveNoteOnRt(), liveNoteOffRt(),
  *     enqueueLiveEventRt(), applyMidiCcRt(), setWatchedNoteModule(), watchedNoteModule(), tryPopScopeBlock(), scopeBlocksDropped(), processHostBuffer(), processDirectSubFrames(), renderOfflineToBuffer(), exportOfflineWav(), exportStemsWav()
+ *   - EngineCommand.makePlayCountIn() / EngineCmdKind.playCountIn: live-record count-in (pre-roll from a possibly
+ *     negative line plus a CountInClick metronome added to the master output); isCountingIn(), countInClicks(),
+ *     EngineTelemetry.countingIn
  *
  * See_Also:
  *   architecture_proposal.md, dev_plan_proposal.md
@@ -38,6 +41,7 @@ import graph.event : ModEvent;
 import graph.plan : GraphPlan;
 import io.audio_io : writeWavFile;
 import sequencer.clock : RationalClock, TickEvent;
+import sequencer.count_in : CountInClick;
 import sequencer.note : NoteCell;
 import sequencer.pattern : patchCellAtomic, PatternSnapshot;
 import sequencer.timeline : TimelineClip, TimelineSnapshot;
@@ -68,7 +72,8 @@ enum EngineCmdKind : ubyte {
     sendModEvent = 18,
     fence = 19,
     swapMidiMap = 20,
-    setScopeTaps = 21
+    setScopeTaps = 21,
+    playCountIn = 22
 }
 
 /**
@@ -231,6 +236,27 @@ struct EngineCommand {
         EngineCommand c;
         c.kind = EngineCmdKind.seekLine;
         c.lineVal = targetLine;
+        return c;
+    }
+
+    /**
+     * Builds a command that starts playback countInLines before startLine with a metronome click on every beat
+     * of the count-in (the song pre-rolls where those lines exist; lines before 0 are silent apart from clicks).
+     *
+     * Params:
+     *   startLine = Line where the count-in ends (recording starts).
+     *   countInLines = Count-in length in lines.
+     *   beatLines = Lines per click.
+     *
+     * Returns:
+     *   Populated EngineCommand.
+     */
+    static EngineCommand makePlayCountIn(long startLine, uint countInLines, uint beatLines) {
+        EngineCommand c;
+        c.kind = EngineCmdKind.playCountIn;
+        c.lineVal = startLine;
+        c.lineVal2 = countInLines;
+        c.paramIdx = beatLines;
         return c;
     }
 
@@ -604,6 +630,7 @@ struct EngineTelemetry {
     double bpm = 125.0;
     uint ticksPerLine = 6;
     bool playing = false;
+    bool countingIn = false;
     ulong totalFrames = 0;
     uint patternNoteModuleId = 0;
     ulong[2] patternNoteMask = 0;
@@ -660,6 +687,7 @@ struct Engine {
 
     private AudioGraph graph_;
     private RationalClock clock_;
+    private CountInClick countIn_;
     private TrackEffectBank trackFx_;
     private SpscRing!EngineCommand cmdRing_;
     private SpscRing!RetiredResource retireRing_;
@@ -929,6 +957,7 @@ struct Engine {
     void reset() {
         graph_.reset();
         clock_.configure(sampleRate_, 125.0, 6);
+        countIn_.prepare(sampleRate_);
         trackFx_.reset();
         foreach (ref lv; liveVoices_) {
             lv = LiveVoiceSlot.init;
@@ -1202,6 +1231,26 @@ struct Engine {
     }
 
     /**
+     * Reports whether a live-record count-in is still clicking toward its start line.
+     *
+     * Returns:
+     *   True between playCountIn and the record start line.
+     */
+    bool isCountingIn() const pure @safe {
+        return countIn_.armed();
+    }
+
+    /**
+     * Returns the number of count-in clicks triggered since the last playCountIn command.
+     *
+     * Returns:
+     *   Click count.
+     */
+    uint countInClicks() const pure @safe {
+        return countIn_.clicksTriggered();
+    }
+
+    /**
      * Returns current active tempo in BPM.
      *
      * Returns:
@@ -1292,6 +1341,7 @@ struct Engine {
         transport_.playing = play;
         if (!play) {
             trackFx_.releaseAllActive(graph_, graph_.renderedFrames());
+            countIn_.disarm(true);
         }
     }
 
@@ -1303,6 +1353,7 @@ struct Engine {
      */
     void seekLine(long line) {
         trackFx_.releaseAllActive(graph_, graph_.renderedFrames());
+        countIn_.disarm(true);
         clock_.seekToLine(line);
         pendingJumpLine_ = -1;
     }
@@ -1426,6 +1477,7 @@ struct Engine {
         transport_.bpm = clock_.bpm();
         transport_.ticksPerLine = clock_.ticksPerLine();
         graph_.renderQuantumDirect(outSlice, inSlice, transport_, qFrames);
+        countIn_.renderAdd(outSlice[0], outSlice[1], qFrames);
         publishTelemetry();
         if (scopeEnabled_ && qFrames == FIXED_BLOCK_FRAMES) {
             publishScopeBlocks(outSlice);
@@ -1494,13 +1546,27 @@ struct Engine {
                     transport_.playing = false;
                     pendingJumpLine_ = -1;
                     trackFx_.releaseAllActive(graph_, nowFrame);
+                    countIn_.disarm(true);
                     break;
 
                 case EngineCmdKind.seekLine:
                     trackFx_.releaseAllActive(graph_, nowFrame);
+                    countIn_.disarm(true);
                     clock_.seekToLine(cmd.lineVal);
                     pendingJumpLine_ = -1;
                     break;
+
+                case EngineCmdKind.playCountIn: {
+                    trackFx_.releaseAllActive(graph_, nowFrame);
+                    immutable long countLines = cmd.lineVal2 > 0 ? cmd.lineVal2 : 0;
+                    immutable long firstLine = cmd.lineVal - countLines;
+                    clock_.seekToLineSigned(firstLine);
+                    pendingJumpLine_ = -1;
+                    countIn_.arm(firstLine, cmd.lineVal, cmd.paramIdx);
+                    playing_ = true;
+                    transport_.playing = true;
+                    break;
+                }
 
                 case EngineCmdKind.setBpm:
                     clock_.setBpm(cmd.doubleVal);
@@ -1631,6 +1697,9 @@ struct Engine {
                 continue;
             }
 
+            if (tev.isLineStart) {
+                countIn_.onLineStart(tev.line, tev.frameOffset);
+            }
             immutable FrameTime absTickFrame = baseFrame + tev.frameOffset;
             SequencerActionFlags actions;
             TimelineClip[MAX_LINE_CLIPS] activeClips;
@@ -1828,6 +1897,7 @@ struct Engine {
         graph_.readTelemetry(tel.graph);
         tel.currentLine = clock_.currentLine();
         tel.currentTick = clock_.currentTick();
+        tel.countingIn = countIn_.armed();
         tel.bpm = clock_.bpm();
         tel.ticksPerLine = clock_.ticksPerLine();
         tel.playing = playing_;

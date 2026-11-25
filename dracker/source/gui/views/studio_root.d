@@ -10,8 +10,9 @@
  *   the session Keymap: document-level actions run here
  *   (transport, record, octave, undo/redo, panic, play-pattern, loop) or go to the app layer (new/open/save/
  *   export/quit); context-dependent actions go to the StudioCommandSink view that holds focus (or was used last);
- *   unhandled piano keys play live notes on the selected module. Esc (no modifiers) leaves record (edit) mode when
- *   it is on, before the keymap's Esc = Stop binding is consulted. Phase 8.5: openAppearance opens the Appearance
+ *   unhandled piano keys play live notes on the selected module. ⌘R starts/stops a live-record take and ⇧⌘R
+ *   toggles edit mode. Esc (no modifiers) ends a running take, else leaves edit mode, before the keymap's
+ *   Esc = Stop binding is consulted; Play, Stop and Play Pattern during a take end the take. Phase 8.5: openAppearance opens the Appearance
  *   panel overlay, toggleContrast flips High/Low contrast, and every StudioContext appearance switch is pushed
  *   into the UiContext (theme + relayout) through a theme listener.
  *
@@ -240,6 +241,12 @@ final class StudioRoot : Widget {
             return forwardToSink(activeSink(), action);
         }
         auto s = ctx.session;
+        if (ctx.liveRecording() && (action == StudioAction.playToggle || action == StudioAction.stop
+                || action == StudioAction.playPattern)) {
+            ctx.stopLiveRecord();
+            invalidate();
+            return true;
+        }
         switch (action) {
             case StudioAction.playToggle:
                 s.togglePlay();
@@ -249,8 +256,10 @@ final class StudioRoot : Widget {
                 s.seekLine(0);
                 break;
             case StudioAction.recordToggle:
-                ctx.recording = !ctx.recording;
-                ctx.setStatus(ctx.recording ? "Record on" : "Record off");
+                ctx.toggleLiveRecord();
+                break;
+            case StudioAction.editToggle:
+                ctx.setEditMode(!ctx.editMode);
                 break;
             case StudioAction.octaveUp:
                 ctx.setEditOctave(ctx.editOctave + 1);
@@ -297,10 +306,13 @@ final class StudioRoot : Widget {
     }
 
     override bool onKeyDown(const ref KeyEvent e) {
-        if (e.keyCode == KeyCode.escape && e.modifiers == 0 && ctx.recording) {
+        if (e.keyCode == KeyCode.escape && e.modifiers == 0 && (ctx.liveRecording() || ctx.editMode)) {
             if (!e.isRepeat) {
-                ctx.recording = false;
-                ctx.setStatus("Record off");
+                if (ctx.liveRecording()) {
+                    ctx.stopLiveRecord();
+                } else {
+                    ctx.setEditMode(false);
+                }
                 invalidate();
             }
             return true;

@@ -11,7 +11,7 @@
  *   selection (mouse drag or Shift+arrows), QWERTY note entry with live audition, hex nibble editing, note-off and
  *   delete entry, live MIDI recording at the playhead or step recording at the cursor, block cut/copy/paste
  *   (Dracker-Block-v1 clipboard text), transpose, interpolate, and follow-playhead scrolling. Double-clicking a row
- *   puts the cursor on that row's note field and turns record (edit) mode on. Notes are never written for the
+ *   puts the cursor on that row's note field and turns edit mode on. Notes are never written for the
  *   Master Output module (core.output): note entry is refused with a status message instead.
  *
  *   Column mapping (faithful to the 8-byte NoteCell):
@@ -786,12 +786,12 @@ final class PatternEditorView : Widget, StudioCommandSink {
      *   action = Action.
      *
      * Returns:
-     *   True if handled (noteOffEntry is always consumed but only writes in record mode).
+     *   True if handled (noteOffEntry is always consumed but only writes in edit mode).
      */
     bool handleStudioAction(StudioAction action) {
         switch (action) {
             case StudioAction.noteOffEntry:
-                if (ctx.recording) {
+                if (ctx.editMode) {
                     writeNoteOff();
                 }
                 return true;
@@ -914,7 +914,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
 
     /**
      * Places the cursor on click and starts a block-selection drag (Shift extends from the cursor). A double-click
-     * puts the cursor on the note field of the clicked row and turns record (edit) mode on, so the next QWERTY,
+     * puts the cursor on the note field of the clicked row and turns edit mode on, so the next QWERTY,
      * MIDI or on-screen piano note is written there.
      *
      * Params:
@@ -1069,7 +1069,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
         if (e.modifiers != 0) {
             return false;
         }
-        if (cursorField_ != PatternField.note && ctx.recording) {
+        if (cursorField_ != PatternField.note && ctx.editMode) {
             immutable int nib = hexNibbleForKey(e.keyCode);
             if (nib >= 0) {
                 if (!e.isRepeat) {
@@ -1391,9 +1391,8 @@ final class PatternEditorView : Widget, StudioCommandSink {
     private void enterEditModeAt(uint track, uint line) {
         dragging_ = false;
         moveCursorTo(track, line, PatternField.note, false);
-        if (!ctx.recording) {
-            ctx.recording = true;
-            ctx.setStatus("Record on");
+        if (!ctx.editMode) {
+            ctx.setEditMode(true);
         }
         invalidate();
     }
@@ -1504,7 +1503,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
         }
         const sp = currentPatternDoc();
         immutable uint mod = sp !is null ? entryModule(sp, cursorTrack_, cursorLine_) : ctx.selectedModule();
-        if (ctx.recording && cursorField_ == PatternField.note && sp !is null
+        if (ctx.editMode && cursorField_ == PatternField.note && sp !is null
                 && !noteEntryBlocked(sp, cursorTrack_, cursorLine_)) {
             writeNote(cursorTrack_, cursorLine_, midi, 1.0f);
             advance();
@@ -1529,7 +1528,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
 
     private void consumeMidi() {
         MidiNoteEvent[] notes = ctx.takeMidiNotes();
-        if (notes.length == 0 || !ctx.recording) {
+        if (notes.length == 0 || !ctx.editMode) {
             return;
         }
         const sp = currentPatternDoc();
@@ -1912,7 +1911,10 @@ final class PatternEditorView : Widget, StudioCommandSink {
             char[2] sd;
             putDec(sd[], ctx.editStep);
             put(sd[0] == '0' ? sd[1 .. 2] : sd[]);
-            if (ctx.recording) {
+            if (ctx.editMode) {
+                put("  EDIT");
+            }
+            if (ctx.liveRecording()) {
                 put("  REC");
             }
             if (ctx.followPlayhead) {
@@ -1920,7 +1922,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
             }
             r.pushClip(h);
             r.drawText(Point2F(infoX_, ty), buf[0 .. n], FontId.ui, size,
-                ctx.recording ? theme.danger : theme.textDim);
+                ctx.editMode || ctx.liveRecording() ? theme.danger : theme.textDim);
             r.popClip();
         }
     }

@@ -496,12 +496,20 @@ version (unittest) {
         rig.click(bar.controlRect("transport.playPattern"));
         assert(!rig.session.isAuditioningPattern() && rig.ctx.status == "No pattern to play");
 
+        auto edit = findChild!TransportButton(bar, "transport.edit");
+        assert(!rig.ctx.editMode && !edit.lit);
+        rig.click(bar.controlRect("transport.edit"));
+        assert(rig.ctx.editMode && edit.lit && rig.ctx.status == "Edit on");
+        rig.click(bar.controlRect("transport.edit"));
+        assert(!rig.ctx.editMode && !edit.lit && rig.ctx.status == "Edit off");
+
         auto rec = findChild!TransportButton(bar, "transport.record");
-        assert(!rig.ctx.recording);
+        rig.ctx.selectModule(0);
         rig.click(bar.controlRect("transport.record"));
-        assert(rig.ctx.recording && rec.lit);
+        assert(!rig.ctx.liveRecording() && !rec.lit && rig.ctx.status == "Select an instrument module to record");
+        rig.ctx.selectModule(1);
         rig.click(bar.controlRect("transport.record"));
-        assert(!rig.ctx.recording && !rec.lit);
+        assert(!rig.ctx.liveRecording() && rig.ctx.status == "Select an instrument module to record");
 
         auto fol = findChild!TransportButton(bar, "transport.follow");
         assert(rig.ctx.followPlayhead && fol.lit);

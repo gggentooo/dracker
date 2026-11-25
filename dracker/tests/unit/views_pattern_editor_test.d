@@ -614,7 +614,7 @@ version (unittest) {
         auto v = rig.v;
         auto ctx = rig.ctx;
         ctx.selectModule(rig.gen);
-        ctx.recording = true;
+        ctx.editMode = true;
         ctx.editOctave = 5;
         ctx.editStep = 2;
         v.setCursor(0, 0, 0);
@@ -669,7 +669,7 @@ version (unittest) {
         assert(rig.cell(3, 8).isEmpty() && rig.undos() == u1);
 
         rig.render(400);
-        ctx.recording = false;
+        ctx.editMode = false;
         ctx.selectModule(rig.gen);
         v.setCursor(3, 20, 0);
         immutable float quiet = rig.render(8);
@@ -686,7 +686,7 @@ version (unittest) {
     unittest {
         auto rig = new PeRig();
         auto v = rig.v;
-        rig.ctx.recording = true;
+        rig.ctx.editMode = true;
         rig.ctx.editStep = 0;
         immutable uint[2][12] keys = [
             [1, 21], [2, 19], [3, 18], [4, 0], [5, 29], [6, 20], [7, 18], [8, 3], [9, 29], [10, 18],
@@ -707,7 +707,7 @@ version (unittest) {
         rig.key(20);
         assert(rig.cell(1, 0).effect == 0x30 && v.cursorLine() == 1 && v.cursorField() == PatternField.effectHi);
 
-        rig.ctx.recording = false;
+        rig.ctx.editMode = false;
         v.setCursor(2, 0, PatternField.velocityHi);
         immutable size_t u1 = rig.undos();
         assert(!rig.key(0));
@@ -910,7 +910,7 @@ version (unittest) {
         auto rig = new PeRig();
         auto v = rig.v;
         auto ctx = rig.ctx;
-        ctx.recording = true;
+        ctx.editMode = true;
         v.setCursor(1, 0, 0);
         assert(rig.s.play());
         rig.render(100);
@@ -937,7 +937,7 @@ version (unittest) {
         rig.frame();
         assert(rig.undos() == u1);
 
-        ctx.recording = false;
+        ctx.editMode = false;
         ctx.injectMidiNote(MidiNoteEvent(0, 50, 100, line));
         rig.frame();
         assert(rig.undos() == u1 && ctx.takeMidiNotes().length == 0);
@@ -951,7 +951,7 @@ version (unittest) {
         rig.render(4);
         rig.frame();
         assert(!ctx.telemetry.engine.playing && v.playheadLocalLine() == -1);
-        ctx.recording = true;
+        ctx.editMode = true;
         ctx.editStep = 1;
         v.setCursor(3, 5, 0);
         ctx.injectMidiNote(MidiNoteEvent(0, 50, 64, 0));
@@ -1070,14 +1070,14 @@ version (unittest) {
         auto rig = new PeRig();
         auto v = rig.v;
         auto ctx = rig.ctx;
-        ctx.recording = true;
+        ctx.editMode = true;
         ctx.editStep = 1;
         v.setCursor(0, 3, 0);
         rig.put(0, 3, NoteCell.makeEffect(0x1F, 2, 6));
         assert(rig.key(KeyCode.tab));
         assert(rig.cell(0, 3).note == NoteCmd.noteOff && rig.cell(0, 3).moduleId == 6 && rig.cell(0, 3).effect == 0x1F);
         assert(v.cursorLine() == 4);
-        ctx.recording = false;
+        ctx.editMode = false;
         assert(rig.key(KeyCode.tab));
         assert(rig.cell(0, 4).isEmpty() && v.cursorLine() == 4 && rig.ui.focused is v);
 
@@ -1166,7 +1166,7 @@ version (unittest) {
         auto rig = new PeRig(true);
         auto v = rig.v;
         auto ctx = rig.ctx;
-        ctx.recording = true;
+        ctx.editMode = true;
         ctx.editOctave = 5;
         ctx.editStep = 1;
         ctx.selectModule(1);
@@ -1203,13 +1203,13 @@ version (unittest) {
         ctx.selectModule(rig.gen);
         ctx.editOctave = 5;
         ctx.editStep = 1;
-        assert(!ctx.recording);
+        assert(!ctx.editMode);
 
         rig.click(v.fieldRect(2, 5, PatternField.velocityHi).center());
-        assert(!ctx.recording && v.cursorField() == PatternField.velocityHi);
+        assert(!ctx.editMode && v.cursorField() == PatternField.velocityHi);
 
         rig.doubleClick(v.fieldRect(2, 5, PatternField.velocityHi).center());
-        assert(ctx.recording && ctx.status == "Record on");
+        assert(ctx.editMode && ctx.status == "Edit on");
         assert(v.cursorTrack() == 2 && v.cursorLine() == 5 && v.cursorField() == PatternField.note);
         assert(!v.hasSelection());
 
@@ -1219,7 +1219,7 @@ version (unittest) {
         assert(v.cursorLine() == 6);
 
         rig.doubleClick(v.cellRect(1, 9).center());
-        assert(ctx.recording && v.cursorTrack() == 1 && v.cursorLine() == 9);
+        assert(ctx.editMode && v.cursorTrack() == 1 && v.cursorLine() == 9);
         ctx.injectMidiNote(MidiNoteEvent(0, 67, 127, 0));
         rig.frame();
         assert(rig.cell(1, 9).note == NoteCell.encodeMidiNote(67) && rig.cell(1, 9).moduleId == rig.gen);
@@ -1227,7 +1227,7 @@ version (unittest) {
 
         ctx.selectModule(1);
         rig.doubleClick(v.cellRect(3, 12).center());
-        assert(ctx.recording && v.cursorLine() == 12);
+        assert(ctx.editMode && v.cursorLine() == 12);
         rig.key(6);
         rig.keyUp(6);
         assert(rig.cell(3, 12).isEmpty() && ctx.status == MASTER_OUTPUT_BLOCKED_STATUS);

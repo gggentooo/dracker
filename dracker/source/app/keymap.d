@@ -74,7 +74,8 @@ enum StudioAction : ubyte {
     exportWav = 37,
     quit = 38,
     openAppearance = 39,
-    toggleContrast = 40
+    toggleContrast = 40,
+    editToggle = 41
 }
 
 /**
@@ -96,7 +97,7 @@ interface StudioCommandSink {
 /**
  * Classifies a StudioAction as document-level (executed by the session regardless of focus).
  *
- * Document-level: playToggle, stop, recordToggle, octaveUp/Down, undo, redo, saveProject, saveProjectAs,
+ * Document-level: playToggle, stop, recordToggle (live record), editToggle (edit mode), octaveUp/Down, undo, redo, saveProject, saveProjectAs,
  * openProject, newProject, panic, playPattern, toggleLoop, exportWav, quit, openAppearance, toggleContrast.
  * Every other action except
  * none (selection, cell/block editing, transpose, interpolate, navigation, follow, edit step, zoom) is
@@ -113,6 +114,7 @@ bool isDocumentLevel(StudioAction action) @nogc nothrow pure @safe {
         case StudioAction.playToggle:
         case StudioAction.stop:
         case StudioAction.recordToggle:
+        case StudioAction.editToggle:
         case StudioAction.octaveUp:
         case StudioAction.octaveDown:
         case StudioAction.undo:
@@ -222,6 +224,7 @@ struct Keymap {
         km.bindAction(StudioAction.playToggle, 49, KeyModifiers.none);
         km.bindAction(StudioAction.stop, 53, KeyModifiers.none);
         km.bindAction(StudioAction.recordToggle, 15, KeyModifiers.command);
+        km.bindAction(StudioAction.editToggle, 15, KeyModifiers.command | KeyModifiers.shift);
         km.bindAction(StudioAction.octaveDown, 122, KeyModifiers.none);
         km.bindAction(StudioAction.octaveUp, 120, KeyModifiers.none);
         km.bindAction(StudioAction.undo, 6, KeyModifiers.command);

@@ -4,7 +4,8 @@
  * Phase:        Phase 8.1 — Studio Transport Bar & Audio/MIDI Header
  *
  * Purpose:
- *   Top studio toolbar hosting Play/Stop/Play-Pattern/Record/Follow/Loop controls, BPM/TPL drag boxes (one undo
+ *   Top studio toolbar hosting Play/Stop/Play-Pattern/Edit/Record/Follow/Loop controls (EDIT toggles edit mode;
+ *   Rec starts/stops a live-record take and blinks on the beat during its count-in), BPM/TPL drag boxes (one undo
  *   step per drag gesture, reflecting external/undo changes), edit octave/step boxes, the playhead readout with
  *   engine tempo and dirty indicator, the DSP load meter with xrun counter, master stereo peak meters with decay and
  *   a held clip light, the audio output device picker and a MIDI sources indicator. Exposes stable widget ids and
@@ -27,7 +28,7 @@
  *   - class TransportBarView : Widget, StudioCommandSink : this(StudioContext), refresh(), refreshDevices(),
  *     controlRect(id), readoutText(), dspText(), xrunText(), midiText(), meterLevel(), clipLit(), resetClip(),
  *     isAnimating(), handleStudioAction(toggleFollow / stepUp / stepDown)
- *   - Widget ids: transport.play, transport.stop, transport.playPattern, transport.record, transport.follow,
+ *   - Widget ids: transport.play, transport.stop, transport.playPattern, transport.edit, transport.record, transport.follow,
  *     transport.loop, transport.bpm, transport.tpl, transport.octave, transport.step, transport.device;
  *     geometry-only ids: transport.readout, transport.dirty, transport.dsp, transport.meters, transport.clip,
  *     transport.midi
@@ -306,6 +307,7 @@ final class TransportBarView : Widget, StudioCommandSink {
     private TransportButton playBtn_;
     private TransportButton stopBtn_;
     private TransportButton patternBtn_;
+    private TransportButton editBtn_;
     private TransportButton recordBtn_;
     private TransportButton followBtn_;
     private TransportButton loopBtn_;
@@ -351,7 +353,9 @@ final class TransportBarView : Widget, StudioCommandSink {
         playBtn_ = makeButton("transport.play", "Play", TransportGlyph.play, &onPlay);
         stopBtn_ = makeButton("transport.stop", "Stop", TransportGlyph.stop, &onStop);
         patternBtn_ = makeButton("transport.playPattern", "Pat", TransportGlyph.playPattern, &onPlayPattern);
+        editBtn_ = makeButton("transport.edit", "EDIT", TransportGlyph.text, &onEdit);
         recordBtn_ = makeButton("transport.record", "Rec", TransportGlyph.record, &onRecord);
+        editBtn_.light = TransportLight.record;
         followBtn_ = makeButton("transport.follow", "FOLLOW", TransportGlyph.text, &onFollow);
         loopBtn_ = makeButton("transport.loop", "LOOP", TransportGlyph.text, &onLoop);
         recordBtn_.light = TransportLight.record;
@@ -429,7 +433,10 @@ final class TransportBarView : Widget, StudioCommandSink {
         playBtn_.lit = playing && !auditioning;
         playBtn_.pausedGlyph = playing && !auditioning;
         patternBtn_.lit = auditioning;
-        recordBtn_.lit = ctx_.recording;
+        editBtn_.lit = ctx_.editMode;
+        immutable long line = ctx_.telemetry.engine.currentLine;
+        immutable bool beatOn = ((line % 4) + 4) % 4 < 2;
+        recordBtn_.lit = ctx_.liveRecording() && (!ctx_.countingIn() || beatOn);
         followBtn_.lit = ctx_.followPlayhead;
         loopBtn_.lit = doc.loopEndLine > 0;
         if (!bpmBox_.isDragging() && !bpmBox_.isEditing()) {
@@ -658,6 +665,7 @@ final class TransportBarView : Widget, StudioCommandSink {
         place(playBtn_, take(h, y, h, gap));
         place(stopBtn_, take(h, y, h, gap));
         place(patternBtn_, take(h, y, h, gap));
+        place(editBtn_, take(44.0f, y, h, gap));
         place(recordBtn_, take(h, y, h, group));
         place(followBtn_, take(54.0f, y, h, gap));
         place(loopBtn_, take(44.0f, y, h, group));
@@ -871,18 +879,29 @@ final class TransportBarView : Widget, StudioCommandSink {
     }
 
     private void onPlay() {
-        ctx_.session.togglePlay();
+        if (ctx_.liveRecording()) {
+            ctx_.stopLiveRecord();
+        } else {
+            ctx_.session.togglePlay();
+        }
         invalidate();
     }
 
     private void onStop() {
+        if (ctx_.liveRecording()) {
+            ctx_.stopLiveRecord();
+            invalidate();
+            return;
+        }
         ctx_.session.stop();
         ctx_.session.seekLine(0);
         invalidate();
     }
 
     private void onPlayPattern() {
-        if (ctx_.session.isAuditioningPattern()) {
+        if (ctx_.liveRecording()) {
+            ctx_.stopLiveRecord();
+        } else if (ctx_.session.isAuditioningPattern()) {
             ctx_.session.stop();
         } else if (!ctx_.session.playPattern(ctx_.currentPattern())) {
             ctx_.setStatus("No pattern to play");
@@ -892,7 +911,13 @@ final class TransportBarView : Widget, StudioCommandSink {
     }
 
     private void onRecord() {
-        ctx_.recording = !ctx_.recording;
+        ctx_.toggleLiveRecord();
+        refresh();
+        invalidate();
+    }
+
+    private void onEdit() {
+        ctx_.setEditMode(!ctx_.editMode);
         refresh();
         invalidate();
     }

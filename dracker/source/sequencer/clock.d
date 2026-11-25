@@ -15,7 +15,8 @@
  *
  * Planned API (Types, Functions & Hooks):
  *   - struct TickEvent { uint frameOffset; long line; uint tick; bool isLineStart; }
- *   - struct RationalClock : configure(), setBpm(), setTicksPerLine(), setLoop(), seekToLine(), advanceSlice(), subLineDelaySamples()
+ *   - struct RationalClock : configure(), setBpm(), setTicksPerLine(), setLoop(), seekToLine(), seekToLineSigned() (negative count-in lines),
+ *     advanceSlice(), subLineDelaySamples()
  *
  * See_Also:
  *   architecture_proposal.md, dev_plan_proposal.md
@@ -139,6 +140,19 @@ struct RationalClock {
      */
     void seekToLine(long line) pure @safe {
         line_ = line >= 0 ? line : 0;
+        tick_ = 0;
+        phaseNum_ = 0;
+        emitInitialTick_ = true;
+    }
+
+    /**
+     * Moves the playhead to line, allowing negative lines (count-in lines before the song start), tick 0.
+     *
+     * Params:
+     *   line = Target line; negative lines trigger no clips and advance normally toward line 0.
+     */
+    void seekToLineSigned(long line) pure @safe {
+        line_ = line;
         tick_ = 0;
         phaseNum_ = 0;
         emitInitialTick_ = true;

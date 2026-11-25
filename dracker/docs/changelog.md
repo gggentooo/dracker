@@ -10,6 +10,56 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
 
 ---
 
+## [2026-11-25 12:59:31 KST]
+- **Author:** Claude Opus 5.5
+- **Affected Files:**
+  - Created: `source/sequencer/count_in.d`, `source/app/live_take.d`, `tests/unit/live_take_test.d`
+  - Modified: `source/sequencer/clock.d`, `source/sequencer/engine.d`, `source/app/session.d`, `source/app/keymap.d`, `source/app/studio_app.d`, `source/platform/macos/appkit.d`, `source/gui/views/studio_context.d`, `source/gui/views/studio_root.d`, `source/gui/views/transport_bar.d`, `source/gui/views/pattern_editor.d`, `source/gui/views/piano_view.d`, `tests/unit/keymap_test.d`, `tests/unit/sequencer_test.d`, `tests/unit/views_pattern_editor_test.d`, `tests/unit/views_piano_test.d`, `tests/unit/views_studio_root_test.d`, `tests/unit/views_transport_test.d`, `docs/manual.md`, `docs/changelog.md`
+- **Reason / Summary:** Split the old "record (edit) mode" into two modes. **Edit mode** keeps the previous behavior: played notes are written at the pattern editor cursor. **Record mode** is new: it records a live take into a new pattern. Design decisions confirmed by the owner (Rule 5) before implementation: the count-in uses both song pre-roll and an Engine metronome click; note-offs are recorded and held notes get their own tracks; takes start at the record point on the first free lane, grow while recording, are trimmed to the last bar used, are discarded when empty, and are one undo step; ⌘R = Record, ⇧⌘R = Edit mode, with separate EDIT and Rec transport buttons.
+  - **Engine count-in (RT; `sequencer/count_in.d`, `sequencer/engine.d`, `sequencer/clock.d`):**
+    - New `EngineCmdKind.playCountIn` / `EngineCommand.makePlayCountIn(startLine, countInLines, beatLines)`.
+    - It seeks the clock to `startLine - countInLines` with the new `RationalClock.seekToLineSigned()`, which allows negative lines. Negative lines trigger no clips (`collectActiveClipsAtLine` already ignores them), so the song pre-rolls where those lines exist and is silent before line 0.
+    - It arms a `CountInClick`: a POD `@nogc nothrow pure @safe` one-voice decaying sine (1760 Hz accent on the first beat, 1320 Hz on the others, 18 ms decay). It is triggered sample-accurately from line-start tick events on every beat line before the start line, and added to the master output after the graph renders, so it never reaches modules, stems or WAV exports.
+    - Stop, seek and `setPlaying(false)` silence and disarm it.
+    - New `Engine.isCountingIn()`, `countInClicks()` and `EngineTelemetry.countingIn`. `static assert(!hasIndirections!CountInClick)` holds, and `Engine` stays free of GC references.
+  - **Take capture (`app/live_take.d`, UI thread):** `LiveTakeRecorder` maps fractional song positions (line + tick / TPL) to the nearest line relative to the take start.
+    - Notes less than one line after the first note of a chord group share its line on separate tracks. The window is measured from the group's first note, so a fast arpeggio does not merge into one long chord.
+    - A new note goes to the lowest track that is not holding a note. When none is free, the oldest held note is cut.
+    - A release writes `===` at its snapped line, at least one line after the note.
+    - Notes more than half a line before the start (count-in) are dropped. The line cap is `MAX_LINES`.
+    - `finish()` releases held notes and returns cells trimmed to whole 16-line bars, with at least 4 tracks.
+  - **Session (`app/session.d`):**
+    - `beginLiveTake()` suspends the Engine loop (the document loop is unchanged) and sends `playCountIn(start, 16, 4)`.
+    - `liveTakeNoteOn()` / `liveTakeNoteOff()` timestamp notes from fresh Engine telemetry. They refuse module 0 and the Master Output.
+    - `liveTakeShouldEnd()` returns true when playback stopped by other means or the take reached `MAX_LINES`.
+    - `endLiveTake()` stops playback, restores the loop, seeks back to the take start, and adds a "Take NN" pattern plus a clip on the first lane free over the take, inside one `"Record Take"` undo group.
+    - Also new: `liveTakeActive()`, `liveTakeStartLine()`, `liveTakeNoteCount()`, `liveSongPosition()`.
+    - The headless `executeStudioAction` maps `recordToggle` to takes and the new `editToggle` to edit mode (`recording_` was renamed `editMode_`).
+  - **Keymap and menus (`app/keymap.d`, `platform/macos/appkit.d`):** New document-level `StudioAction.editToggle = 41`, bound to ⇧⌘R, with a **Transport ▸ Edit Mode** menu item. ⌘R (`recordToggle`) now starts and stops a live take.
+  - **Studio context (`gui/views/studio_context.d`):**
+    - `recording` was renamed `editMode` (all views, the app and tests).
+    - New `setEditMode()` (it ends a running take), `liveRecording()`, `countingIn()`, `startLiveRecord()` (requires an instrument module, otherwise "Select an instrument module to record"), `stopLiveRecord()` (selects the new pattern; status "Recorded Take NN (N notes)" or "Recording stopped: no notes recorded"), `toggleLiveRecord()`, `liveInputNoteOn()` / `liveInputNoteOff()`.
+    - QWERTY holds (`setQwertyNote()` / `clearQwertyNote()`, used by both the pattern editor and the root) and MIDI note-on/off packets feed the take with distinct source tags.
+    - `tick()` ends takes that should end and shows "Count-in N", then "Recording".
+  - **Views:**
+    - `studio_root.d`: ⌘R toggles live recording; ⇧⌘R toggles edit mode; Esc ends a take, otherwise leaves edit mode, otherwise stops; Play, Stop and Play Pattern during a take end it.
+    - `transport_bar.d`: new **EDIT** button (`transport.edit`, lit in edit mode). **Rec** now toggles live recording and blinks on the beat during the count-in. Play, Stop and Pat end a take. The bar shifts right by one 44 pt button.
+    - `pattern_editor.d`: the info text shows **EDIT** and/or **REC**, and double-click uses `setEditMode(true)` (status "Edit on").
+    - `piano_view.d`: clicked keys feed the take.
+    - `studio_app.d`: the GUI self-test's QWERTY step uses `transport.edit`.
+  - **Docs:** `docs/manual.md`: menu, Escape, transport, edit-mode wording, renamed §8.9, new §8.11 *Live recording (Record mode)*, §12, the tutorial and the shortcut table.
+- **Verification Results:**
+  - **Engine (`tests/unit/sequencer_test.d`):** a count-in from line 0 starts at line −16 with `countingIn`. Exactly 4 clicks start within 2 frames of each beat (0, 4, 8, 12 lines × 5292 frames), the accent is louder, and output is bit-exact silence from line 0 on with no modules. The render loop runs inside `verifyZeroRtAllocationsNothrow` (`rt_malloc_trap`). Stop and seek disarm and silence the click.
+  - **Take recorder (`tests/unit/live_take_test.d`):** snapping, count-in drop and tolerance, chord grouping, held-note track allocation, note-off placement, re-press, track stealing, the line cap, bar trimming and minimum tracks.
+  - **End to end (`tests/unit/views_studio_root_test.d`):** ⌘R without an instrument is refused; edit mode turns off on ⌘R; the countdown status; song pre-roll plays a pattern note during the count-in; the loop at line 20 is ignored during the take and kept in the document; QWERTY note and chord capture with note-offs; Esc ends the take as one "Record Take" undo step with a clip on lane 1 and the playhead back at the take start; undo/redo; empty takes; ⇧⌘R ending a take; Space ending a take; an external stop ending a take.
+  - **Piano and MIDI (`tests/unit/views_piano_test.d`):** MIDI note-on/off packets and on-screen piano clicks are recorded with velocities; MIDI notes during the count-in are dropped.
+  - **Updated tests:** keymap (new binding, menu table, document-level list, `StudioAction.max`), transport EDIT/Rec buttons, root shortcuts, pattern editor status text.
+  - `DFLAGS="-w" dub build --compiler=ldc2 --config=headless --force` and `--config=app --build=debug --force` both exit 0 with zero warnings. `dub test --compiler=ldc2 --config=app`: `4 modules passed unittests`.
+  - `dub test --compiler=ldc2 --config=headless`: 25/26 modules pass. The one failure is the existing, unrelated `tests/unit/views_patchbay_test.d:824` (`menu should contain 'Add Core ▸'`).
+  - Not run: `--studio-selftest` and `--studio-gui-selftest`, which need the audio device and a window. Live CoreAudio timing of the count-in click, and how responsive recording feels on real hardware, have not been checked.
+
+---
+
 ## [2026-11-25 12:31:42 KST]
 - **Author:** Claude Opus 5.5
 - **Affected Files:** `source/gui/views/pattern_editor.d`, `source/gui/views/studio_root.d`, `tests/unit/views_pattern_editor_test.d`, `tests/unit/views_studio_root_test.d`, `docs/manual.md`, `docs/changelog.md`

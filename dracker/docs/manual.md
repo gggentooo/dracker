@@ -109,7 +109,7 @@ Startup sequence:
   - the right-hand columns: 240 pt wide.
 
 ### 2.2 Status bar
-- **Left side:** the most recent message, such as "Saved", "Octave 5", "Record on" or "Font not found: …". It reads "Ready" when there is none.
+- **Left side:** the most recent message, such as "Saved", "Octave 5", "Edit on", "Count-in 3" or "Font not found: …". It reads "Ready" when there is none.
 - **Right side:** **Modified** when there are unsaved changes, otherwise **Saved**.
 - The window title also ends with **"•"** when the project is modified.
 
@@ -121,7 +121,7 @@ Some shortcuts (copy, paste, delete, zoom, transpose and so on) depend on contex
 
 At startup that is the pattern editor. Clicking in a pane makes it the target.
 
-Other shortcuts work no matter which pane is active: play, stop, record, octave, undo/redo, file commands, loop, panic and appearance.
+Other shortcuts work no matter which pane is active: play, stop, record, edit mode, octave, undo/redo, file commands, loop, panic and appearance.
 
 > **QA note:** after you click a transport button, that button keeps keyboard focus. Space or Return then "presses" it again instead of toggling playback. Click inside the pattern editor or patchbay to restore the normal behavior.
 
@@ -165,7 +165,8 @@ All menu commands can also be triggered from the keyboard.
 | Item | Shortcut | What it does |
 |---|---|---|
 | Play / Stop | ⌘Return (also Space) | Toggles song playback |
-| Record | ⌘R | Toggles record (edit) mode |
+| Record | ⌘R | Starts or stops live recording ([§8.11](#811-live-recording-record-mode)) |
+| Edit Mode | ⇧⌘R | Toggles edit mode (played notes are written at the pattern editor cursor) |
 | Panic (All Notes Off) | ⌘. | Stops playback and silences all notes |
 
 ### View menu
@@ -220,7 +221,7 @@ These behaviors are the same everywhere in the app.
 
 ### 4.4 Keyboard focus
 - **Tab / Shift+Tab** move focus between controls, as long as the active pane doesn't use Tab itself.
-- **Escape** closes the topmost popup. With no popup open, Escape turns **Record** (edit) mode off if it is on; otherwise it **stops playback**.
+- **Escape** closes the topmost popup. With no popup open, Escape ends a live recording if one is running, otherwise turns **edit mode** off if it is on, otherwise **stops playback**.
 
 > **QA note:** in the pattern editor, Tab enters a note-off, so it does not move focus there.
 
@@ -235,7 +236,8 @@ Controls from left to right. If the window is too narrow, controls on the right 
 | **Play** ▶ | Starts or pauses song playback (shows pause bars while playing). Lit during song playback. |
 | **Stop** ■ | Stops and returns to line 0 |
 | **Pat** (▶ with bar) | Plays only the current pattern, looping. Press again to stop. Lit while auditioning. |
-| **Rec** ● | Toggles record (edit) mode. Lit (red) while on. You **must** be in record mode to type notes into patterns. |
+| **EDIT** | Toggles edit mode. Lit (red) while on. You **must** be in edit mode to type notes into patterns at the cursor. |
+| **Rec** ● | Starts or stops live recording ([§8.11](#811-live-recording-record-mode)). Blinks on the beat during the count-in, then stays lit while recording. |
 | **FOLLOW** | When on (the default), the pattern editor and timeline scroll to follow the playhead |
 | **LOOP** | Turns looping on or off (see below). Lit while a loop is set. |
 | **BPM** | Tempo, 20–999, adjustable in steps of 0.1. Default 125. |
@@ -446,7 +448,7 @@ The pattern editor is where you write music. Time runs downward, one **line** pe
 - **Add:** creates a new empty pattern the same size as the current one, and selects it.
 - **Dup:** duplicates the current pattern; the copy is named "*name* copy".
 - **Del:** deletes the current pattern **and every timeline clip that uses it**. Undo restores both. The last remaining pattern can't be deleted.
-- **Info text:** `Oct N  Step N`, plus **REC** when recording and **FOLLOW** when following.
+- **Info text:** `Oct N  Step N`, plus **EDIT** in edit mode, **REC** while live recording, and **FOLLOW** when following.
 
 Up to 256 patterns are allowed.
 
@@ -492,11 +494,11 @@ Other things you'll see:
 | ⇧Tab | Previous track |
 | ⌘[ / ⌘] | Previous / next pattern (no wrap-around) |
 | Click | Places the cursor on the exact field clicked |
-| Double-click | Places the cursor on the note field of the clicked row and turns **Record** (edit) mode on |
+| Double-click | Places the cursor on the note field of the clicked row and turns **edit mode** on |
 | Scroll | Vertical scrolls lines; horizontal, or Shift+scroll, scrolls tracks |
 
 ### 8.4 Entering notes and values
-**Turn on Record mode first** (⌘R, the **Rec** button, or **double-click a row** in the pattern editor). Outside record mode, keys only *play* sounds; nothing is written. Press **Escape** to leave record mode.
+**Turn on edit mode first** (⇧⌘R, the **EDIT** button, or **double-click a row** in the pattern editor). Outside edit mode, keys only *play* sounds; nothing is written. Press **Escape** to leave edit mode. Edit mode and live recording ([§8.11](#811-live-recording-record-mode)) are separate: turning one on turns the other off.
 
 After a double-click, the next note you play on the computer keyboard, a MIDI keyboard or the on-screen piano is written to that row, and the cursor then moves down by the **edit step** as usual. Set the step to 0 to keep entering notes on the same row.
 
@@ -524,7 +526,7 @@ After a double-click, the next note you play on the computer keyboard, a MIDI ke
 | **Delete** (⌫) | With a selection, clears it. Otherwise clears the field under the cursor (the whole cell when on the note field) and moves down. |
 | **Forward Delete** (⌦) | Clears the selection, or the cursor cell, without moving |
 
-Both work without record mode.
+Both work without edit mode.
 
 ### 8.6 Selecting blocks
 - **Drag** with the mouse. The view scrolls when you drag past the top or bottom.
@@ -590,18 +592,46 @@ Type the code (hex) into **EE** and the parameter into **YY**. "Tick" means one 
 
 **Controller automation.** Put a parameter number in **CC** (1 = first parameter in the rack) and a value in **YY** (`00`–`FF` covers the parameter's whole range). For example, `CC=04, YY=80` sets the 4th parameter to its midpoint.
 
-### 8.9 Recording from MIDI
-With **Record** on and a MIDI keyboard connected:
+### 8.9 Entering notes from MIDI in edit mode
+With **edit mode** on and a MIDI keyboard connected:
 
 - **Stopped (step recording):** notes are written at the cursor line. Chords spread across successive tracks. The cursor then moves by the edit step.
 - **Playing (live recording):** notes are written at the line under the playhead, in whichever clip of this pattern is playing. Notes that fall outside every clip of the current pattern are dropped.
 
-Velocity is taken from the MIDI note. Note-offs are not recorded; add `===` by hand where needed.
+Velocity is taken from the MIDI note. Note-offs are not recorded in edit mode; add `===` by hand where needed. To record a performance with note lengths, use live recording ([§8.11](#811-live-recording-record-mode)).
 
 ### 8.10 Following the playhead
 - **⌘F**, or the FOLLOW button, toggles follow mode. It is on by default.
 - While playing, the editor keeps the playhead line centered.
 - When auditioning a pattern (Pat / ⇧Space), the playhead wraps within the pattern.
+
+### 8.11 Live recording (Record mode)
+Live recording captures what you play on the computer keyboard, a MIDI keyboard or the on-screen piano into a **new pattern**, in time with the song.
+
+**Starting**
+1. Select an **instrument module** in the patchbay. Recording does not start with nothing or the **Master Output** selected ("Select an instrument module to record").
+2. Put the playhead where the take should start (click the timeline ruler, or stop there).
+3. Press **⌘R** or the **Rec** button. Edit mode turns off.
+
+**Count-in**
+- Playback starts **four beats** (16 lines) before the record point, with a metronome click on every beat; the first click is higher.
+- Where those lines exist, the song plays under the count-in (pre-roll). Before line 0 there is only the click.
+- The status bar counts down ("Count-in 4" … "Count-in 1"), then shows "Recording". The **Rec** button blinks on the beat during the count-in.
+- The song loop is ignored while recording, so the playhead keeps moving forward. The loop itself is not changed.
+
+**What is recorded**
+- Each note is placed on the **nearest line** to when you pressed it.
+- Notes pressed **less than one line apart** count as a chord: they go on the **same line**, one track each.
+- Each new note goes on the first track that is not holding a note, so held notes keep sounding under later ones.
+- Releasing a key writes a note-off (`===`) at the nearest line, at least one line after the note.
+- Notes are written for the module selected at the time, with their velocity (computer keyboard: full; on-screen piano: `6D`; MIDI: as played).
+- Notes played during the count-in are not recorded, except within half a line before the record point (they go on the first line).
+
+**Stopping**
+- Press **⌘R** or **Rec** again, **Escape**, **Stop**, **Space**/**Play**, or **Pat**. Playback stops and the playhead returns to the record point.
+- The take becomes a new pattern named **Take NN**, trimmed to the last 16-line bar used (at least 4 tracks). A clip for it is placed at the record point on the **first timeline lane that is free** for its length, and it becomes the current pattern.
+- Adding the take is **one undo step** ("Record Take"). A take with no notes adds nothing ("Recording stopped: no notes recorded").
+- Turning edit mode on (⇧⌘R, **EDIT**, or double-clicking a row) also ends the take.
 
 ---
 
@@ -743,7 +773,7 @@ The scope shows "No signal" when there is no audio, and updates continuously onl
 ## 12. Playing live
 
 ### 12.1 The computer-keyboard piano
-When no shortcut uses a key, the letter keys play the **selected module** like a piano, two octaves wide. It works whenever record mode is off, and in the pattern editor's note field while it is on.
+When no shortcut uses a key, the letter keys play the **selected module** like a piano, two octaves wide. It works whenever edit mode is off, and in the pattern editor's note field while it is on. During live recording every played key is recorded ([§8.11](#811-live-recording-record-mode)).
 
 ```
  Upper octave (+1):   2 3   5 6 7   9 0
@@ -766,13 +796,13 @@ A stark black-and-white high-contrast piano strip sits across the full viewport 
 
 - **Layout & resizing:** The leftmost key is always **C** of the current **edit octave** (each visible **C** key shows its octave number below the black keys). Drag the top or bottom border of the strip to resize it; key widths scale proportionally with height.
 - **Octave buttons:** Click the stacked **up/down** buttons at the far right to shift the shared edit octave (`-1` to `9`, synchronized with the transport **OCT** box and **F1 / F2**).
-- **Playing & recording:** Click or drag across keys to play notes on the **selected module**. With **Record** enabled, clicked keys also insert notes into the pattern editor.
+- **Playing & recording:** Click or drag across keys to play notes on the **selected module**. In **edit mode**, clicked keys also insert notes into the pattern editor; during live recording they are recorded into the take.
 - **Live highlighting:** Active keys highlight in the theme's accent color for mouse presses, computer-keyboard piano holds, external MIDI input, and pattern playback targeting the currently selected module.
 
 ### 12.3 MIDI keyboards and controllers
 - All connected MIDI sources play the **selected module**. The transport shows which sources are connected.
 - Map controller knobs to parameters with **MIDI Learn** ([§7.3](#73-midi-learn-controlling-a-parameter-from-hardware)).
-- Record MIDI notes into patterns with Record on ([§8.9](#89-recording-from-midi)).
+- Enter MIDI notes at the cursor in edit mode ([§8.9](#89-entering-notes-from-midi-in-edit-mode)), or record a performance with live recording ([§8.11](#811-live-recording-record-mode)).
 
 ### 12.4 Panic
 **⌘.** stops playback and silences everything. Use it if a note gets stuck.
@@ -792,7 +822,7 @@ A project file stores everything about the song:
 - MIDI mappings;
 - the loop range.
 
-It does **not** store editor state: edit octave, edit step, record/follow, selection or zoom.
+It does **not** store editor state: edit octave, edit step, edit/follow, selection or zoom.
 
 Projects use format version 1. Files from a future version are refused with "Unsupported .msv format version". Unknown extra data from newer builds is skipped where possible.
 
@@ -923,10 +953,10 @@ Opening a project or starting a new one clears the history.
 5. **Shape the sound:** in the rack, drag **Cutoff** down and **Resonance** up. Set **Waveform** to 3 (pulse) with ↑/↓ on the dropdown.
 6. **Write a pattern:**
    1. Click the first cell of track 1 in the pattern editor.
-   2. Press **⌘R** (Rec lights).
+   2. Press **⇧⌘R** (EDIT lights).
    3. Set **STEP** to 4.
    4. Press **Z**, **C**, **B**, **C**. Notes appear every 4 lines with module `02`.
-   5. Press **⌘R** again to leave record mode.
+   5. Press **⇧⌘R** again (or **Escape**) to leave edit mode.
 7. **Listen:** press **⇧Space** to loop the pattern, and again to stop.
 8. **Add an effect:**
    1. Right-click the canvas → **Add Effect ▸ Echo**.
@@ -949,8 +979,9 @@ Opening a project or starting a new one clears the history.
 |---|---|
 | Space · ⌘Return | Play / pause song |
 | ⇧Space | Play / stop current pattern (loop) |
-| Escape | Leave record (edit) mode if it is on; otherwise stop and return to line 0 (when no popup is open) |
-| ⌘R | Record (edit) mode |
+| Escape | End live recording if running, else leave edit mode if it is on, else stop and return to line 0 (when no popup is open) |
+| ⌘R | Start / stop live recording |
+| ⇧⌘R | Edit mode |
 | F1 / F2 | Edit octave down / up |
 | ⌘. | Panic: stop and silence everything |
 | ⌘L | Toggle loop (whole song) |

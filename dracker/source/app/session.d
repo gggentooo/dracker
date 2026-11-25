@@ -31,7 +31,9 @@
  *     play()/stop()/togglePlay()/seekLine()/playPattern()/isPlaying(), setScopeTaps(), doAddMidiMapping(),
  *     doRemoveMidiMapping(), beginMidiLearn()/cancelMidiLearn(), processMidiFromRt(), beginExport()/exportStatus()/
  *     cancelExport()/waitForExport(), undo(), redo(), save/open/preset/import APIs, handleKeyEvent(),
- *     triggerLiveNote(), releaseLiveNote(), pollRetiredAndTelemetry()
+ *     triggerLiveNote(), releaseLiveNote(), pollRetiredAndTelemetry(), live record takes (beginLiveTake(),
+ *     liveTakeActive(), liveTakeStartLine(), liveTakeNoteCount(), liveSongPosition(), liveTakeNoteOn()/Off(),
+ *     liveTakeShouldEnd(), endLiveTake())
  *   - struct MidiNoteEvent / SamplePeaks / ExportOptions / ExportStatus; enum ExportState; class ExportJob
  *   - SamplePeaks computeSamplePeaks(...) / float denormalizeParam(...)
  *
@@ -50,6 +52,7 @@ import std.math : isFinite;
 
 import app.history;
 import app.keymap : Keymap, StudioAction;
+import app.live_take : LiveTakeRecorder, LiveTakeResult;
 import foundation.types : ModuleId;
 import graph.audio_graph : RetiredKind, RetiredResource;
 import graph.module_api : AssetSwap, ModuleCategory, ModuleDescriptor, ModuleInstance, ModuleVTable, ParamDescriptor,
@@ -61,7 +64,7 @@ import io.importers.sunvox_importer : ImportReport, importSunvoxFile;
 import io.importers.xm_importer : importXmFile;
 import io.project_format : LoadedPreset, LoadedProject, loadPreset, loadProject, loadProjectFile,
     isValidMidiMapping, isValidPatternShape, isValidTempo, materializeProjectToEngine, MAX_EXTRA_BLOB_BYTES,
-    MAX_MIDI_MAPPINGS, MAX_PATTERNS, MAX_STRING_LEN, SavedMidiMapping, savePreset, saveProject, SavedModule, SavedPattern, SavedWire,
+    MAX_LINES, MAX_MIDI_MAPPINGS, MAX_PATTERNS, MAX_STRING_LEN, SavedMidiMapping, savePreset, saveProject, SavedModule, SavedPattern, SavedWire,
     serializePreset, serializeProject;
 import modules.control.metamodule : MetaMacroBinding, MetaModuleAsset;
 import io.audio_io : writeWavFile;
@@ -455,6 +458,10 @@ private struct PendingModuleRetire {
  * down Engine state and can distinguish RT-owned from UI-owned engine phases.
  */
 class StudioSession {
+    enum uint COUNT_IN_BEATS = 4;
+    enum uint LINES_PER_BEAT = 4;
+    enum uint MAX_TAKE_LANE = 255;
+
     private Engine* engine_;
     private UndoHistory history_;
     private Keymap keymap_;
@@ -479,7 +486,9 @@ class StudioSession {
     private bool initialized_ = false;
     private bool dirty_ = false;
     private ulong revision_ = 1;
-    private bool recording_ = false;
+    private bool editMode_ = false;
+    private LiveTakeRecorder liveTake_;
+    private bool liveTakeSawPlaying_ = false;
     private int currentOctave_ = 4;
     private uint currentPatternId_ = 1;
     private uint nextModuleId_ = 2;
@@ -1890,6 +1899,200 @@ class StudioSession {
     }
 
     /**
+     * Starts a live-record take: plays a COUNT_IN_BEATS-beat count-in (the song pre-rolls from startLine minus the
+     * count-in, with a metronome click on every beat), then keeps playing while notes are captured. The song loop
+     * is suspended in the Engine until the take ends (the document loop is not changed).
+     *
+     * Params:
+     *   startLine = Song line where the take (and its new pattern) starts (clamped to >= 0).
+     *
+     * Returns:
+     *   True if the take started; false when no engine is running or a take is already active.
+     */
+    bool beginLiveTake(long startLine) {
+        if (engine_ is null || !initialized_ || liveTake_ !is null) {
+            return false;
+        }
+        immutable long start = startLine < 0 ? 0 : startLine;
+        if (transientTimeline_ && !pushTimelineSnapshot(false)) {
+            return false;
+        }
+        if (!sendCommand(EngineCommand.makeSetLoop(0, 0))
+                || !sendCommand(EngineCommand.makePlayCountIn(start, COUNT_IN_BEATS * LINES_PER_BEAT, LINES_PER_BEAT))) {
+            cast(void) sendCommand(EngineCommand.makeSetLoop(doc_.loopStartLine, doc_.loopEndLine));
+            return false;
+        }
+        liveTake_ = new LiveTakeRecorder(start);
+        liveTakeSawPlaying_ = false;
+        return true;
+    }
+
+    /**
+     * Reports whether a live-record take (count-in or capture) is running.
+     *
+     * Returns:
+     *   True between beginLiveTake() and endLiveTake().
+     */
+    bool liveTakeActive() const {
+        return liveTake_ !is null;
+    }
+
+    /**
+     * Returns the song line where the active take starts.
+     *
+     * Returns:
+     *   Start line, or -1 without an active take.
+     */
+    long liveTakeStartLine() const {
+        return liveTake_ is null ? -1 : liveTake_.startLine();
+    }
+
+    /**
+     * Returns the number of notes captured in the active take.
+     *
+     * Returns:
+     *   Note count (0 without a take).
+     */
+    size_t liveTakeNoteCount() const {
+        return liveTake_ is null ? 0 : liveTake_.noteCount();
+    }
+
+    /**
+     * Returns the Engine playhead as a fractional song line (line + tick / ticksPerLine) from the latest telemetry.
+     *
+     * Returns:
+     *   Song position (negative during a count-in before line 0).
+     */
+    double liveSongPosition() {
+        if (engine_ is null) {
+            return 0.0;
+        }
+        EngineTelemetry tel;
+        engine_.readTelemetry(tel);
+        immutable uint tpl = tel.ticksPerLine == 0 ? 1 : tel.ticksPerLine;
+        return cast(double) tel.currentLine + cast(double) tel.currentTick / cast(double) tpl;
+    }
+
+    /**
+     * Captures a live note-on into the active take at the current playhead position.
+     *
+     * Params:
+     *   tag = Unique id of the key or MIDI note (matches the release).
+     *   midi = MIDI note 0..127.
+     *   velocity = Normalized velocity.
+     *   moduleId = Module the note plays (0 and the Master Output are refused).
+     *
+     * Returns:
+     *   True if the note was recorded.
+     */
+    bool liveTakeNoteOn(uint tag, ubyte midi, float velocity, uint moduleId) {
+        if (liveTake_ is null || moduleId == 0 || moduleId > ushort.max || isMasterOutputModule(moduleId)) {
+            return false;
+        }
+        return liveTake_.noteOn(tag, midi, velocity, cast(ushort) moduleId, liveSongPosition());
+    }
+
+    /**
+     * Captures the release of a live note into the active take.
+     *
+     * Params:
+     *   tag = Tag passed to liveTakeNoteOn().
+     *
+     * Returns:
+     *   True if the tag was held in the take.
+     */
+    bool liveTakeNoteOff(uint tag) {
+        if (liveTake_ is null) {
+            return false;
+        }
+        return liveTake_.noteOff(tag, liveSongPosition());
+    }
+
+    /**
+     * Reports whether the active take should end on its own: playback stopped by other means after it started,
+     * or the take reached MAX_LINES.
+     *
+     * Returns:
+     *   True when the caller should call endLiveTake().
+     */
+    bool liveTakeShouldEnd() {
+        if (liveTake_ is null || engine_ is null) {
+            return false;
+        }
+        EngineTelemetry tel;
+        engine_.readTelemetry(tel);
+        if (tel.playing) {
+            liveTakeSawPlaying_ = true;
+        } else if (liveTakeSawPlaying_) {
+            return true;
+        }
+        return tel.currentLine - liveTake_.startLine() >= cast(long) MAX_LINES;
+    }
+
+    /**
+     * Ends the active take: stops playback, restores the Engine loop, seeks back to the take start, and adds the
+     * captured notes as a new "Take NN" pattern with a clip at the take start on the first free lane, as one
+     * undo step ("Record Take"). Empty takes add nothing.
+     *
+     * Returns:
+     *   New pattern id, or 0 when nothing was recorded (or no take was active).
+     */
+    uint endLiveTake() {
+        if (liveTake_ is null) {
+            return 0;
+        }
+        LiveTakeRecorder take = liveTake_;
+        immutable double pos = liveSongPosition();
+        liveTake_ = null;
+        liveTakeSawPlaying_ = false;
+        cast(void) sendCommand(EngineCommand.makeStop());
+        cast(void) sendCommand(EngineCommand.makeSetLoop(doc_.loopStartLine, doc_.loopEndLine));
+        cast(void) sendCommand(EngineCommand.makeSeekLine(take.startLine()));
+        LiveTakeResult res = take.finish(pos);
+        if (res.notes == 0 || res.tracks == 0 || res.lines == 0) {
+            return 0;
+        }
+        immutable long start = take.startLine();
+        immutable uint lane = firstFreeLane(start, res.lines);
+        history_.beginGroup("Record Take");
+        immutable uint pid = doAddPattern(res.tracks, res.lines, format("Take %02d", nextPatternId()));
+        bool ok = pid != 0 && doReplacePatternCells(pid, res.cells, "Record Take");
+        ok = ok && doAddClip(pid, start, res.lines, lane) != 0;
+        if (!history_.endGroup(this) || !ok) {
+            return 0;
+        }
+        return pid;
+    }
+
+    private uint firstFreeLane(long start, uint lines) const {
+        immutable long end = start + cast(long) lines;
+        uint lane = 0;
+        while (lane < MAX_TAKE_LANE) {
+            bool busy = false;
+            foreach (ref c; doc_.clips) {
+                if (c.laneY == lane && c.startLine < end && c.startLine + cast(long) c.lengthLines > start) {
+                    busy = true;
+                    break;
+                }
+            }
+            if (!busy) {
+                return lane;
+            }
+            lane++;
+        }
+        return lane;
+    }
+
+    private bool isMasterOutputModule(uint modId) const {
+        foreach (ref m; doc_.modules) {
+            if (m.id == modId) {
+                return m.typeId == "core.output";
+            }
+        }
+        return false;
+    }
+
+    /**
      * Undoable loop range edit (endLine 0 disables looping).
      *
      * Params:
@@ -3022,7 +3225,20 @@ class StudioSession {
                 cast(void) sendCommand(EngineCommand.makeSeekLine(0));
                 break;
             case StudioAction.recordToggle:
-                recording_ = !recording_;
+                if (liveTakeActive()) {
+                    endLiveTake();
+                } else {
+                    EngineTelemetry rt;
+                    engine_.readTelemetry(rt);
+                    editMode_ = false;
+                    beginLiveTake(rt.currentLine);
+                }
+                break;
+            case StudioAction.editToggle:
+                if (liveTakeActive()) {
+                    endLiveTake();
+                }
+                editMode_ = !editMode_;
                 break;
             case StudioAction.octaveUp:
                 if (currentOctave_ < 9) currentOctave_++;
@@ -3052,6 +3268,8 @@ class StudioSession {
     }
 
     private void clearLiveAndEngine() {
+        liveTake_ = null;
+        liveTakeSawPlaying_ = false;
         engine_.releaseAllOwnedResources();
         activePlan_ = null;
         foreach (ref inst; liveModules_) {

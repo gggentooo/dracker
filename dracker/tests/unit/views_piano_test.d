@@ -41,7 +41,7 @@ version (unittest) {
     import gui.widgets : UiContext;
     import platform.interfaces : AudioDeviceInfo, MidiDeviceInfo, MidiPacket, PlatformEvent, PlatformEventKind;
     import sequencer.engine : Engine;
-    import sequencer.note : NoteCell;
+    import sequencer.note : NoteCell, NoteCmd;
 
     private final class PianoRasterizer : IGlyphRasterizer {
         override bool rasterize(FontId font, float px, dchar cp, out RasterizedGlyph g) {
@@ -338,7 +338,7 @@ version (unittest) {
 
         r.ctx.setEditOctave(4);
         r.frame();
-        r.ctx.recording = true;
+        r.ctx.editMode = true;
         immutable RectF e4 = r.piano.keyRect(64);
         r.click(Point2F(e4.center().x, e4.y + e4.h * 0.85f));
         MidiNoteEvent[] notes = r.ctx.takeMidiNotes();
@@ -417,5 +417,61 @@ version (unittest) {
         r.frame();
         assert(hasFillColorInside(r, r.ctx.theme.accent, c4));
         r.mouse(PlatformEventKind.mouseUp, Point2F(c4.center().x, c4.y + c4.h * 0.85f));
+    }
+
+    unittest {
+        PianoRig r = makePianoRig();
+        scope (exit) r.session.dispose();
+        auto s = r.session;
+        immutable uint gen = s.doAddModule("synth.analog_gen", "Gen");
+        assert(s.doConnectWire(gen, 2, 1, 0, 1.0f));
+        r.ctx.selectModule(gen);
+        r.ctx.setEditOctave(4);
+        r.frame();
+        float[256] l = 0.0f;
+        float[256] rr = 0.0f;
+        float[][2] outs = [l[], rr[]];
+        const(float[])[2] ins = [null, null];
+        void renderUntil(double pos) {
+            foreach (_; 0 .. 4000) {
+                s.engine().processHostBuffer(outs, ins, 256);
+                r.ctx.tick();
+                if (s.liveSongPosition() >= pos) {
+                    return;
+                }
+            }
+            assert(false, "renderUntil timed out");
+        }
+
+        assert(r.ctx.startLiveRecord());
+        r.audio.pushNote(true, 0, 70, 100);
+        renderUntil(-12.0);
+        assert(s.liveTakeNoteCount() == 0);
+        r.audio.pushNote(false, 0, 70, 0);
+        renderUntil(0.0);
+
+        immutable RectF e4 = r.piano.keyRect(64);
+        r.mouse(PlatformEventKind.mouseDown, Point2F(e4.center().x, e4.y + e4.h * 0.85f));
+        renderUntil(2.0);
+        r.mouse(PlatformEventKind.mouseUp, Point2F(e4.center().x, e4.y + e4.h * 0.85f));
+        r.audio.pushNote(true, 3, 67, 127);
+        r.ctx.tick();
+        renderUntil(5.0);
+        r.audio.pushNote(false, 3, 67, 0);
+        r.ctx.tick();
+        assert(s.liveTakeNoteCount() == 2);
+
+        immutable uint pid = r.ctx.stopLiveRecord();
+        assert(pid != 0);
+        const take = s.document().patterns[$ - 1];
+        assert(take.patternId == pid && take.lines == 16 && take.tracks == 4);
+        assert(take.cells[0].note == NoteCell.encodeMidiNote(64) && take.cells[0].moduleId == gen);
+        assert(take.cells[2 * 4].note == NoteCell.encodeMidiNote(67) && take.cells[2 * 4].moduleId == gen);
+        assert(take.cells[2 * 4].normalizedVelocity() > 0.99f);
+        assert(take.cells[5 * 4].note == NoteCmd.noteOff);
+        foreach (i, c; take.cells) {
+            assert(i == 0 || i == 2 * 4 || i == 5 * 4 || c.isEmpty());
+        }
+        assert(s.document().clips[$ - 1].startLine == 0 && s.document().clips[$ - 1].laneY == 1);
     }
 }

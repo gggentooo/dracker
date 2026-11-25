@@ -32,6 +32,7 @@
 module tests.unit.views_studio_root_test;
 
 version (unittest) {
+    import std.format : format;
     import std.math : fabs;
 
     import app.keymap : StudioAction;
@@ -44,7 +45,7 @@ version (unittest) {
     import gui.views.studio_root : StudioRoot;
     import gui.widgets : UiContext;
     import platform.interfaces : KeyModifiers, PlatformEvent, PlatformEventKind;
-    import sequencer.note : NoteCell;
+    import sequencer.note : NoteCell, NoteCmd;
 
     private final class RootRasterizer : IGlyphRasterizer {
         override bool rasterize(FontId font, float px, dchar cp, out RasterizedGlyph g) {
@@ -204,10 +205,10 @@ version (unittest) {
         r.press(6, KeyModifiers.command | KeyModifiers.shift);
         assert(r.session.document().modules[1].name == "Lead");
 
-        r.press(15, KeyModifiers.command);
-        assert(r.ctx.recording);
-        r.press(15, KeyModifiers.command);
-        assert(!r.ctx.recording);
+        r.press(15, KeyModifiers.command | KeyModifiers.shift);
+        assert(r.ctx.editMode && r.ctx.status == "Edit on");
+        r.press(15, KeyModifiers.command | KeyModifiers.shift);
+        assert(!r.ctx.editMode && r.ctx.status == "Edit off");
         immutable int oct = r.ctx.editOctave;
         r.press(120);
         assert(r.ctx.editOctave == oct + 1);
@@ -251,19 +252,19 @@ version (unittest) {
         r.session.engine().processHostBuffer(outs, ins, 256);
         r.frame();
         assert(r.session.isPlaying());
-        r.ctx.recording = true;
+        r.ctx.editMode = true;
         r.press(53);
         r.session.engine().processHostBuffer(outs, ins, 256);
         r.frame();
-        assert(!r.ctx.recording && r.ctx.status == "Record off" && r.session.isPlaying());
+        assert(!r.ctx.editMode && r.ctx.status == "Edit off" && r.session.isPlaying());
         r.press(53);
         r.session.engine().processHostBuffer(outs, ins, 256);
         r.frame();
-        assert(!r.ctx.recording && !r.session.isPlaying());
-        r.ctx.recording = true;
+        assert(!r.ctx.editMode && !r.session.isPlaying());
+        r.ctx.editMode = true;
         r.press(53, KeyModifiers.shift);
-        assert(r.ctx.recording);
-        r.ctx.recording = false;
+        assert(r.ctx.editMode);
+        r.ctx.editMode = false;
     }
 
     unittest {
@@ -274,10 +275,10 @@ version (unittest) {
         r.ctx.selectModule(gen);
         r.frame();
         r.click(r.root.pattern.fieldRect(0, 0, 0).center());
-        r.press(15, KeyModifiers.command);
+        r.press(15, KeyModifiers.command | KeyModifiers.shift);
         r.press(6);
         r.press(7);
-        r.press(15, KeyModifiers.command);
+        r.press(15, KeyModifiers.command | KeyModifiers.shift);
         assert(!r.session.document().patterns[0].cells[0].isEmpty());
         assert(!r.session.document().patterns[0].cells[4].isEmpty());
 
@@ -342,9 +343,9 @@ version (unittest) {
         r.frame();
         assert(!r.root.piano.isKeyHighlighted(60));
 
-        r.ctx.recording = true;
+        r.ctx.editMode = true;
         r.click(r.root.piano.keyRect(64).center());
-        r.ctx.recording = false;
+        r.ctx.editMode = false;
         assert(r.session.document().patterns[0].cells[1].note == NoteCell.encodeMidiNote(64));
         assert(r.session.document().patterns[0].cells[1].moduleId == gen);
 
@@ -580,5 +581,126 @@ version (unittest) {
         StudioContext c3 = new StudioContext(r.session);
         c3.appearanceStore = new MemStore();
         assert(!c3.loadAppearance() && c3.status.length == 0 && c3.theme == StudioTheme.init);
+    }
+
+    unittest {
+        Rig r = makeRig();
+        scope (exit) r.session.dispose();
+        auto s = r.session;
+        immutable uint gen = s.doAddModule("synth.analog_gen", "Gen");
+        assert(s.doConnectWire(gen, 2, 1, 0, 1.0f));
+        assert(s.doPatchCell(1, 0, 2, NoteCell.makeNote(50, 0.8f, cast(ushort) gen)));
+        assert(s.doPatchCell(1, 0, 4, NoteCell.makeNoteOff()));
+        assert(s.doSetLoop(0, 20));
+        r.frame();
+
+        float[256] l = 0.0f;
+        float[256] rr = 0.0f;
+        float[][2] outs = [l[], rr[]];
+        const(float[])[2] ins = [null, null];
+        void renderUntil(double pos) {
+            foreach (_; 0 .. 4000) {
+                s.engine().processHostBuffer(outs, ins, 256);
+                r.ctx.tick();
+                if (s.liveSongPosition() >= pos) {
+                    return;
+                }
+            }
+            assert(false, "renderUntil timed out");
+        }
+
+        r.press(15, KeyModifiers.command);
+        assert(!r.ctx.liveRecording() && r.ctx.status == "Select an instrument module to record");
+
+        r.ctx.selectModule(gen);
+        assert(s.seekLine(16));
+        s.engine().processHostBuffer(outs, ins, 256);
+        r.frame();
+        r.ctx.editMode = true;
+        r.press(15, KeyModifiers.command);
+        assert(r.ctx.liveRecording() && !r.ctx.editMode && s.liveTakeStartLine() == 16);
+        assert(r.ctx.status == "Count-in 4");
+        s.engine().processHostBuffer(outs, ins, 256);
+        r.ctx.tick();
+        assert(r.ctx.countingIn() && r.ctx.telemetry.engine.currentLine == 0);
+        bool preRollNote = false;
+        foreach (_; 0 .. 200) {
+            s.engine().processHostBuffer(outs, ins, 256);
+            r.ctx.tick();
+            preRollNote = preRollNote || r.ctx.telemetry.engine.isPatternNoteActive(gen, 50);
+            if (s.liveSongPosition() >= 5.2) break;
+        }
+        assert(preRollNote && r.ctx.status == "Count-in 3");
+        r.frame();
+        auto rec = r.root.transport.controlRect("transport.record");
+        assert(!rec.isEmpty());
+
+        renderUntil(16.05);
+        assert(!r.ctx.countingIn() && r.ctx.status == "Recording");
+        r.key(6);
+        renderUntil(19.1);
+        r.key(6, 0, false);
+        renderUntil(20.0);
+        r.key(1);
+        r.key(7);
+        renderUntil(22.0);
+        assert(r.ctx.telemetry.engine.currentLine == 22);
+        r.key(1, 0, false);
+        r.key(7, 0, false);
+        assert(s.liveTakeNoteCount() == 3);
+        immutable size_t undo0 = s.history().undoCount();
+        immutable size_t pats0 = s.document().patterns.length;
+        immutable size_t clips0 = s.document().clips.length;
+        r.press(53);
+        assert(!r.ctx.liveRecording() && !s.liveTakeActive());
+        assert(s.document().patterns.length == pats0 + 1 && s.document().clips.length == clips0 + 1);
+        assert(s.history().undoCount() == undo0 + 1 && s.history().nextUndoLabel() == "Record Take");
+        const take = s.document().patterns[$ - 1];
+        assert(r.ctx.currentPattern() == take.patternId && take.name == format("Take %02d", take.patternId));
+        assert(r.ctx.status == format("Recorded %s (3 notes)", take.name));
+        assert(take.tracks == 4 && take.lines == 16);
+        NoteCell cellAt(uint t, uint ln) {
+            return take.cells[ln * take.tracks + t];
+        }
+        assert(cellAt(0, 0).note == NoteCell.encodeMidiNote(60) && cellAt(0, 0).moduleId == gen);
+        assert(cellAt(0, 3).note == NoteCmd.noteOff);
+        assert(cellAt(0, 4).note == NoteCell.encodeMidiNote(61) && cellAt(1, 4).note == NoteCell.encodeMidiNote(62));
+        assert(cellAt(0, 6).note == NoteCmd.noteOff && cellAt(1, 6).note == NoteCmd.noteOff);
+        const clip = s.document().clips[$ - 1];
+        assert(clip.patternId == take.patternId && clip.startLine == 16 && clip.lengthLines == 16 && clip.laneY == 1);
+        assert(s.document().loopStartLine == 0 && s.document().loopEndLine == 20);
+        s.engine().processHostBuffer(outs, ins, 256);
+        r.frame();
+        assert(!s.isPlaying() && r.ctx.telemetry.engine.currentLine == 16);
+
+        assert(s.undo());
+        assert(s.document().patterns.length == pats0 && s.document().clips.length == clips0);
+        assert(s.redo() && s.document().patterns.length == pats0 + 1);
+
+        r.press(15, KeyModifiers.command);
+        assert(r.ctx.liveRecording());
+        r.press(15, KeyModifiers.command);
+        assert(!r.ctx.liveRecording() && r.ctx.status == "Recording stopped: no notes recorded");
+        assert(s.document().patterns.length == pats0 + 1);
+
+        r.press(15, KeyModifiers.command);
+        assert(r.ctx.liveRecording());
+        r.press(15, KeyModifiers.command | KeyModifiers.shift);
+        assert(!r.ctx.liveRecording() && r.ctx.editMode && r.ctx.status == "Edit on");
+        r.ctx.editMode = false;
+
+        r.press(15, KeyModifiers.command);
+        assert(r.ctx.liveRecording());
+        r.press(49);
+        assert(!r.ctx.liveRecording());
+        s.engine().processHostBuffer(outs, ins, 256);
+        assert(!s.isPlaying());
+
+        r.press(15, KeyModifiers.command);
+        renderUntil(s.liveTakeStartLine() + 0.2);
+        assert(s.stop());
+        s.engine().processHostBuffer(outs, ins, 256);
+        r.ctx.tick();
+        assert(!r.ctx.liveRecording());
     }
 }
