@@ -38,6 +38,7 @@ version (unittest) {
 
     import app.session : MidiNoteEvent, StudioSession;
     import graph.module_api : ParamDescriptor, ParamScale;
+    import gui.theme : StudioTheme;
     import gui.renderer;
     import gui.widgets;
     import gui.views.param_rack;
@@ -542,11 +543,70 @@ version (unittest) {
                 + rig.renderer.measureText(headerCaptions[k], FontId.ui, rig.ui.theme.fontSizeBody);
             assert(captionRight <= hb.right() + 0.01f);
             assert(hb.right() <= rig.viewRect.right());
-            if (k < 2) {
-                assert(hb.right() <= view.headerToggleRect(k + 1).x);
+        }
+        immutable RectF mute = view.headerToggleRect(0);
+        immutable RectF bypass = view.headerToggleRect(1);
+        immutable RectF solo = view.headerToggleRect(2);
+        assert(mute.right() <= solo.x && solo.right() <= bypass.x);
+        rig.assertClipped(rig.frame());
+    }
+
+    unittest {
+        auto rig = new ViewRig();
+        scope (exit) rig.dispose();
+        immutable uint gen = rig.session.doAddModule("synth.analog_gen", "Gen");
+        auto view = new ParamRackView(rig.ctx);
+        rig.host(view);
+        rig.ctx.selectModule(gen);
+        rig.frame();
+
+        assert(view.controlKind(0) == ParamControlKind.dropdown);
+        auto wf = cast(Dropdown) view.paramControl(0);
+        assert(wf !is null && wf.items == ["Sine", "Triangle", "Saw", "Square", "Noise", "Drawn"]);
+        assert(view.paramValueText(0) == "Saw" && wf.selectedIndex == 2);
+        rig.click(wf.bounds.center());
+        assert(wf.isOpen());
+        rig.click(wf.popup().itemRect(3).center());
+        assert(!wf.isOpen() && wf.selectedIndex == 3 && view.paramValueText(0) == "Square");
+        foreach (ref m; rig.session.document().modules) {
+            if (m.id == gen) {
+                assert(m.paramValues[0] == 3.0f);
             }
         }
-        rig.assertClipped(rig.frame());
+
+        ParamDescriptor plain;
+        plain.scale = ParamScale.discrete;
+        plain.minVal = 1.0f;
+        plain.maxVal = 4.0f;
+        plain.unit = "v";
+        assert(discreteOptionLabel(plain, 2.0f) is null && formatParamValue(plain, 2.0f) == "2 v");
+        plain.options = ["One", "Two"];
+        assert(discreteOptionLabel(plain, 2.0f) == "Two" && formatParamValue(plain, 1.0f) == "One");
+        assert(discreteOptionLabel(plain, 3.0f) is null && formatParamValue(plain, 3.0f) == "3 v");
+        assert(discreteOptionLabel(plain, float.nan) is null);
+        plain.scale = ParamScale.linear;
+        assert(discreteOptionLabel(plain, 1.0f) is null);
+
+        immutable StudioTheme theme = rig.ui.theme;
+        immutable float[4] border = [theme.border.r, theme.border.g, theme.border.b, theme.border.a];
+        const(DrawList)* dl = rig.frame();
+        foreach (idx; [3u, 4u, 5u]) {
+            assert(view.controlKind(idx) == ParamControlKind.slider || view.controlKind(idx) == ParamControlKind.logSlider);
+            immutable RectF cr = view.paramControlRect(idx);
+            bool outlined = false;
+            foreach (ref inst; dl.instances) {
+                if (inst.kind != InstanceKind.shape || inst.colorBorder != border || !(inst.borderWidth > 0.0f)) {
+                    continue;
+                }
+                immutable RectF ir = RectF(inst.rect[0] * 0.5f, inst.rect[1] * 0.5f, inst.rect[2] * 0.5f,
+                    inst.rect[3] * 0.5f);
+                if (ir.x >= cr.x - 1.0f && ir.right() <= cr.right() + 1.0f && ir.y >= cr.y && ir.bottom() <= cr.bottom()
+                        && ir.w >= cr.w * 0.8f) {
+                    outlined = true;
+                }
+            }
+            assert(outlined);
+        }
     }
 
     unittest {

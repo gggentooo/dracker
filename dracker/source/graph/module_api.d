@@ -61,7 +61,8 @@ enum ModuleCategory : ubyte {
 }
 
 /**
- * User-defined attribute marking a float field on a module struct as an automatable parameter.
+ * User-defined attribute marking a float field on a module struct as an automatable parameter. For discrete
+ * parameters, options optionally names the values minVal, minVal + 1, ... in order (UI display only).
  */
 struct Param {
     string name;
@@ -70,10 +71,12 @@ struct Param {
     float defaultVal = 0.0f;
     string unit = "";
     ParamScale scale = ParamScale.linear;
+    string[] options;
 }
 
 /**
- * Immutable compile-time descriptor extracted from a module's @Param annotated float fields.
+ * Immutable compile-time descriptor extracted from a module's @Param annotated float fields (options carries the
+ * discrete value labels, empty when the parameter has none).
  */
 struct ParamDescriptor {
     uint index = 0;
@@ -84,6 +87,7 @@ struct ParamDescriptor {
     float defaultVal = 0.0f;
     string unit;
     ParamScale scale = ParamScale.linear;
+    immutable(string)[] options;
 }
 
 /**
@@ -219,7 +223,8 @@ private ParamDescriptor[N] buildParamDescriptors(T, size_t N)() {
                     p.maxVal,
                     p.defaultVal,
                     p.unit,
-                    p.scale
+                    p.scale,
+                    p.options.idup
                 );
                 idx++;
             }

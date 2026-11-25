@@ -32,8 +32,12 @@
 module tests.unit.views_studio_root_test;
 
 version (unittest) {
+    import std.algorithm : startsWith;
+    import std.file : exists, getSize, remove, tempDir, write;
     import std.format : format;
     import std.math : fabs;
+    import std.path : baseName, buildPath;
+    import std.process : thisProcessID;
 
     import app.keymap : StudioAction;
     import gui.appearance;
@@ -43,8 +47,8 @@ version (unittest) {
     import gui.renderer;
     import gui.views.studio_context : IStudioClipboard, StudioContext;
     import gui.views.studio_root : StudioRoot;
-    import gui.widgets : UiContext;
-    import platform.interfaces : KeyModifiers, PlatformEvent, PlatformEventKind;
+    import gui.widgets : MenuItem, UiContext;
+    import platform.interfaces : FileDialogFilter, IFileDialog, KeyModifiers, PlatformEvent, PlatformEventKind;
     import sequencer.note : NoteCell, NoteCmd;
 
     private final class RootRasterizer : IGlyphRasterizer {
@@ -702,5 +706,136 @@ version (unittest) {
         s.engine().processHostBuffer(outs, ins, 256);
         r.ctx.tick();
         assert(!r.ctx.liveRecording());
+    }
+
+    private final class PresetDialog : IFileDialog {
+        string openPath;
+        string savePath;
+        string lastTitle;
+        string lastDefaultName;
+        string[] lastExtensions;
+
+        override bool openFile(string title, const(FileDialogFilter)[] filters, out string selectedPath) {
+            lastTitle = title;
+            lastExtensions = filters.length > 0 ? filters[0].extensions.dup : null;
+            selectedPath = openPath;
+            return openPath.length > 0;
+        }
+
+        override bool saveFile(string title, string defaultName, const(FileDialogFilter)[] filters,
+                out string selectedPath) {
+            lastTitle = title;
+            lastDefaultName = defaultName;
+            lastExtensions = filters.length > 0 ? filters[0].extensions.dup : null;
+            selectedPath = savePath;
+            return savePath.length > 0;
+        }
+    }
+
+    unittest {
+        Rig r = makeRig();
+        scope (exit) r.session.dispose();
+        auto s = r.session;
+        auto dlg = new PresetDialog();
+        r.ctx.dialogs = dlg;
+        immutable string path = buildPath(tempDir(), format("dracker_preset_test_%d.msym", thisProcessID()));
+        immutable string badPath = path ~ ".bad";
+        scope (exit) {
+            if (exists(path)) remove(path);
+            if (exists(badPath)) remove(badPath);
+        }
+        immutable uint gen = s.doAddModule("synth.analog_gen", "Lead");
+        immutable uint fm = s.doAddModule("synth.fm_synth", "FM");
+        assert(s.doConnectWire(gen, 2, 1, 0, 1.0f));
+        assert(s.doSetParam(gen, 0, 1.0f) && s.doSetParam(gen, 3, 900.0f));
+        s.history().breakCoalesce();
+        r.frame();
+        float param(uint mod, uint idx) {
+            foreach (ref m; s.document().modules) {
+                if (m.id == mod) return m.paramValues[idx];
+            }
+            return float.nan;
+        }
+        MenuItem find(MenuItem[] items, string label) {
+            foreach (it; items) {
+                if (it.label == label) return it;
+            }
+            return MenuItem.init;
+        }
+
+        MenuItem[] nodeItems = r.root.patchbay.nodeMenuItems(gen);
+        assert(find(nodeItems, "Save Preset…").enabled && find(nodeItems, "Save Preset…").action !is null);
+        assert(find(nodeItems, "Apply Preset…").action !is null);
+        MenuItem[] outItems = r.root.patchbay.nodeMenuItems(1);
+        assert(find(outItems, "Save Preset…").action !is null && !find(outItems, "Save Preset…").enabled);
+        assert(!find(outItems, "Apply Preset…").enabled);
+        MenuItem[] canvasItems = r.root.patchbay.addModuleMenuItems(Point2F(321.0f, 123.0f), Point2F(0, 0));
+        assert(find(canvasItems, "Load Preset…").action !is null);
+
+        r.ctx.selectModule(0);
+        dlg.savePath = path;
+        r.press(1, KeyModifiers.command | KeyModifiers.alt);
+        assert(!exists(path) && r.ctx.status == "Select a module to save as a preset");
+        r.ctx.selectModule(1);
+        r.press(1, KeyModifiers.command | KeyModifiers.alt);
+        assert(!exists(path));
+        r.ctx.selectModule(gen);
+        dlg.savePath = null;
+        r.press(1, KeyModifiers.command | KeyModifiers.alt);
+        assert(!exists(path));
+        dlg.savePath = path;
+        r.press(1, KeyModifiers.command | KeyModifiers.alt);
+        assert(exists(path) && getSize(path) > 16 && r.ctx.status == "Saved preset " ~ baseName(path));
+        assert(dlg.lastTitle == "Save Module Preset" && dlg.lastDefaultName == "Lead.msym");
+        assert(dlg.lastExtensions == ["msym"]);
+
+        immutable size_t mods0 = s.document().modules.length;
+        immutable size_t wires0 = s.document().wires.length;
+        immutable size_t undo0 = s.history().undoCount();
+        r.press(31, KeyModifiers.command | KeyModifiers.alt);
+        assert(s.document().modules.length == mods0);
+        dlg.openPath = path;
+        r.press(31, KeyModifiers.command | KeyModifiers.alt);
+        assert(s.document().modules.length == mods0 + 1 && s.document().wires.length == wires0);
+        assert(s.history().undoCount() == undo0 + 1 && dlg.lastTitle == "Load Module Preset");
+        const loaded = s.document().modules[$ - 1];
+        assert(loaded.typeId == "synth.analog_gen" && loaded.name == "Lead" && loaded.id != gen);
+        assert(loaded.paramValues[0] == 1.0f && loaded.paramValues[3] == 900.0f);
+        assert(r.ctx.selectedModule() == loaded.id && r.ctx.status == "Loaded preset " ~ baseName(path));
+        assert(s.undo() && s.document().modules.length == mods0);
+
+        find(canvasItems, "Load Preset…").action();
+        assert(s.document().modules.length == mods0 + 1);
+        assert(s.document().modules[$ - 1].posX == 321.0f && s.document().modules[$ - 1].posY == 123.0f);
+        assert(s.undo());
+
+        assert(s.doSetParam(gen, 0, 3.0f) && s.doSetParam(gen, 3, 5000.0f));
+        s.history().breakCoalesce();
+        immutable size_t undo1 = s.history().undoCount();
+        find(nodeItems, "Apply Preset…").action();
+        assert(param(gen, 0) == 1.0f && param(gen, 3) == 900.0f && s.document().wires.length == wires0);
+        assert(s.history().undoCount() == undo1 + 1 && s.history().nextUndoLabel() == "Apply Preset");
+        assert(r.ctx.status == "Applied preset " ~ baseName(path));
+        assert(s.undo() && param(gen, 0) == 3.0f && param(gen, 3) == 5000.0f);
+        assert(s.redo() && param(gen, 3) == 900.0f);
+        immutable size_t undo2 = s.history().undoCount();
+        assert(r.ctx.applyModulePreset(gen) && s.history().undoCount() == undo2);
+
+        assert(!r.ctx.applyModulePreset(fm));
+        assert(r.ctx.status.startsWith("Apply preset failed: Preset is for a different module type"));
+        assert(!r.ctx.applyModulePreset(1) && r.ctx.status == "Select a module to apply a preset to");
+
+        write(badPath, "not a preset");
+        dlg.openPath = badPath;
+        assert(r.ctx.loadModulePreset(0.0f, 0.0f) == 0 && r.ctx.status.startsWith("Load preset failed: "));
+        assert(!r.ctx.applyModulePreset(gen) && r.ctx.status.startsWith("Apply preset failed: "));
+        dlg.openPath = path ~ ".missing";
+        assert(r.ctx.loadModulePreset(0.0f, 0.0f) == 0 && r.ctx.status.startsWith("Load preset failed: "));
+        assert(s.document().modules.length == mods0);
+
+        immutable float[2] at = r.ctx.nextModulePosition();
+        foreach (ref m; s.document().modules) {
+            assert(at[0] >= m.posX + 150.0f);
+        }
     }
 }

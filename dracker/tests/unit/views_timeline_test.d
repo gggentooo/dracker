@@ -959,4 +959,50 @@ version (unittest) {
         assert(v.selectedClip() == cl);
         assert(g.r.lastDrawList().instances.length > 0);
     }
+
+    unittest {
+        auto g = new Rig();
+        auto v = g.view;
+        void type(dstring t) {
+            foreach (c; t) {
+                PlatformEvent e;
+                e.kind = PlatformEventKind.textInput;
+                e.utf32Char = c;
+                g.ui.handleEvent(e);
+            }
+        }
+        void key(uint code) {
+            PlatformEvent e;
+            e.kind = PlatformEventKind.keyDown;
+            e.keyCode = code;
+            g.ui.handleEvent(e);
+        }
+        immutable uint p2 = g.s.doAddPattern(4, 16, "Drums");
+        g.ctx.selectPattern(p2);
+        g.frame();
+        immutable uint clipId = g.s.document().clips[0].clipId;
+        immutable uint p1 = g.s.document().clips[0].patternId;
+        immutable RectF cr = v.clipRect(clipId);
+        immutable RectF nr = v.clipNameRect(clipId);
+        assert(!nr.isEmpty() && nr.x >= cr.x && nr.right() <= cr.right() && nr.y >= cr.y && nr.bottom() <= cr.bottom());
+        assert(v.clipNameRect(9999).isEmpty());
+
+        g.dblClick(nr.center().x, nr.center().y);
+        assert(g.ui.overlays().length == 1 && g.ctx.currentPattern() == p2);
+        auto f = cast(TextField) g.ui.overlays()[0];
+        assert(f !is null && f.text() == g.s.document().patterns[0].name);
+        type("Drums"d);
+        key(KeyCode.returnKey);
+        assert(g.ui.overlays().length == 0 && g.s.document().patterns[0].name == "Drums1");
+        assert(g.ctx.status == "Renamed pattern to Drums1" && g.ctx.currentPattern() == p2);
+
+        g.dblClick(cr.right() - 12.0f, cr.bottom() - 4.0f);
+        assert(g.ui.overlays().length == 0 && g.ctx.currentPattern() == p1);
+
+        assert(v.beginRenameClipPattern(9999) is null);
+        auto f2 = v.beginRenameClipPattern(clipId);
+        assert(f2 !is null && f2.text() == "Drums1");
+        key(KeyCode.escape);
+        assert(g.s.document().patterns[0].name == "Drums1");
+    }
 }

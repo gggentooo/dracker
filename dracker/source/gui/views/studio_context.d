@@ -32,7 +32,8 @@
  *     clearVisualNotes(), hasHeldExternalNotes(), noteHighlightRevision(), activeNoteMask(), isNoteHighlighted(),
  *     applyAppearance(), loadAppearance(), saveAppearance(), toggleContrast(), themeRevision(), onThemeChanged(),
  *     setEditMode(), liveRecording(), countingIn(), startLiveRecord(), stopLiveRecord(), toggleLiveRecord(),
- *     liveInputNoteOn(), liveInputNoteOff()
+ *     liveInputNoteOn(), liveInputNoteOff(), renamePattern(), saveModulePreset(), loadModulePreset(),
+ *     applyModulePreset(), nextModulePosition()
  *
  * See_Also:
  *   architecture.md, dev_plan.md (Phase 8)
@@ -44,10 +45,11 @@ import app.session : MidiNoteEvent, StudioSession;
 import app.telemetry : makeStudioTelemetry, ScopeHistory, StudioTelemetry;
 import foundation.types : ModuleId;
 import std.format : format;
+import std.path : baseName;
 import gui.appearance : AppearanceSettings, decodeAppearance, encodeAppearance, FontResolution, IAppearanceBackend,
     IAppearanceStore, themeFor;
 import gui.theme : ContrastMode, StudioTheme;
-import platform.interfaces : AudioDeviceInfo, IFileDialog, MidiDeviceInfo, MidiPacket;
+import platform.interfaces : AudioDeviceInfo, FileDialogFilter, IFileDialog, MidiDeviceInfo, MidiPacket;
 
 /**
  * Live audio/MIDI device control used by the transport bar (implemented over AudioHost by the app; faked in tests).
@@ -600,6 +602,132 @@ final class StudioContext {
         if (liveRecording()) {
             session.liveTakeNoteOff(tag);
         }
+    }
+
+    /**
+     * Renames a pattern through the session (names are trimmed and made unique by appending a number) and reports
+     * the result in the status line. Empty names are ignored.
+     *
+     * Params:
+     *   patternId = Pattern to rename.
+     *   name = Requested name.
+     *
+     * Returns:
+     *   True if the pattern now has a (possibly numbered) form of name.
+     */
+    bool renamePattern(uint patternId, string name) {
+        if (!session.doRenamePattern(patternId, name)) {
+            return false;
+        }
+        foreach (ref p; session.document().patterns) {
+            if (p.patternId == patternId) {
+                setStatus("Renamed pattern to " ~ p.name);
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Asks for a file and saves a module as an .msym preset.
+     *
+     * Params:
+     *   moduleId = Module to save (the Master Output and 0 are refused).
+     *
+     * Returns:
+     *   True if a preset file was written.
+     */
+    bool saveModulePreset(uint moduleId) {
+        if (!isInstrumentModule(moduleId)) {
+            setStatus("Select a module to save as a preset");
+            return false;
+        }
+        string name;
+        foreach (ref m; session.document().modules) {
+            if (m.id == moduleId) name = m.name;
+        }
+        string path;
+        if (dialogs is null || !dialogs.saveFile("Save Module Preset", name ~ ".msym", presetFilters(), path)) {
+            return false;
+        }
+        string err;
+        immutable bool ok = session.saveModulePresetToFile(moduleId, name, path, err);
+        setStatus(ok ? "Saved preset " ~ baseName(path) : "Save preset failed: " ~ err);
+        return ok;
+    }
+
+    /**
+     * Asks for an .msym preset file and adds it as a new, unwired module (selected afterwards).
+     *
+     * Params:
+     *   posX = Patchbay X position of the new module.
+     *   posY = Patchbay Y position of the new module.
+     *
+     * Returns:
+     *   New module id, or 0 when cancelled or failed.
+     */
+    uint loadModulePreset(float posX, float posY) {
+        string path;
+        if (dialogs is null || !dialogs.openFile("Load Module Preset", presetFilters(), path)) {
+            return 0;
+        }
+        string err;
+        uint id = 0;
+        if (!session.loadModulePresetFromFile(path, posX, posY, id, err)) {
+            setStatus("Load preset failed: " ~ err);
+            return 0;
+        }
+        selectModule(id);
+        setStatus("Loaded preset " ~ baseName(path));
+        return id;
+    }
+
+    /**
+     * Asks for an .msym preset file and applies it to an existing module of the same type (wires are kept).
+     *
+     * Params:
+     *   moduleId = Target module.
+     *
+     * Returns:
+     *   True if the preset was applied.
+     */
+    bool applyModulePreset(uint moduleId) {
+        if (!isInstrumentModule(moduleId)) {
+            setStatus("Select a module to apply a preset to");
+            return false;
+        }
+        string path;
+        if (dialogs is null || !dialogs.openFile("Apply Module Preset", presetFilters(), path)) {
+            return false;
+        }
+        string err;
+        immutable bool ok = session.doApplyModulePresetFile(moduleId, path, err);
+        setStatus(ok ? "Applied preset " ~ baseName(path) : "Apply preset failed: " ~ err);
+        return ok;
+    }
+
+    /**
+     * Returns the patchbay position for a module added without a pointer position: one grid step right of and
+     * below the right-most module.
+     *
+     * Returns:
+     *   [x, y] position.
+     */
+    float[2] nextModulePosition() const {
+        float x = 40.0f;
+        float y = 40.0f;
+        bool any = false;
+        foreach (ref m; session.document().modules) {
+            if (!any || m.posX + 190.0f > x) {
+                x = m.posX + 190.0f;
+                y = m.posY + 30.0f;
+                any = true;
+            }
+        }
+        return [x, y];
+    }
+
+    private static FileDialogFilter[] presetFilters() {
+        return [FileDialogFilter("Dracker Module Preset", ["msym"])];
     }
 
     private bool isInstrumentModule(uint modId) const {

@@ -75,7 +75,9 @@ enum StudioAction : ubyte {
     quit = 38,
     openAppearance = 39,
     toggleContrast = 40,
-    editToggle = 41
+    editToggle = 41,
+    saveModulePreset = 42,
+    loadModulePreset = 43
 }
 
 /**
@@ -98,7 +100,8 @@ interface StudioCommandSink {
  * Classifies a StudioAction as document-level (executed by the session regardless of focus).
  *
  * Document-level: playToggle, stop, recordToggle (live record), editToggle (edit mode), octaveUp/Down, undo, redo, saveProject, saveProjectAs,
- * openProject, newProject, panic, playPattern, toggleLoop, exportWav, quit, openAppearance, toggleContrast.
+ * openProject, newProject, panic, playPattern, toggleLoop, exportWav, quit, openAppearance, toggleContrast,
+ * saveModulePreset, loadModulePreset.
  * Every other action except
  * none (selection, cell/block editing, transpose, interpolate, navigation, follow, edit step, zoom) is
  * view-level and must be forwarded to the focused StudioCommandSink.
@@ -130,6 +133,8 @@ bool isDocumentLevel(StudioAction action) @nogc nothrow pure @safe {
         case StudioAction.quit:
         case StudioAction.openAppearance:
         case StudioAction.toggleContrast:
+        case StudioAction.saveModulePreset:
+        case StudioAction.loadModulePreset:
             return true;
         default:
             return false;
@@ -263,6 +268,8 @@ struct Keymap {
         km.bindAction(StudioAction.quit, 12, KeyModifiers.command);
         km.bindAction(StudioAction.openAppearance, 43, KeyModifiers.command);
         km.bindAction(StudioAction.toggleContrast, 8, KeyModifiers.command | KeyModifiers.alt);
+        km.bindAction(StudioAction.saveModulePreset, 1, KeyModifiers.command | KeyModifiers.alt);
+        km.bindAction(StudioAction.loadModulePreset, 31, KeyModifiers.command | KeyModifiers.alt);
         return km;
     }
 

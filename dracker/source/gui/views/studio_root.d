@@ -11,7 +11,8 @@
  *   (transport, record, octave, undo/redo, panic, play-pattern, loop) or go to the app layer (new/open/save/
  *   export/quit); context-dependent actions go to the StudioCommandSink view that holds focus (or was used last);
  *   unhandled piano keys play live notes on the selected module. ⌘R starts/stops a live-record take and ⇧⌘R
- *   toggles edit mode. Esc (no modifiers) ends a running take, else leaves edit mode, before the keymap's
+ *   toggles edit mode. ⌥⌘S saves the selected module as an .msym preset and ⌥⌘O loads one as a new module
+ *   (File menu items). Esc (no modifiers) ends a running take, else leaves edit mode, before the keymap's
  *   Esc = Stop binding is consulted; Play, Stop and Play Pattern during a take end the take. Phase 8.5: openAppearance opens the Appearance
  *   panel overlay, toggleContrast flips High/Low contrast, and every StudioContext appearance switch is pushed
  *   into the UiContext (theme + relayout) through a theme listener.
@@ -298,6 +299,14 @@ final class StudioRoot : Widget {
             case StudioAction.toggleContrast:
                 ctx.toggleContrast();
                 break;
+            case StudioAction.saveModulePreset:
+                ctx.saveModulePreset(ctx.selectedModule());
+                break;
+            case StudioAction.loadModulePreset: {
+                immutable float[2] at = ctx.nextModulePosition();
+                ctx.loadModulePreset(at[0], at[1]);
+                break;
+            }
             default:
                 return appCommandHandler !is null && appCommandHandler(action);
         }

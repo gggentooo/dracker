@@ -2328,5 +2328,91 @@ version (unittest) {
         assert(near(measureTextOr(null, "abc", FontId.ui, 10.0f), 18.0f) && near(lineHeightOr(null, FontId.ui, 10.0f), 12.0f));
     }
 
+    unittest {
+        auto root = new Panel();
+        auto h = new Harness(root);
+        string got;
+        int commits = 0;
+        int cancels = 0;
+        TextField f = openTextEditor(h.ctx, RectF(10, 10, 160, 22), "Drums", (string t) { got = t; commits++; });
+        f.onCancel = () { cancels++; };
+        assert(h.ctx.overlays().length == 1 && f.allSelected() && f.text() == "Drums" && f.caret() == 5);
+        h.type("Ba"d);
+        assert(f.text() == "Ba" && !f.allSelected() && f.caret() == 2);
+        assert(h.key(KeyCode.left));
+        h.type("x"d);
+        assert(f.text() == "Bxa" && f.caret() == 2);
+        h.key(KeyCode.home);
+        h.type("1"d);
+        assert(f.text() == "1Bxa" && f.caret() == 1);
+        h.key(KeyCode.end);
+        h.key(KeyCode.deleteBackward);
+        assert(f.text() == "1Bx");
+        h.key(KeyCode.home);
+        h.key(KeyCode.forwardDelete);
+        assert(f.text() == "Bx" && f.caret() == 0);
+        assert(h.key(6) && h.key(49) && h.key(15, KeyModifiers.command) && h.keyUp(6));
+        h.type("\r\t"d);
+        assert(f.text() == "Bx" && commits == 0);
+        h.type("é"d);
+        assert(f.text() == "éBx" && f.caret() == 1);
+        h.key(KeyCode.right);
+        h.key(KeyCode.right);
+        h.key(KeyCode.right);
+        assert(f.caret() == 3);
+        assert(h.key(KeyCode.a, KeyModifiers.command) && f.allSelected());
+        h.key(KeyCode.deleteBackward);
+        assert(f.text() == "" && !f.allSelected());
+        h.type("Lead"d);
+        h.ctx.renderFrame(h.renderer, 1.0f);
+        assert(h.key(KeyCode.returnKey));
+        assert(commits == 1 && got == "Lead" && cancels == 0 && f.finished() && h.ctx.overlays().length == 0);
+        f.commit();
+        assert(commits == 1);
+
+        TextField f2 = openTextEditor(h.ctx, RectF(10, 10, 160, 22), "A", (string t) { got = t; commits++; });
+        f2.onCancel = () { cancels++; };
+        h.type("zzz"d);
+        assert(h.key(KeyCode.escape));
+        assert(commits == 1 && cancels == 1 && got == "Lead" && h.ctx.overlays().length == 0);
+
+        TextField f3 = openTextEditor(h.ctx, RectF(10, 10, 160, 22), "Keep", (string t) { got = t; commits++; });
+        h.click(100, 15);
+        assert(h.ctx.overlays().length == 1 && !f3.allSelected() && f3.text() == "Keep");
+        h.type("!"d);
+        h.click(400, 300);
+        assert(commits == 2 && got == "Keep!" && h.ctx.overlays().length == 0);
+
+        auto f4 = new TextField("abc");
+        f4.maxLength = 4;
+        f4.setText("abcdefgh", false);
+        assert(f4.text() == "abcd" && !f4.allSelected());
+        assert(f4.onTextInput('z') && f4.text() == "abcd");
+        assert(openTextEditor(null, RectF(0, 0, 10, 10), "x", null) is null);
+    }
+
+    unittest {
+        auto root = new Panel();
+        int dbl = 0;
+        auto dd = root.add(new Dropdown(["A", "B"], 0));
+        dd.bounds = RectF(0, 0, 100, 22);
+        auto h = new Harness(root);
+        h.click(5, 10);
+        assert(dd.isOpen() && dbl == 0);
+        h.downQuick(5, 10);
+        h.up(5, 10);
+        assert(!dd.isOpen() && dbl == 0);
+        dd.onDoubleClick = () { dbl++; };
+        h.click(5, 10);
+        assert(dd.isOpen());
+        h.downQuick(5, 10);
+        h.up(5, 10);
+        assert(!dd.isOpen() && dbl == 1);
+        h.click(5, 10);
+        assert(dd.isOpen());
+        h.click(5, 10);
+        assert(!dd.isOpen() && dbl == 1);
+    }
+
     private enum float PI_F = 3.14159265358979f;
 }

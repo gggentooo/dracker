@@ -167,7 +167,9 @@ private immutable MenuSpec[][] MENU_ITEMS = [
         MenuSpec("New Project", "n", KeyModifiers.command, 45, null),
         MenuSpec("Open Project…", "o", KeyModifiers.command, 31, null),
         MenuSpec("Save Project", "s", KeyModifiers.command, 1, null),
-        MenuSpec("Save Project As…", "S", KeyModifiers.command | KeyModifiers.shift, 1, null)
+        MenuSpec("Save Project As…", "S", KeyModifiers.command | KeyModifiers.shift, 1, null),
+        MenuSpec("Save Module Preset…", "s", KeyModifiers.command | KeyModifiers.alt, 1, null),
+        MenuSpec("Load Module Preset…", "o", KeyModifiers.command | KeyModifiers.alt, 31, null)
     ],
     [
         MenuSpec("Undo", "z", KeyModifiers.command, 6, null),

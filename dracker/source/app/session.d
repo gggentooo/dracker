@@ -33,7 +33,8 @@
  *     cancelExport()/waitForExport(), undo(), redo(), save/open/preset/import APIs, handleKeyEvent(),
  *     triggerLiveNote(), releaseLiveNote(), pollRetiredAndTelemetry(), live record takes (beginLiveTake(),
  *     liveTakeActive(), liveTakeStartLine(), liveTakeNoteCount(), liveSongPosition(), liveTakeNoteOn()/Off(),
- *     liveTakeShouldEnd(), endLiveTake())
+ *     liveTakeShouldEnd(), endLiveTake()), uniquePatternName(), loadModulePresetFromFile(),
+ *     doApplyModulePresetBytes(), doApplyModulePresetFile()
  *   - struct MidiNoteEvent / SamplePeaks / ExportOptions / ExportStatus; enum ExportState; class ExportJob
  *   - SamplePeaks computeSamplePeaks(...) / float denormalizeParam(...)
  *
@@ -47,8 +48,10 @@ import core.stdc.stdlib : calloc, free;
 import core.thread : Thread;
 import core.time : dur, Duration, MonoTime;
 import core.atomic : atomicLoad, atomicStore;
+import std.file : fileRead = read;
 import std.format : format;
 import std.math : isFinite;
+import std.string : strip;
 
 import app.history;
 import app.keymap : Keymap, StudioAction;
@@ -1509,6 +1512,121 @@ class StudioSession {
     }
 
     /**
+     * Loads an .msym preset file as a new, unwired module (one undo step).
+     *
+     * Params:
+     *   path = Preset file path.
+     *   posX = Placement X coordinate.
+     *   posY = Placement Y coordinate.
+     *   newModId = Receives the new module id.
+     *   err = Diagnostic error string populated on failure.
+     *
+     * Returns:
+     *   True if the module was added.
+     */
+    bool loadModulePresetFromFile(string path, float posX, float posY, out uint newModId, out string err) {
+        newModId = 0;
+        const(ubyte)[] raw;
+        if (!readPresetFile(path, raw, err)) {
+            return false;
+        }
+        return loadModulePresetFromBytes(raw, posX, posY, newModId, err);
+    }
+
+    /**
+     * Applies an .msym preset to an existing module of the same type as one undo step ("Apply Preset"): its
+     * parameter values and extra data are replaced; its id, name, position, mute/bypass state and wires are kept.
+     * MetaModules are refused (their child project cannot be swapped in place; load the preset as a new module).
+     *
+     * Params:
+     *   modId = Target module.
+     *   bytes = Valid .msym byte stream.
+     *   err = Diagnostic error string populated on failure.
+     *
+     * Returns:
+     *   True if the preset matched the module type and was applied (including when nothing differed).
+     */
+    bool doApplyModulePresetBytes(uint modId, const(ubyte)[] bytes, out string err) {
+        err = null;
+        SavedModule* sm = findModuleDoc(modId);
+        auto inst = modId in liveModules_;
+        if (sm is null || inst is null || inst.desc is null) {
+            err = "Module not found";
+            return false;
+        }
+        LoadedPreset preset;
+        if (!loadPreset(bytes, preset, err)) {
+            return false;
+        }
+        immutable string typeId = sm.typeId;
+        if (preset.mod.typeId != typeId) {
+            err = "Preset is for a different module type (" ~ preset.mod.typeId ~ ")";
+            return false;
+        }
+        if (typeId == "ctl.metamodule") {
+            err = "Apply Preset is not available for MetaModules; use Load Preset";
+            return false;
+        }
+        const SavedModule current = snapshotLiveModule(*sm);
+        immutable size_t paramCount = inst.desc.params.length;
+        immutable bool canSetExtra = inst.desc.vtable !is null && inst.desc.vtable.buildAssetsFromExtra !is null;
+        history_.beginGroup("Apply Preset");
+        bool ok = true;
+        size_t changes = 0;
+        foreach (i, v; preset.mod.paramValues) {
+            if (i >= paramCount || !isFinite(v) || (i < current.paramValues.length && current.paramValues[i] == v)) {
+                continue;
+            }
+            ok = doSetParam(modId, cast(uint) i, v) && ok;
+            changes++;
+        }
+        if (canSetExtra && preset.mod.extraBlob != current.extraBlob) {
+            ok = doSetModuleExtra(modId, preset.mod.extraBlob, "Apply Preset") && ok;
+            changes++;
+        }
+        immutable bool recorded = history_.endGroup(this);
+        if (!ok || (changes > 0 && !recorded)) {
+            err = "Preset could not be applied";
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Applies an .msym preset file to an existing module (see doApplyModulePresetBytes).
+     *
+     * Params:
+     *   modId = Target module.
+     *   path = Preset file path.
+     *   err = Diagnostic error string populated on failure.
+     *
+     * Returns:
+     *   True if applied.
+     */
+    bool doApplyModulePresetFile(uint modId, string path, out string err) {
+        const(ubyte)[] raw;
+        if (!readPresetFile(path, raw, err)) {
+            return false;
+        }
+        return doApplyModulePresetBytes(modId, raw, err);
+    }
+
+    private static bool readPresetFile(string path, out const(ubyte)[] raw, out string err) {
+        err = null;
+        if (path.length == 0) {
+            err = "Preset path cannot be empty";
+            return false;
+        }
+        try {
+            raw = cast(const(ubyte)[]) fileRead(path);
+        } catch (Exception ex) {
+            err = ex.msg.length > 0 ? ex.msg : "Failed reading .msym preset file";
+            return false;
+        }
+        return true;
+    }
+
+    /**
      * Imports an SMF (.mid) byte payload and activates the resulting project cleanly.
      *
      * Params:
@@ -2189,12 +2307,49 @@ class StudioSession {
      */
     bool doRenamePattern(uint patternId, string name) {
         SavedPattern* sp = findPatternDoc(patternId);
-        if (sp is null || name.length > MAX_STRING_LEN) {
+        name = strip(name);
+        if (sp is null || name.length == 0 || name.length > MAX_STRING_LEN) {
             return false;
         }
+        name = uniquePatternName(name, patternId);
         immutable string oldName = sp.name;
+        if (name == oldName) {
+            return true;
+        }
         return history_.pushAndExecute(new DelegateCommand("Rename Pattern",
             () => renamePatternDirect(patternId, name), () => renamePatternDirect(patternId, oldName)), this);
+    }
+
+    /**
+     * Returns wanted, or wanted with the smallest number 1, 2, ... appended that makes it differ from every other
+     * pattern's name ("Drums", "Drums1", "Drums2", ...).
+     *
+     * Params:
+     *   wanted = Requested pattern name.
+     *   excludePatternId = Pattern being renamed (its own current name does not count as taken), or 0.
+     *
+     * Returns:
+     *   Name not used by any other pattern.
+     */
+    string uniquePatternName(string wanted, uint excludePatternId) const {
+        bool taken(string n) {
+            foreach (ref p; doc_.patterns) {
+                if (p.patternId != excludePatternId && p.name == n) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (!taken(wanted)) {
+            return wanted;
+        }
+        foreach (n; 1 .. uint.max) {
+            immutable string candidate = format("%s%d", wanted, n);
+            if (!taken(candidate)) {
+                return candidate;
+            }
+        }
+        return wanted;
     }
 
     /**

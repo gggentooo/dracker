@@ -4,7 +4,8 @@
  * Phase:        Phase 8.3 — UDA Auto-Generated Parameter Rack & Custom Editors
  *
  * Purpose:
- *   Parameter rack for the selected module: a header (name, type, mute/bypass/solo quick toggles) and one row per
+ *   Parameter rack for the selected module: a header (name, type, M/S/B mute/solo/bypass quick toggles, in the
+ *   patchbay node order) and one row per
  *   @Param whose control is generated from the ParamDescriptor (linear -> Slider, logarithmic -> Slider with a
  *   logarithmic ValueRange, discrete span <= 1 -> Toggle, discrete span <= 16 -> Dropdown of integer values, larger
  *   discrete spans -> stepped Slider) with value text + unit. Drags form one undo step (beginEditGroup/endEditGroup
@@ -29,11 +30,12 @@
  *   Internal: app.session, graph.{module_api,registry}, gui.{layout,renderer,theme,widgets},
  *             gui.views.studio_context, io.project_format, modules.control.{metamodule,multictl,multisynth},
  *             modules.effects.waveshaper
- *   External: core.stdc.string (memcpy), std.format (format), std.math (abs, round)
+ *   External: core.stdc.string (memcpy), std.format (format), std.math (abs, isFinite, round)
  *
  * Planned API (Types, Functions & Hooks):
  *   - enum ParamControlKind; ParamControlKind controlKindFor(ParamDescriptor); ValueRange valueRangeFor(ParamDescriptor);
- *     string formatParamValue(ParamDescriptor, float); Point2F[] curveTableToPoints(...); void resampleCurveToTable(...)
+ *     string discreteOptionLabel(ParamDescriptor, float); string formatParamValue(ParamDescriptor, float);
+ *     Point2F[] curveTableToPoints(...); void resampleCurveToTable(...)
  *   - enum RackEditorKind; mixin template GestureHooks; final class RackCurveEditor / RackEnvelopeEditor / RackSlider / ParamRow
  *   - final class ParamRackView : Widget — this(StudioContext), sync(), shownModule(), inChildGraph(), drillInto(),
  *     drillBack(), paramRowRect(idx), paramControlRect(idx), paramControl(idx), controlKind(idx), paramValueText(idx),
@@ -51,7 +53,7 @@ module gui.views.param_rack;
 
 import core.stdc.string : memcpy;
 import std.format : format;
-import std.math : abs, round;
+import std.math : abs, isFinite, round;
 
 import graph.module_api : ParamDescriptor, ParamScale;
 import graph.registry : ModuleRegistry;
@@ -140,7 +142,25 @@ ValueRange valueRangeFor(const ParamDescriptor p) @safe nothrow pure @nogc {
 }
 
 /**
- * Formats a parameter value with its unit.
+ * Returns the option label naming a discrete parameter value, if the descriptor defines one.
+ *
+ * Params:
+ *   p = Parameter descriptor.
+ *   v = Value (rounded to the nearest step).
+ *
+ * Returns:
+ *   Label, or null when p is not discrete, has no options, or v is outside them.
+ */
+string discreteOptionLabel(const ParamDescriptor p, float v) {
+    if (p.scale != ParamScale.discrete || p.options.length == 0 || !isFinite(v)) {
+        return null;
+    }
+    immutable long i = cast(long) round(v - p.minVal);
+    return i >= 0 && i < cast(long) p.options.length ? p.options[cast(size_t) i] : null;
+}
+
+/**
+ * Formats a parameter value with its unit (discrete values with option labels show the label instead).
  *
  * Params:
  *   p = Parameter descriptor.
@@ -150,6 +170,10 @@ ValueRange valueRangeFor(const ParamDescriptor p) @safe nothrow pure @nogc {
  *   Display text.
  */
 string formatParamValue(const ParamDescriptor p, float v) {
+    immutable string label = discreteOptionLabel(p, v);
+    if (label.length > 0) {
+        return label;
+    }
     string num;
     if (p.scale == ParamScale.discrete) {
         num = format("%d", cast(int) round(v));
@@ -535,7 +559,9 @@ final class ParamRow : Widget {
             immutable int lo = cast(int) round(desc.minVal);
             immutable int hi = cast(int) round(desc.maxVal);
             foreach (v; lo .. hi + 1) {
-                items ~= desc.unit.length > 0 ? format("%d %s", v, desc.unit) : format("%d", v);
+                immutable string label = discreteOptionLabel(desc, cast(float) v);
+                items ~= label.length > 0 ? label
+                    : (desc.unit.length > 0 ? format("%d %s", v, desc.unit) : format("%d", v));
             }
             return new Dropdown(items, 0, (size_t i) { owner_.controlChanged(idx, desc.minVal + cast(float) i); });
         }
@@ -606,10 +632,10 @@ final class ParamRackView : Widget {
         id = "rack";
         muteToggle_ = add(new Toggle("M", false, (bool on) { toggleHeader(0, on); }));
         muteToggle_.id = "rack.mute";
-        bypassToggle_ = add(new Toggle("B", false, (bool on) { toggleHeader(1, on); }));
-        bypassToggle_.id = "rack.bypass";
         soloToggle_ = add(new Toggle("S", false, (bool on) { toggleHeader(2, on); }));
         soloToggle_.id = "rack.solo";
+        bypassToggle_ = add(new Toggle("B", false, (bool on) { toggleHeader(1, on); }));
+        bypassToggle_.id = "rack.bypass";
         backButton_ = add(new Button("Back", () { drillBack(); }));
         backButton_.id = "rack.back";
         backButton_.visible = false;
@@ -1094,7 +1120,7 @@ final class ParamRackView : Widget {
         immutable float th = 20.0f;
         immutable float ty = bounds.y + (HEADER_HEIGHT - th) * 0.5f;
         float x = bounds.right() - HEADER_TOGGLE_MARGIN;
-        foreach (t; [soloToggle_, bypassToggle_, muteToggle_]) {
+        foreach (t; [bypassToggle_, soloToggle_, muteToggle_]) {
             immutable float tw = headerToggleWidth(t, th);
             x -= tw;
             t.arrange(RectF(x, ty, tw, th));

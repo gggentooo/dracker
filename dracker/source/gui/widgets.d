@@ -20,7 +20,7 @@
  *
  * Dependencies:
  *   Internal: gui.renderer, gui.theme, gui.layout, platform.interfaces (PlatformEvent, PlatformEventKind, KeyModifiers)
- *   External: std.math, std.format (format), std.conv (to), core.time (MonoTime)
+ *   External: std.math, std.format (format), std.conv (to), std.utf (toUTF8), core.time (MonoTime)
  *
  * Planned API (Types, Functions & Hooks):
  *   - enum KeyCode / enum MouseButton / struct MouseEvent / struct ScrollEvent / struct KeyEvent
@@ -31,8 +31,8 @@
  *       renderFrame(IRenderer2D, scale), needsRedraw, isAnimating(), setFocus/focusNext/focusPrevious, capture/releaseCapture,
  *       openOverlay/closeOverlay/closeAllOverlays, hitTest(Point2F), setTheme(StudioTheme)
  *   - struct ValueRange; abstract class ValueWidget; class Panel / Label / Button / Toggle / Slider / RotaryKnob /
- *       NumericDragBox / Dropdown / DropdownList / ContextMenu (struct MenuItem) / ScrollView (struct ScrollBarModel) /
- *       SplitView / CurveEditor / EnvelopeEditor
+ *       NumericDragBox / TextField (openTextEditor()) / Dropdown (onDoubleClick) / DropdownList / ContextMenu
+ *       (struct MenuItem) / ScrollView (struct ScrollBarModel) / SplitView / CurveEditor / EnvelopeEditor
  *
  * See_Also:
  *   architecture_proposal.md, dev_plan_proposal.md
@@ -43,6 +43,7 @@ import core.time : MonoTime;
 import std.conv : to;
 import std.format : format;
 import std.math : abs, cos, exp, isFinite, log, PI, round, sin;
+import std.utf : toUTF8;
 
 import gui.layout : Axis, clampf, clampRectInside, DockLayout, FlexItem, Insets, layoutFlexInto, SplitPaneNode;
 import gui.renderer : ColorRGBA, FontId, IRenderer2D, ITextMeasurer, Point2F, RectF;
@@ -1237,8 +1238,14 @@ final class UiContext {
         Widget hit = hitTest(p);
         immutable bool inOverlay = hit !is null && overlayOf(hit) !is null;
         if (overlays_.length > 0 && !inOverlay) {
+            Dropdown dd = cast(Dropdown) hit;
+            immutable bool ownPopup = dd !is null && dd.isOpen();
             closeAllOverlays();
             updateHover(p);
+            if (ownPopup && clicks >= 2 && dd.onDoubleClick !is null && dd.isEffectivelyEnabled()) {
+                dd.onDoubleClick();
+                needsRedraw_ = true;
+            }
             return true;
         }
         if (!inOverlay) {
@@ -2285,7 +2292,8 @@ abstract class ValueWidget : Widget {
 }
 
 /**
- * Linear fader. Clicking the track jumps to the pointer (unless Shift is held), then drags relatively.
+ * Linear fader. Clicking the track jumps to the pointer (unless Shift is held), then drags relatively. The track
+ * is outlined with theme.border (theme.textDisabled when disabled) so its ends stay visible on any row background.
  */
 class Slider : ValueWidget {
     Axis orientation = Axis.horizontal;
@@ -2394,6 +2402,7 @@ class Slider : ValueWidget {
             ? RectF(t.x - rad, t.y, tc.x - t.x + rad, t.h)
             : RectF(t.x, tc.y, t.w, t.bottom() - tc.y + rad);
         r.fillRoundedRect(filled, rad, on ? theme.accent : theme.textDisabled);
+        r.strokeRoundedRect(t.inset(-rad), rad, theme.borderWidth, on ? theme.border : theme.textDisabled);
         immutable bool hot = isDragging() || isHovered();
         fillCircle(r, tc, thumbSize * 0.5f, on ? (hot ? theme.accentHot : theme.text) : theme.textDim);
         if (isFocused()) {
@@ -2716,6 +2725,288 @@ class NumericDragBox : ValueWidget {
 }
 
 /**
+ * Single-line text editor. Typed characters are inserted at the caret; Return commits, Escape cancels, and
+ * Left/Right/Home/End, Backspace, Forward Delete and Cmd+A edit. It starts with all text selected, so the first
+ * typed character replaces it. Every key press is consumed while it is shown, so shortcuts and piano keys do not
+ * fire. Opened as an overlay with openTextEditor(), it commits when dismissed by a click elsewhere.
+ */
+class TextField : Widget {
+    void delegate(string) onCommit;
+    void delegate() onCancel;
+    size_t maxLength = 128;
+    private dchar[] buf_;
+    private size_t caret_ = 0;
+    private bool allSelected_ = false;
+    private bool finished_ = false;
+
+    /**
+     * Creates a text field.
+     *
+     * Params:
+     *   initial = Initial text (shown fully selected).
+     *   commit = Called with the final text on commit.
+     */
+    this(string initial = "", void delegate(string) commit = null) {
+        onCommit = commit;
+        focusable = true;
+        setText(initial, true);
+    }
+
+    /**
+     * Returns the current text.
+     *
+     * Returns:
+     *   UTF-8 text.
+     */
+    string text() const {
+        return toUTF8(buf_);
+    }
+
+    /**
+     * Replaces the text and moves the caret to the end.
+     *
+     * Params:
+     *   t = New text (truncated to maxLength code points).
+     *   selectAll = Whether the text is fully selected (replaced by the next typed character).
+     */
+    void setText(string t, bool selectAll = true) {
+        buf_.length = 0;
+        foreach (dchar c; t) {
+            if (buf_.length < maxLength) {
+                buf_ ~= c;
+            }
+        }
+        caret_ = buf_.length;
+        allSelected_ = selectAll && buf_.length > 0;
+        invalidate();
+    }
+
+    /**
+     * Returns the caret position.
+     *
+     * Returns:
+     *   Code-point index in [0, length].
+     */
+    size_t caret() const {
+        return caret_;
+    }
+
+    /**
+     * Reports whether the whole text is selected.
+     *
+     * Returns:
+     *   True until the first edit or caret move.
+     */
+    bool allSelected() const {
+        return allSelected_;
+    }
+
+    /**
+     * Reports whether the field has committed or cancelled.
+     *
+     * Returns:
+     *   True after commit() or cancel().
+     */
+    bool finished() const {
+        return finished_;
+    }
+
+    /**
+     * Ends editing and reports the text through onCommit (closing the field first when it is an overlay).
+     */
+    void commit() {
+        if (finished_) {
+            return;
+        }
+        finished_ = true;
+        immutable string result = text();
+        closeIfOverlay();
+        if (onCommit !is null) {
+            onCommit(result);
+        }
+    }
+
+    /**
+     * Ends editing without reporting the text (closing the field first when it is an overlay).
+     */
+    void cancel() {
+        if (finished_) {
+            return;
+        }
+        finished_ = true;
+        closeIfOverlay();
+        if (onCancel !is null) {
+            onCancel();
+        }
+    }
+
+    override bool onTextInput(dchar c) {
+        if (finished_ || c < 0x20 || c == 0x7F || (c >= 0xF700 && c <= 0xF8FF)) {
+            return true;
+        }
+        if (allSelected_) {
+            buf_.length = 0;
+            caret_ = 0;
+            allSelected_ = false;
+        }
+        if (buf_.length < maxLength) {
+            buf_ = buf_[0 .. caret_] ~ c ~ buf_[caret_ .. $];
+            caret_++;
+        }
+        invalidate();
+        return true;
+    }
+
+    override bool onKeyDown(const ref KeyEvent e) {
+        if (finished_) {
+            return true;
+        }
+        if (hasModifier(e.modifiers, KeyModifiers.command)) {
+            if (e.keyCode == KeyCode.a) {
+                allSelected_ = buf_.length > 0;
+                caret_ = buf_.length;
+                invalidate();
+            }
+            return true;
+        }
+        switch (e.keyCode) {
+        case KeyCode.returnKey:
+        case KeyCode.keypadEnter:
+            commit();
+            return true;
+        case KeyCode.escape:
+            cancel();
+            return true;
+        case KeyCode.deleteBackward:
+            if (allSelected_) {
+                clearAll();
+            } else if (caret_ > 0) {
+                buf_ = buf_[0 .. caret_ - 1] ~ buf_[caret_ .. $];
+                caret_--;
+            }
+            break;
+        case KeyCode.forwardDelete:
+            if (allSelected_) {
+                clearAll();
+            } else if (caret_ < buf_.length) {
+                buf_ = buf_[0 .. caret_] ~ buf_[caret_ + 1 .. $];
+            }
+            break;
+        case KeyCode.left:
+            caret_ = allSelected_ ? 0 : (caret_ > 0 ? caret_ - 1 : 0);
+            allSelected_ = false;
+            break;
+        case KeyCode.right:
+            caret_ = allSelected_ ? buf_.length : (caret_ < buf_.length ? caret_ + 1 : buf_.length);
+            allSelected_ = false;
+            break;
+        case KeyCode.home:
+        case KeyCode.up:
+            caret_ = 0;
+            allSelected_ = false;
+            break;
+        case KeyCode.end:
+        case KeyCode.down:
+            caret_ = buf_.length;
+            allSelected_ = false;
+            break;
+        default:
+            break;
+        }
+        invalidate();
+        return true;
+    }
+
+    override bool onKeyUp(const ref KeyEvent e) {
+        return true;
+    }
+
+    override bool onMouseDown(const ref MouseEvent e) {
+        if (e.button == MouseButton.left) {
+            allSelected_ = false;
+            caret_ = buf_.length;
+            invalidate();
+        }
+        return true;
+    }
+
+    override bool onMouseUp(const ref MouseEvent e) {
+        return true;
+    }
+
+    override void onDismissed() {
+        commit();
+    }
+
+    override Point2F measure(ITextMeasurer m, const ref StudioTheme theme) {
+        if (preferredSize.x > 0.0f && preferredSize.y > 0.0f) {
+            return preferredSize;
+        }
+        return Point2F(160.0f, theme.controlHeight);
+    }
+
+    override void paint(IRenderer2D r, const ref StudioTheme theme) {
+        r.fillRoundedRect(bounds, theme.radiusSm, theme.panelRaised);
+        r.strokeRoundedRect(bounds, theme.radiusSm, theme.focusRingWidth, theme.focusRing);
+        immutable string txt = text();
+        immutable float size = theme.fontSizeBody;
+        immutable float lh = r.lineHeight(FontId.ui, size);
+        immutable float tx = bounds.x + theme.spacingSm + 2.0f;
+        immutable float ty = bounds.y + (bounds.h - lh) * 0.5f;
+        immutable float tw = r.measureText(txt, FontId.ui, size);
+        immutable float cw = r.measureText(toUTF8(buf_[0 .. caret_]), FontId.ui, size);
+        r.pushClip(bounds.inset(2.0f));
+        immutable float room = bounds.w - 2.0f * (theme.spacingSm + 2.0f);
+        immutable float shift = cw > room ? cw - room : 0.0f;
+        if (allSelected_ && tw > 0.0f) {
+            r.fillRect(RectF(tx - shift, ty, tw, lh), theme.selection);
+        }
+        r.drawText(Point2F(tx - shift, ty), txt, FontId.ui, size, theme.text);
+        if (!allSelected_) {
+            r.fillRect(RectF(tx - shift + cw, ty, 1.5f, lh), theme.accentHot);
+        }
+        r.popClip();
+    }
+
+    private void clearAll() {
+        buf_.length = 0;
+        caret_ = 0;
+        allSelected_ = false;
+    }
+
+    private void closeIfOverlay() {
+        auto ctx = context();
+        if (ctx !is null && parent is null) {
+            ctx.closeOverlay(this);
+        }
+    }
+}
+
+/**
+ * Opens a TextField in the overlay layer over rect (clamped inside the viewport).
+ *
+ * Params:
+ *   ctx = UI context that will host the overlay.
+ *   rect = Desired bounds in window coordinates.
+ *   initial = Initial text, shown fully selected.
+ *   onCommit = Called with the final text on Return or when the field is dismissed by a click elsewhere.
+ *
+ * Returns:
+ *   The open field, or null when ctx is null.
+ */
+TextField openTextEditor(UiContext ctx, RectF rect, string initial, void delegate(string) onCommit) {
+    if (ctx is null) {
+        return null;
+    }
+    ctx.closeAllOverlays();
+    auto field = new TextField(initial, onCommit);
+    immutable RectF vp = ctx.viewport();
+    field.bounds = vp.isEmpty() ? rect : clampRectInside(rect, vp);
+    ctx.openOverlay(field);
+    return field;
+}
+
+/**
  * Popup choice list shown in the overlay layer by Dropdown.
  */
 class DropdownList : Widget {
@@ -2891,11 +3182,13 @@ class DropdownList : Widget {
 
 /**
  * Pop-up choice control. Click / Return / Space opens the list overlay; Up/Down while closed changes the selection.
+ * When onDoubleClick is set, a double-click on the control closes the list its first click opened and calls it.
  */
 class Dropdown : Widget {
     string[] items;
     size_t selectedIndex = 0;
     void delegate(size_t) onSelect;
+    void delegate() onDoubleClick;
     size_t maxVisibleItems = 10;
     private DropdownList popup_;
 

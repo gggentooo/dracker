@@ -49,6 +49,8 @@ version (unittest) {
         Expect(StudioAction.redo, 6, CMD | SHIFT),
         Expect(StudioAction.saveProject, 1, CMD),
         Expect(StudioAction.saveProjectAs, 1, CMD | SHIFT),
+        Expect(StudioAction.saveModulePreset, 1, CMD | ALT),
+        Expect(StudioAction.loadModulePreset, 31, CMD | ALT),
         Expect(StudioAction.openProject, 31, CMD),
         Expect(StudioAction.newProject, 45, CMD),
         Expect(StudioAction.panic, 47, CMD),
@@ -87,6 +89,8 @@ version (unittest) {
         Expect(StudioAction.openProject, 31, CMD),
         Expect(StudioAction.saveProject, 1, CMD),
         Expect(StudioAction.saveProjectAs, 1, CMD | SHIFT),
+        Expect(StudioAction.saveModulePreset, 1, CMD | ALT),
+        Expect(StudioAction.loadModulePreset, 31, CMD | ALT),
         Expect(StudioAction.undo, 6, CMD),
         Expect(StudioAction.redo, 6, CMD | SHIFT),
         Expect(StudioAction.cut, 7, CMD),
@@ -148,7 +152,9 @@ version (unittest) {
             assert(bound);
         }
         assert(km.resolveAction(8, CMD | ALT) == StudioAction.toggleContrast);
-        assert(km.resolveAction(15, CMD | SHIFT) == StudioAction.max && StudioAction.max == StudioAction.editToggle);
+        assert(km.resolveAction(15, CMD | SHIFT) == StudioAction.editToggle);
+        assert(km.resolveAction(1, CMD | ALT) == StudioAction.saveModulePreset);
+        assert(km.resolveAction(31, CMD | ALT) == StudioAction.max && StudioAction.max == StudioAction.loadModulePreset);
     }
 
     unittest {
@@ -211,7 +217,8 @@ version (unittest) {
             StudioAction.octaveDown, StudioAction.undo, StudioAction.redo, StudioAction.saveProject,
             StudioAction.saveProjectAs, StudioAction.openProject, StudioAction.newProject, StudioAction.panic,
             StudioAction.playPattern, StudioAction.toggleLoop, StudioAction.exportWav, StudioAction.quit,
-            StudioAction.openAppearance, StudioAction.toggleContrast
+            StudioAction.openAppearance, StudioAction.toggleContrast, StudioAction.saveModulePreset,
+            StudioAction.loadModulePreset
         ];
         immutable StudioAction[] viewLevel = [
             StudioAction.noteOffEntry, StudioAction.deleteCell, StudioAction.cut, StudioAction.copy,

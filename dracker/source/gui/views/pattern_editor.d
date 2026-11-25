@@ -10,7 +10,8 @@
  *   Delete pattern buttons). Supports keyboard/mouse cursor navigation over 13 sub-fields, rectangular block
  *   selection (mouse drag or Shift+arrows), QWERTY note entry with live audition, hex nibble editing, note-off and
  *   delete entry, live MIDI recording at the playhead or step recording at the cursor, block cut/copy/paste
- *   (Dracker-Block-v1 clipboard text), transpose, interpolate, and follow-playhead scrolling. Double-clicking a row
+ *   (Dracker-Block-v1 clipboard text), transpose, interpolate, and follow-playhead scrolling. Double-clicking the
+ *   pattern dropdown opens an in-place TextField that renames the current pattern (beginRenamePattern()). Double-clicking a row
  *   puts the cursor on that row's note field and turns edit mode on. Notes are never written for the
  *   Master Output module (core.output): note entry is refused with a status message instead.
  *
@@ -68,7 +69,7 @@ import gui.renderer : ColorRGBA, FontId, IRenderer2D, ITextMeasurer, Point2F, Re
 import gui.theme : StudioTheme;
 import gui.views.studio_context : StudioContext;
 import gui.widgets : Button, Dropdown, KeyCode, KeyEvent, lineHeightOr, measureTextOr, MenuItem, MouseButton,
-    MouseEvent, NumericDragBox, ScrollEvent, ValueRange, Widget;
+    MouseEvent, NumericDragBox, openTextEditor, ScrollEvent, TextField, ValueRange, Widget;
 import io.project_format : MAX_PATTERNS, SavedPattern;
 import platform.interfaces : KeyModifiers, PlatformEvent, PlatformEventKind;
 import sequencer.note : NoteCell, NoteCmd;
@@ -543,6 +544,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
         focusable = true;
         patternSelect = add(new Dropdown(null, 0, &onPatternChosen));
         patternSelect.id = "pattern.select";
+        patternSelect.onDoubleClick = () { beginRenamePattern(); };
         tracksBox = add(new PatternDimensionBox("pattern.tracks", ValueRange(1.0f, 64.0f, 4.0f, false, 1.0f)));
         tracksBox.onCommit = (uint n) { resizeCurrent(n, 0); };
         linesBox = add(new PatternDimensionBox("pattern.lines", ValueRange(1.0f, 4096.0f, 64.0f, false, 1.0f)));
@@ -1729,6 +1731,26 @@ final class PatternEditorView : Widget, StudioCommandSink {
         ctx.session.doReplacePatternCells(pid, cells, "Interpolate");
         invalidate();
         return true;
+    }
+
+    /**
+     * Opens a text field over the pattern dropdown to rename the current pattern (Return or a click elsewhere
+     * commits, Escape cancels; duplicate names get a number appended by the session).
+     *
+     * Returns:
+     *   The open field, or null when there is no current pattern or the view is detached.
+     */
+    TextField beginRenamePattern() {
+        const sp = currentPatternDoc();
+        auto ui = context();
+        if (sp is null || ui is null) {
+            return null;
+        }
+        immutable uint pid = sp.patternId;
+        return openTextEditor(ui, patternSelect.bounds, sp.name, (string name) {
+            ctx.renamePattern(pid, name);
+            invalidate();
+        });
     }
 
     private void onPatternChosen(size_t index) {

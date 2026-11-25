@@ -334,7 +334,8 @@ struct AnalogGen {
         PortDescriptor("out", "Audio Out", PortKind.audioStereo, PortDirection.output)
     ];
 
-    @Param("Waveform", 0.0f, 5.0f, 2.0f, "", ParamScale.discrete)
+    @Param("Waveform", 0.0f, 5.0f, 2.0f, "", ParamScale.discrete,
+        ["Sine", "Triangle", "Saw", "Square", "Noise", "Drawn"])
     float waveform = 2.0f;
 
     @Param("Unison", 1.0f, 4.0f, 1.0f, "v", ParamScale.discrete)

@@ -10,6 +10,57 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
 
 ---
 
+## [2026-11-25 13:38:05 KST]
+- **Author:** Claude Fable 5.2
+- **Affected Files:** `source/gui/widgets.d`, `source/app/session.d`, `source/app/keymap.d`, `source/platform/macos/appkit.d`, `source/gui/views/studio_context.d`, `source/gui/views/studio_root.d`, `source/gui/views/pattern_editor.d`, `source/gui/views/timeline_view.d`, `source/gui/views/scope_view.d`, `source/gui/views/patchbay_view.d`, `tests/unit/gui_test.d`, `tests/unit/keymap_test.d`, `tests/unit/views_pattern_editor_test.d`, `tests/unit/views_timeline_test.d`, `tests/unit/views_transport_test.d`, `tests/unit/views_studio_root_test.d`, `docs/manual.md`, `docs/changelog.md`
+- **Reason / Summary:** Pattern renaming from the GUI, a new Scope default, and a GUI workflow for module presets. Design decisions confirmed by the owner (Rule 5) before implementation: on a timeline clip only the name label renames (the rest of the clip still opens its pattern); renaming uses a new in-app text field rather than a native prompt; presets are reachable from the patchbay menus and the File menu; loading adds a new module, and a separate "Apply Preset…" overwrites an existing module of the same type.
+  - **Text entry (`gui/widgets.d`):**
+    - New `TextField` widget: single line, caret editing (Left/Right/Home/End, Backspace, Forward Delete, ⌘A), starts with all text selected, Return commits, Escape cancels, `maxLength` 128 code points. It consumes every key press while shown, so shortcuts and piano keys do not fire while typing.
+    - New `openTextEditor(ui, rect, initial, onCommit)` opens it in the overlay layer; a click elsewhere dismisses it and commits.
+    - New `Dropdown.onDoubleClick`. `UiContext.handleMouseDown` calls it when the second click of a double-click lands on a dropdown whose own list the first click opened. Before, that second click only closed the list.
+  - **Pattern rename (`app/session.d`, `gui/views/studio_context.d`, `gui/views/pattern_editor.d`, `gui/views/timeline_view.d`):**
+    - `StudioSession.doRenamePattern()` now trims the name, refuses an empty one, and makes it unique with the new `uniquePatternName()`: if another pattern has the name, the smallest number 1, 2, … is appended (Drums, Drums1, Drums2). Renaming to the current name is a no-op with no undo step.
+    - `StudioContext.renamePattern()` wraps it and sets the status ("Renamed pattern to …").
+    - Pattern editor: double-clicking the pattern dropdown opens the field over it (`beginRenamePattern()`).
+    - Timeline: double-clicking a clip's name label opens the field at the clip (`clipNameRect()`, `beginRenameClipPattern()`). Double-clicking elsewhere on the clip still selects its pattern.
+  - **Scope default (`gui/views/scope_view.d`):** The source dropdown now starts on "Selected module" instead of "Master". With no module selected it still shows the master bus.
+  - **Module presets (`.msym`):** There was no GUI for these; the manual's QA notes listed them as engine-only.
+    - Session: new `loadModulePresetFromFile()`, and `doApplyModulePresetBytes()` / `doApplyModulePresetFile()`. Apply replaces the parameters and extra data of an existing module of the same type as one "Apply Preset" undo group, keeping id, name, position, wires and mute/bypass. It refuses a different module type, and refuses MetaModules (their child project cannot be swapped in place).
+    - Context: `saveModulePreset()`, `loadModulePreset()`, `applyModulePreset()` (file dialogs through `ctx.dialogs`, status messages, Master Output refused) and `nextModulePosition()`.
+    - Patchbay: node menu gains **Save Preset…** and **Apply Preset…** (disabled for the Master Output); the canvas menu gains **Load Preset…**, which adds the module where the user right-clicked.
+    - File menu: **Save Module Preset…** (⌥⌘S, selected module) and **Load Module Preset…** (⌥⌘O). New document-level `StudioAction.saveModulePreset = 42` and `loadModulePreset = 43`. Native menu items dispatch through the keymap, so they need key bindings; the owner was told the File items would have no default shortcuts, and these two were added because of that mechanism.
+  - **Docs:** `docs/manual.md`: File menu, patchbay context menus, §8.1 and §9.3 (renaming), §11 (scope default), new §13.6 *Module presets* (Preferences is now §13.7), the shortcut table, and the QA notes that said presets had no GUI.
+- **Verification Results:**
+  - `tests/unit/gui_test.d`: `TextField` editing, key consumption, Unicode input, commit/cancel/click-away, `maxLength`; `Dropdown.onDoubleClick` fires only on a real double-click.
+  - `tests/unit/views_pattern_editor_test.d`: double-click on the dropdown opens the field with the current name; typed piano keys write no notes in edit mode; duplicates become "Drums1" / "Drums2"; Escape and an empty name change nothing; trimming, `uniquePatternName()` and undo.
+  - `tests/unit/views_timeline_test.d`: the name label lies inside the clip; double-clicking it renames without changing the current pattern; double-clicking elsewhere on the clip selects its pattern.
+  - `tests/unit/views_transport_test.d`: the scope starts on "Selected module" and follows the selection.
+  - `tests/unit/views_studio_root_test.d`: menu items present and disabled for the Master Output; ⌥⌘S saves (refused with no module or the Master Output selected, cancel writes nothing); ⌥⌘O and the canvas item load a new unwired module with the saved values at the right position, as one undo step; Apply restores parameters as one undo step, keeps wires, adds no step when nothing differs, and refuses another module type and the Master Output; unreadable and missing files report an error. `tests/unit/keymap_test.d` covers the new bindings and menu table.
+  - `DFLAGS="-w" dub build --compiler=ldc2 --config=headless --force` and `--config=app --build=debug --force` both exit 0 with zero warnings. `dub test --compiler=ldc2 --config=app`: `4 modules passed unittests`.
+  - `dub test --compiler=ldc2 --config=headless`: 25/26 modules pass. The one failure is the existing, unrelated `tests/unit/views_patchbay_test.d:824` (`menu should contain 'Add Core ▸'`); because it aborts that module, later patchbay tests do not run, so the new patchbay menu items are checked in the studio root test instead.
+  - Not run: the GUI self-tests and the real macOS file dialogs. Typing into the text field through real AppKit key events has not been checked on hardware.
+
+---
+
+## [2026-11-25 13:20:03 KST]
+- **Author:** Claude Opus 5.5
+- **Affected Files:** `source/graph/module_api.d`, `source/modules/synths/analog_gen.d`, `source/gui/views/param_rack.d`, `source/gui/widgets.d`, `tests/unit/views_param_rack_test.d`, `docs/manual.md`, `docs/changelog.md`
+- **Reason / Summary:** Three parameter rack fixes.
+  - **Named waveform options (`graph/module_api.d`, `modules/synths/analog_gen.d`, `gui/views/param_rack.d`):**
+    - `Param` and `ParamDescriptor` gained an optional `options` list (`string[]` in the attribute, `immutable(string)[]` in the descriptor) that names a discrete parameter's values `minVal, minVal + 1, …` in order. It is display-only and does not change the stored value, `.msv` files or the RT path.
+    - The Analog Generator's **Waveform** parameter now lists **Sine, Triangle, Saw, Square, Noise, Drawn**, matching `OscWaveform` 0–5. "Square" is correct because AnalogGen always calls the pulse oscillator with a 0.5 duty cycle.
+    - New `discreteOptionLabel()`. The rack dropdown items and `formatParamValue()` (row value text) show the label when one exists, otherwise the number and unit as before.
+  - **Slider outline (`gui/widgets.d`):** `Slider.paint` now strokes the whole track with `theme.border` (`theme.textDisabled` when disabled) at `theme.borderWidth`. Before, the track fill (`panelSunken` #EBEBEB) on the rack row (`panel` #F4F4F4, or the odd-row hover tint) had about 1.1:1 contrast, so the slider's ends were hard to see. The Phase 8.5 gates already require `border` against `background`, `panel`, `panelRaised` and `panelSunken` to reach ≥ 4.5:1 (High) / ≥ 3:1 (Low) in every built-in palette; the default light theme gives about 6.4:1 on `panel`. This applies to every `Slider` (the rack's `RackSlider` inherits it). Sizes are unchanged.
+  - **Header toggle order (`gui/views/param_rack.d`):** The rack header toggles now read **M, S, B** (mute, solo, bypass), the same order as the patchbay node badges. Creation order changed too, so Tab focus follows the visual order. `headerToggleRect(k)` indices are unchanged (0 = mute, 1 = bypass, 2 = solo).
+  - **Docs:** `docs/manual.md` §7 lists the toggles as M, S, B.
+- **Verification Results:**
+  - New test in `tests/unit/views_param_rack_test.d`: the Analog Generator Waveform dropdown lists the six labels; its default value text is "Saw"; choosing item 3 shows "Square" and stores 3.0 in the document. `discreteOptionLabel()` and `formatParamValue()` are checked with and without options, out-of-range values, NaN and non-discrete parameters. Rack sliders (params 3–5) have a `border`-colored outline covering their track; this check fails when the outline is removed and passes with it.
+  - The header toggle test now checks mute → solo → bypass order from left to right, with each caption inside its toggle.
+  - `DFLAGS="-w" dub build --compiler=ldc2 --config=headless --force` and `--config=app --build=debug --force` both exit 0 with zero warnings. `dub test --compiler=ldc2 --config=app`: `4 modules passed unittests`.
+  - `dub test --compiler=ldc2 --config=headless`: 25/26 modules pass, including the appearance contrast and CVD gates. The one failure is the existing, unrelated `tests/unit/views_patchbay_test.d:824` (`menu should contain 'Add Core ▸'`).
+
+---
+
 ## [2026-11-25 12:59:31 KST]
 - **Author:** Claude Opus 5.5
 - **Affected Files:**

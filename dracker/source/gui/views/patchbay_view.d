@@ -768,7 +768,7 @@ final class PatchbayView : Widget, StudioCommandSink {
 
     /**
      * Builds the empty-canvas menu: one "Add <Category> ▸" entry per registry category (each opens a menu of
-     * that category's modules), then view commands.
+     * that category's modules), "Load Preset…" (adds an .msym preset as a new module at world), then view commands.
      *
      * Params:
      *   world = World position where new modules are placed.
@@ -785,6 +785,7 @@ final class PatchbayView : Widget, StudioCommandSink {
             }
             items ~= MenuItem("Add " ~ categoryLabel(cat) ~ " ▸", categoryAction(cat, world, at));
         }
+        items ~= MenuItem("Load Preset…", () { ctx_.loadModulePreset(world.x, world.y); });
         items ~= MenuItem.makeSeparator();
         items ~= MenuItem("Fit All", () { fitAll(); });
         items ~= MenuItem("Reset Zoom", () { resetZoom(); });
@@ -819,7 +820,7 @@ final class PatchbayView : Widget, StudioCommandSink {
      *   moduleId = Module id.
      *
      * Returns:
-     *   Menu entries (Mute, Solo, Bypass, Duplicate, Delete).
+     *   Menu entries (Mute, Solo, Bypass, Save Preset…, Apply Preset…, Duplicate, Delete).
      */
     MenuItem[] nodeMenuItems(uint moduleId) {
         ensureCache();
@@ -836,6 +837,9 @@ final class PatchbayView : Widget, StudioCommandSink {
         items ~= MenuItem(muted ? "Unmute" : "Mute", () { toggleBadge(mid, PatchbayBadge.mute); }, !output);
         items ~= MenuItem(soloed ? "Unsolo" : "Solo", () { toggleBadge(mid, PatchbayBadge.solo); }, !output);
         items ~= MenuItem(bypassed ? "Enable" : "Bypass", () { toggleBadge(mid, PatchbayBadge.bypass); }, !output);
+        items ~= MenuItem.makeSeparator();
+        items ~= MenuItem("Save Preset…", () { ctx_.saveModulePreset(mid); }, !output);
+        items ~= MenuItem("Apply Preset…", () { ctx_.applyModulePreset(mid); }, !output);
         items ~= MenuItem.makeSeparator();
         items ~= MenuItem("Duplicate", () { duplicateModule(mid); }, !output);
         items ~= MenuItem("Delete", () { deleteModule(mid); }, !output, false, "⌫");

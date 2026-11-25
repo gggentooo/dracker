@@ -149,6 +149,8 @@ All menu commands can also be triggered from the keyboard.
 | Open Project… | ⌘O | Opens an `.msv` project. If the file is invalid, the current project is kept and the error is shown in the status bar. |
 | Save Project | ⌘S | Saves to the current file, or asks for a name if the project has never been saved |
 | Save Project As… | ⇧⌘S | Saves under a new name |
+| Save Module Preset… | ⌥⌘S | Saves the selected module as a preset file ([§13.6](#136-module-presets-msym)) |
+| Load Module Preset… | ⌥⌘O | Adds a module from a preset file ([§13.6](#136-module-presets-msym)) |
 
 **Export WAV** is ⌘E. It has no menu item ([§13.4](#134-exporting-audio-wav)).
 
@@ -350,9 +352,9 @@ The new module appears where you right-clicked and becomes selected. Its paramet
 
 | Right-click on | Menu items |
 |---|---|
-| A node | Mute/Unmute · Solo/Unsolo · Bypass/Enable · Duplicate · Delete. All are disabled for the Master Output. |
+| A node | Mute/Unmute · Solo/Unsolo · Bypass/Enable · Save Preset… · Apply Preset… · Duplicate · Delete. All are disabled for the Master Output. |
 | A cable | Delete Wire |
-| Empty canvas | Add Synth ▸ · Add Effect ▸ · Add Control ▸ · Add Core ▸ · Fit All · Reset Zoom |
+| Empty canvas | Add Synth ▸ · Add Effect ▸ · Add Control ▸ · Add Core ▸ · Load Preset… · Fit All · Reset Zoom |
 
 **Duplicate** creates a copy of the module offset down and to the right, with the same parameter values. It does **not** copy cables, mute/bypass state, samples or drawn curves.
 
@@ -377,7 +379,7 @@ The rack shows the parameters of the module **selected in the patchbay**. With n
 
 ### 7.1 Header
 - The module name and type.
-- Three toggles: **M** (mute), **B** (bypass), **S** (solo).
+- Three toggles: **M** (mute), **S** (solo), **B** (bypass), in the same order as the badges on patchbay modules.
 
 > **QA note:** the order is M B S here, but M S B on the patchbay badges.
 
@@ -443,6 +445,7 @@ The pattern editor is where you write music. Time runs downward, one **line** pe
 
 ### 8.1 The header strip
 - **Pattern dropdown:** chooses the pattern to edit. Items show the pattern's id in hex followed by its name.
+- **Renaming a pattern:** double-click the pattern dropdown. A text field opens over it with the current name selected. Type the new name and press **Return** (or click elsewhere) to confirm, or **Escape** to cancel. If another pattern already has that name, a number is added to the end (Drums, Drums1, Drums2, …). An empty name is ignored. Renaming is undoable. You can also rename from the timeline ([§9.3](#93-editing-clips)).
 - **Trk:** number of tracks, 1–64.
 - **Lin:** number of lines, 1–4096. Resizing is undoable.
 - **Add:** creates a new empty pattern the same size as the current one, and selects it.
@@ -669,7 +672,8 @@ The timeline (arranger) decides **when** each pattern plays. Time runs left to r
 | Action | Gesture |
 |---|---|
 | Select | Click |
-| Open its pattern in the pattern editor | Double-click the clip |
+| Open its pattern in the pattern editor | Double-click the clip (anywhere except its name) |
+| Rename its pattern | Double-click the clip's **name label**, type the new name, press Return. Every clip of that pattern shows the new name; duplicate names get a number added ([§8.1](#81-the-header-strip)). |
 | Move (in time and between lanes) | Drag the body |
 | Resize | Drag the right edge (minimum 1 line) |
 | **Clone** | **⌥-drag**. The clone plays the *same* pattern, so edits appear in both. |
@@ -764,7 +768,7 @@ The scope shows a live picture of the sound.
 | Control | Choices |
 |---|---|
 | **Mode button** (cycles on click) | **Scope**: waveform with L solid and R dashed, triggered for a stable picture · **Spectrum**: frequency analyzer 20 Hz–Nyquist, 0 to −90 dB, with a dashed peak-hold trace · **Vector**: goniometer showing stereo width (mid up, side across) |
-| **Source dropdown** | **Master** (the final mix) or **Selected module**, which follows the patchbay selection and falls back to Master when nothing is selected |
+| **Source dropdown** | **Selected module** (the default), which follows the patchbay selection and falls back to Master when nothing is selected, or **Master** (the final mix) |
 
 The scope shows "No signal" when there is no audio, and updates continuously only while playing or while audio is running.
 
@@ -852,9 +856,22 @@ Projects use format version 1. Files from a future version are refused with "Uns
 | Color palettes (`.stpalette`) | Appearance panel **Import…** ([§14.4](#144-custom-palettes)) |
 | Pattern blocks (text) | Paste with ⌘V into the pattern editor |
 
-> **QA note:** MIDI file, XM and SunVox import, module presets (`.msym`) and autosave exist in the engine but have no GUI yet.
+| Module presets (`.msym`) | **Load Preset…** / **Apply Preset…** ([§13.6](#136-module-presets-msym)) |
 
-### 13.6 Preferences
+> **QA note:** MIDI file, XM and SunVox import and autosave exist in the engine but have no GUI yet.
+
+### 13.6 Module presets (`.msym`)
+A preset file stores one module: its type, name, parameter values and extra data (such as a drawn waveform, curves, or a MetaModule's inner project). It does not store cables.
+
+| To | Do this |
+|---|---|
+| Save a module as a preset | Right-click the module → **Save Preset…**, or select it and use **File ▸ Save Module Preset…** (⌥⌘S). The default file name is the module's name. |
+| Add a module from a preset | Right-click empty canvas → **Load Preset…** (the module appears where you clicked), or **File ▸ Load Module Preset…** (⌥⌘O; it appears to the right of the existing modules). The new module is selected and has no cables. |
+| Apply a preset to an existing module | Right-click the module → **Apply Preset…**. The module's parameters and extra data are replaced; its name, position, cables and mute/bypass state are kept. The preset must be for the same module type, and MetaModules can't be applied to (load the preset as a new module instead). |
+
+Loading and applying are each one undo step. The Master Output can't be saved or applied to. Problems are reported in the status bar ("Load preset failed: …", "Apply preset failed: …").
+
+### 13.7 Preferences
 Appearance settings are saved separately from projects, in `~/Library/Application Support/Dracker/appearance.cfg`. If this file is damaged, the app uses the defaults and shows "Appearance settings ignored (…); using defaults".
 
 ---
@@ -987,6 +1004,7 @@ Opening a project or starting a new one clears the history.
 | ⌘L | Toggle loop (whole song) |
 | ⌘Z / ⇧⌘Z | Undo / redo |
 | ⌘N / ⌘O / ⌘S / ⇧⌘S | New / open / save / save as |
+| ⌥⌘S / ⌥⌘O | Save the selected module as a preset / load a preset as a new module |
 | ⌘E | Export WAV |
 | ⌘, | Appearance panel |
 | ⌥⌘C | Toggle high / low contrast |
@@ -1119,7 +1137,7 @@ These are known limitations of the current build. Please report behavior that *d
 | 20 | Sampler | There are no destructive sample edits (trim, normalize and so on) |
 | 21 | DrumSynth | Notes 48 and 50 play kick and snare, not high tom; only 47 plays the high tom |
 | 22 | Vorbis Player | There is no way to load a file |
-| 23 | Export | Stems, MIDI/XM/SunVox import, module presets and autosave are not exposed in the GUI |
+| 23 | Export | Stems, MIDI/XM/SunVox import and autosave are not exposed in the GUI |
 | 24 | Panic | In the GUI, Panic stops the transport; it doesn't send a separate all-notes-off |
 
 ### Suggested QA passes

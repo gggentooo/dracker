@@ -12,7 +12,7 @@
  *   clip is outlined), muted clips dimmed, soloed clips highlighted, and a revision-cached note miniature.
  *   Interactions: body drag moves a clip in time and lane, right-edge drag resizes it, Alt+drag clones it (each
  *   committed as one undo step on release with a ghost preview while dragging), double-click selects the clip's
- *   pattern, double-click on an empty lane adds a clip of the current pattern, right-click menus (clip: Mute,
+ *   pattern (on the clip's name label it instead opens a TextField renaming the pattern), double-click on an empty lane adds a clip of the current pattern, right-click menus (clip: Mute,
  *   Solo, Supertrack, Make Unique, Set Loop To Clip, Delete; empty lane: Add Clip of each pattern), Delete key,
  *   horizontal scroll pans, vertical scroll moves lanes, Cmd+scroll / pinch / zoom actions zoom around a point.
  *   Snapping: no modifier snaps to beats (4 lines), Shift snaps to single lines, Cmd snaps to bars (16 lines).
@@ -50,10 +50,11 @@ import std.format : sformat;
 import std.math : ceil, exp, floor, round;
 
 import app.keymap : StudioAction, StudioCommandSink;
-import gui.renderer : ColorRGBA, drawDashedPolyline, FontId, IRenderer2D, Point2F, RectF;
+import gui.renderer : ColorRGBA, drawDashedPolyline, FontId, IRenderer2D, ITextMeasurer, Point2F, RectF;
 import gui.theme : StudioTheme;
 import gui.views.studio_context : StudioContext;
-import gui.widgets : KeyCode, KeyEvent, MenuItem, MouseButton, MouseEvent, ScrollEvent, Widget, hasModifier;
+import gui.widgets : KeyCode, KeyEvent, lineHeightOr, measureTextOr, MenuItem, MouseButton, MouseEvent,
+    openTextEditor, ScrollEvent, TextField, Widget, hasModifier;
 import io.project_format : LoadedProject, SavedPattern;
 import platform.interfaces : KeyModifiers;
 import sequencer.timeline : TimelineClip;
@@ -164,6 +165,7 @@ final class TimelineView : Widget, StudioCommandSink {
     enum float maxPointsPerLine = 48.0f;
     enum float defaultPointsPerLine = 6.0f;
     enum uint maxLane = 255;
+    enum float RENAME_FIELD_WIDTH = 180.0f;
     enum uint linesPerBeat = 4;
     enum uint linesPerBar = 16;
     enum float dragThreshold = 3.0f;
@@ -356,6 +358,82 @@ final class TimelineView : Widget, StudioCommandSink {
             }
         }
         return RectF.init;
+    }
+
+    /**
+     * Returns the rectangle of a clip's pattern-name label as drawn (double-clicking it renames the pattern).
+     *
+     * Params:
+     *   clipId = Clip id.
+     *
+     * Returns:
+     *   Label rectangle clipped to the clip and content area, or an empty RectF when the clip is missing, too
+     *   narrow to show a label, or scrolled out of view.
+     */
+    RectF clipNameRect(uint clipId) {
+        const doc = ctx.session.document();
+        foreach (ref c; doc.clips) {
+            if (c.clipId != clipId) {
+                continue;
+            }
+            immutable RectF cr = rectFor(c.startLine, c.lengthLines, c.laneY);
+            immutable RectF content = contentRect();
+            const(SavedPattern)* sp = findPattern(c.patternId);
+            if (cr.w < 14.0f || sp is null) {
+                return RectF.init;
+            }
+            auto ui = context();
+            ITextMeasurer m = ui is null ? null : ui.measurer();
+            immutable float size = ctx.theme.fontSizeSmall;
+            float tx = (cr.x > content.x ? cr.x : content.x) + 4.0f;
+            tx += measureTextOr(m, "W ", FontId.ui, size);
+            if (c.cloneSourceId != 0) {
+                tx += measureTextOr(m, "⧉ ", FontId.ui, size);
+            }
+            if (c.isSupertrack) {
+                tx += measureTextOr(m, "ST ", FontId.ui, size);
+            }
+            immutable float tw = measureTextOr(m, sp.name.length > 0 ? sp.name : "W", FontId.ui, size);
+            immutable RectF label = RectF(tx - 2.0f, cr.y, tw + 4.0f, lineHeightOr(m, FontId.ui, size) + 4.0f);
+            return label.intersect(cr).intersect(content);
+        }
+        return RectF.init;
+    }
+
+    /**
+     * Opens a text field over a clip's name label to rename the clip's pattern (every clip of that pattern shows
+     * the new name; duplicate names get a number appended by the session).
+     *
+     * Params:
+     *   clipId = Clip whose pattern is renamed.
+     *
+     * Returns:
+     *   The open field, or null when the clip or its pattern is missing or the view is detached.
+     */
+    TextField beginRenameClipPattern(uint clipId) {
+        auto ui = context();
+        if (ui is null) {
+            return null;
+        }
+        foreach (ref c; ctx.session.document().clips) {
+            if (c.clipId != clipId) {
+                continue;
+            }
+            const(SavedPattern)* sp = findPattern(c.patternId);
+            if (sp is null) {
+                return null;
+            }
+            immutable uint pid = c.patternId;
+            immutable RectF cr = rectFor(c.startLine, c.lengthLines, c.laneY);
+            immutable RectF content = contentRect();
+            immutable float x = cr.x > content.x ? cr.x : content.x;
+            immutable RectF rect = RectF(x, cr.y, RENAME_FIELD_WIDTH, ctx.theme.controlHeight);
+            return openTextEditor(ui, rect, sp.name, (string name) {
+                ctx.renamePattern(pid, name);
+                invalidate();
+            });
+        }
+        return null;
     }
 
     /**
@@ -827,8 +905,12 @@ final class TimelineView : Widget, StudioCommandSink {
         }
         selected_ = c.clipId;
         if (e.clickCount >= 2) {
-            ctx.selectPattern(c.patternId);
             drag_ = TimelineDragMode.none;
+            if (clipNameRect(c.clipId).contains(e.pos)) {
+                beginRenameClipPattern(c.clipId);
+            } else {
+                ctx.selectPattern(c.patternId);
+            }
             invalidate();
             return true;
         }

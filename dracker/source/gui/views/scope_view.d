@@ -8,6 +8,7 @@
  *   zero-crossing trigger), a log-frequency FFT spectrum (20 Hz .. Nyquist, -90..0 dBFS grid, attack/release
  *   smoothing and decaying peak hold) or a goniometer (mid/side vectorscope). A mode button and a source dropdown
  *   ("Master" / "Selected module") sit in a header strip; choosing the selected module requests a scope tap.
+ *   The default source is "Selected module", which shows the master bus while no module is selected.
  *   Phase 8.5 (Accessible Appearance): traces use the scopeTraceL/R tokens; the right channel (and spectrum
  *   peak hold) is dashed and an L/R legend is drawn, so channels are not distinguished by color alone.
  *
@@ -69,7 +70,7 @@ final class ScopeView : Widget {
     private Button modeButton_;
     private Dropdown sourceBox_;
     private ScopeMode mode_ = ScopeMode.oscilloscope;
-    private bool useSelected_ = false;
+    private bool useSelected_ = true;
     private ulong tappedSelectionRevision_ = 0;
     private RectF plot_;
     private float[] left_;
@@ -96,7 +97,7 @@ final class ScopeView : Widget {
         start_ = MonoTime.currTime;
         modeButton_ = add(new Button(modeLabel(mode_), &cycleMode));
         modeButton_.id = "scope.mode";
-        sourceBox_ = add(new Dropdown(["Master", "Selected module"], 0, &selectSource));
+        sourceBox_ = add(new Dropdown(["Master", "Selected module"], 1, &selectSource));
         sourceBox_.id = "scope.source";
         ensureTaps();
     }

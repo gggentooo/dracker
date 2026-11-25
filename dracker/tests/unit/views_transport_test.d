@@ -827,6 +827,7 @@ version (unittest) {
         Rig rig = scopeRig(view);
         scope (exit) rig.dispose();
         assert(view.mode() == ScopeMode.oscilloscope && view.sourceId() == 0);
+        assert(findChild!Dropdown(view, "scope.source").selectedText() == "Selected module");
         assert(!view.controlRect("scope.mode").isEmpty() && !view.controlRect("scope.source").isEmpty());
         assert(!view.plotRect().isEmpty());
         assert(view.controlRect("scope.plot") == view.plotRect());
@@ -930,6 +931,10 @@ version (unittest) {
         assert(gen != 0 && gen2 != 0);
         assert(rig.ctx.scopeTaps() == [0u, 0, 0, 0]);
         rig.ctx.selectModule(gen);
+        rig.frame();
+        assert(view.sourceId() == gen && rig.ctx.scopeTaps()[0] == gen);
+        view.selectSource(0);
+        assert(view.sourceId() == 0);
 
         auto src = findChild!Dropdown(view, "scope.source");
         rig.click(view.controlRect("scope.source"));

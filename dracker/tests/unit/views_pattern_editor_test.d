@@ -28,6 +28,7 @@ module tests.unit.views_pattern_editor_test;
 
 version (unittest) {
     import std.algorithm : endsWith, startsWith;
+    import std.format : format;
     import std.math : abs, ceil, fabs, isFinite;
 
     import app.keymap : StudioAction;
@@ -1231,5 +1232,78 @@ version (unittest) {
         rig.key(6);
         rig.keyUp(6);
         assert(rig.cell(3, 12).isEmpty() && ctx.status == MASTER_OUTPUT_BLOCKED_STATUS);
+    }
+
+    unittest {
+        auto rig = new PeRig(true);
+        auto v = rig.v;
+        auto s = rig.s;
+        void type(dstring t) {
+            foreach (c; t) {
+                PlatformEvent e;
+                e.kind = PlatformEventKind.textInput;
+                e.utf32Char = c;
+                rig.ui.handleEvent(e);
+            }
+        }
+        immutable uint p1 = rig.ctx.currentPattern();
+        immutable uint p2 = s.doAddPattern(4, 16, "Drums");
+        immutable uint p3 = s.doAddPattern(4, 16, "Bass");
+        assert(p2 != 0 && p3 != 0);
+        rig.frame();
+        string nameOf(uint pid) {
+            foreach (ref p; s.document().patterns) {
+                if (p.patternId == pid) return p.name;
+            }
+            return null;
+        }
+
+        immutable size_t u0 = rig.undos();
+        rig.doubleClick(v.patternSelect.bounds.center());
+        assert(!v.patternSelect.isOpen() && rig.ui.overlays().length == 1);
+        auto f = cast(TextField) rig.ui.overlays()[0];
+        assert(f !is null && f.text() == nameOf(p1) && f.allSelected());
+        rig.ctx.selectModule(rig.gen);
+        rig.ctx.editMode = true;
+        v.setCursor(0, 0, 0);
+        type("Drums"d);
+        assert(rig.key(6));
+        rig.keyUp(6);
+        assert(rig.cell(0, 0).isEmpty());
+        rig.ctx.editMode = false;
+        assert(rig.key(KeyCode.returnKey));
+        assert(rig.ui.overlays().length == 0 && nameOf(p1) == "Drums1" && rig.undos() == u0 + 1);
+        assert(rig.ctx.status == "Renamed pattern to Drums1");
+        rig.frame();
+        assert(v.patternSelect.selectedText() == format("%02X Drums1", p1));
+
+        assert(v.beginRenamePattern() !is null);
+        type("Drums"d);
+        rig.key(KeyCode.returnKey);
+        assert(nameOf(p1) == "Drums1" && rig.undos() == u0 + 1);
+
+        rig.ctx.selectPattern(p3);
+        rig.frame();
+        rig.doubleClick(v.patternSelect.bounds.center());
+        type("Drums"d);
+        rig.key(KeyCode.returnKey);
+        assert(nameOf(p3) == "Drums2" && rig.undos() == u0 + 2);
+
+        rig.doubleClick(v.patternSelect.bounds.center());
+        type("Nope"d);
+        assert(rig.key(KeyCode.escape));
+        assert(rig.ui.overlays().length == 0 && nameOf(p3) == "Drums2" && rig.undos() == u0 + 2);
+
+        rig.doubleClick(v.patternSelect.bounds.center());
+        rig.key(KeyCode.deleteBackward);
+        rig.key(KeyCode.returnKey);
+        assert(nameOf(p3) == "Drums2" && rig.undos() == u0 + 2);
+
+        assert(s.doRenamePattern(p3, "  Lead  ") && nameOf(p3) == "Lead");
+        assert(!s.doRenamePattern(p3, "   ") && !s.doRenamePattern(9999, "X"));
+        assert(s.uniquePatternName("Drums", 0) == "Drums2" && s.uniquePatternName("Drums", p2) == "Drums");
+        assert(s.uniquePatternName("Fresh", 0) == "Fresh");
+        assert(s.undo() && nameOf(p3) == "Drums2");
+        assert(s.undo() && nameOf(p3) == "Bass");
     }
 }
