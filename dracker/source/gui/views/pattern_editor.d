@@ -10,7 +10,9 @@
  *   Delete pattern buttons). Supports keyboard/mouse cursor navigation over 13 sub-fields, rectangular block
  *   selection (mouse drag or Shift+arrows), QWERTY note entry with live audition, hex nibble editing, note-off and
  *   delete entry, live MIDI recording at the playhead or step recording at the cursor, block cut/copy/paste
- *   (Dracker-Block-v1 clipboard text), transpose, interpolate, and follow-playhead scrolling.
+ *   (Dracker-Block-v1 clipboard text), transpose, interpolate, and follow-playhead scrolling. Double-clicking a row
+ *   puts the cursor on that row's note field and turns record (edit) mode on. Notes are never written for the
+ *   Master Output module (core.output): note entry is refused with a status message instead.
  *
  *   Column mapping (faithful to the 8-byte NoteCell):
  *     NNN  = note: "---" empty, "===" note-off, otherwise C-4 style from the stored MIDI+1 value (octave -1 is
@@ -93,6 +95,10 @@ enum PatternField : uint {
 enum uint PATTERN_FIELD_COUNT = 13;
 
 enum uint CELL_TEXT_COLUMNS = 19;
+
+enum string MASTER_OUTPUT_TYPE_ID = "core.output";
+
+enum string MASTER_OUTPUT_BLOCKED_STATUS = "Master Output can't play notes; select an instrument module";
 
 private immutable uint[PATTERN_FIELD_COUNT] FIELD_CHAR = [0, 4, 5, 7, 8, 10, 11, 12, 13, 15, 16, 17, 18];
 
@@ -907,7 +913,9 @@ final class PatternEditorView : Widget, StudioCommandSink {
     }
 
     /**
-     * Places the cursor on click and starts a block-selection drag (Shift extends from the cursor).
+     * Places the cursor on click and starts a block-selection drag (Shift extends from the cursor). A double-click
+     * puts the cursor on the note field of the clicked row and turns record (edit) mode on, so the next QWERTY,
+     * MIDI or on-screen piano note is written there.
      *
      * Params:
      *   e = Mouse event.
@@ -925,6 +933,10 @@ final class PatternEditorView : Widget, StudioCommandSink {
         }
         if (auto ui = context()) {
             ui.setFocus(this);
+        }
+        if (e.clickCount >= 2 && !e.shift()) {
+            enterEditModeAt(t, l);
+            return true;
         }
         if (e.shift()) {
             moveCursorTo(t, l, f, true);
@@ -1376,6 +1388,36 @@ final class PatternEditorView : Widget, StudioCommandSink {
         invalidate();
     }
 
+    private void enterEditModeAt(uint track, uint line) {
+        dragging_ = false;
+        moveCursorTo(track, line, PatternField.note, false);
+        if (!ctx.recording) {
+            ctx.recording = true;
+            ctx.setStatus("Record on");
+        }
+        invalidate();
+    }
+
+    private bool isMasterOutput(uint modId) const {
+        if (modId == 0) {
+            return false;
+        }
+        foreach (ref m; ctx.session.document().modules) {
+            if (m.id == modId) {
+                return m.typeId == MASTER_OUTPUT_TYPE_ID;
+            }
+        }
+        return false;
+    }
+
+    private bool noteEntryBlocked(const(SavedPattern)* sp, uint track, uint line) {
+        if (sp is null || !isMasterOutput(entryModule(sp, track, line))) {
+            return false;
+        }
+        ctx.setStatus(MASTER_OUTPUT_BLOCKED_STATUS);
+        return true;
+    }
+
     private ushort entryModule(const(SavedPattern)* sp, uint track, uint line) const {
         if (ctx.selectedModule() != 0) {
             return cast(ushort) ctx.selectedModule();
@@ -1402,6 +1444,10 @@ final class PatternEditorView : Widget, StudioCommandSink {
         }
         NoteCell c = cellOf(sp, track, line);
         immutable ushort mod = entryModule(sp, track, line);
+        if (isMasterOutput(mod)) {
+            ctx.setStatus(MASTER_OUTPUT_BLOCKED_STATUS);
+            return false;
+        }
         immutable uint pid = sp.patternId;
         c.note = NoteCell.encodeMidiNote(midi);
         c.velocity = NoteCell.encodeVelocity(velocity);
@@ -1458,7 +1504,8 @@ final class PatternEditorView : Widget, StudioCommandSink {
         }
         const sp = currentPatternDoc();
         immutable uint mod = sp !is null ? entryModule(sp, cursorTrack_, cursorLine_) : ctx.selectedModule();
-        if (ctx.recording && cursorField_ == PatternField.note && sp !is null) {
+        if (ctx.recording && cursorField_ == PatternField.note && sp !is null
+                && !noteEntryBlocked(sp, cursorTrack_, cursorLine_)) {
             writeNote(cursorTrack_, cursorLine_, midi, 1.0f);
             advance();
         }
@@ -1502,6 +1549,9 @@ final class PatternEditorView : Widget, StudioCommandSink {
                 lastLine = local;
                 writeNote((cursorTrack_ + chord) % tracks, cast(uint) local, ev.note, ev.velocity / 127.0f);
             }
+            return;
+        }
+        if (noteEntryBlocked(sp, cursorTrack_, cursorLine_)) {
             return;
         }
         foreach (i, ref ev; notes) {

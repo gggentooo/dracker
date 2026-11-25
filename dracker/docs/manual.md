@@ -220,7 +220,7 @@ These behaviors are the same everywhere in the app.
 
 ### 4.4 Keyboard focus
 - **Tab / Shift+Tab** move focus between controls, as long as the active pane doesn't use Tab itself.
-- **Escape** closes the topmost popup. With no popup open, Escape **stops playback**.
+- **Escape** closes the topmost popup. With no popup open, Escape turns **Record** (edit) mode off if it is on; otherwise it **stops playback**.
 
 > **QA note:** in the pattern editor, Tab enters a note-off, so it does not move focus there.
 
@@ -492,10 +492,13 @@ Other things you'll see:
 | ⇧Tab | Previous track |
 | ⌘[ / ⌘] | Previous / next pattern (no wrap-around) |
 | Click | Places the cursor on the exact field clicked |
+| Double-click | Places the cursor on the note field of the clicked row and turns **Record** (edit) mode on |
 | Scroll | Vertical scrolls lines; horizontal, or Shift+scroll, scrolls tracks |
 
 ### 8.4 Entering notes and values
-**Turn on Record mode first** (⌘R or the **Rec** button). Outside record mode, keys only *play* sounds; nothing is written.
+**Turn on Record mode first** (⌘R, the **Rec** button, or **double-click a row** in the pattern editor). Outside record mode, keys only *play* sounds; nothing is written. Press **Escape** to leave record mode.
+
+After a double-click, the next note you play on the computer keyboard, a MIDI keyboard or the on-screen piano is written to that row, and the cursor then moves down by the **edit step** as usual. Set the step to 0 to keep entering notes on the same row.
 
 **Notes (cursor in the NNN field)**
 - Press a piano key ([§12.1](#121-the-computer-keyboard-piano)). The note is written at the current **edit octave** with full velocity, and the cursor moves down by the **edit step**.
@@ -504,6 +507,7 @@ Other things you'll see:
   2. the cell's existing module;
   3. the nearest module above on the same track.
 - Notes are always auditioned as you type, so you hear what you enter.
+- Notes are never written for the **Master Output** module. If it is selected (or would be inherited from the cells above), nothing is written, the cursor stays put, and the status bar shows "Master Output can't play notes; select an instrument module". Select an instrument module in the patchbay first.
 
 **Other entries**
 - **Note-off:** press **Tab** to write `===`, which releases the playing note.
@@ -945,7 +949,7 @@ Opening a project or starting a new one clears the history.
 |---|---|
 | Space · ⌘Return | Play / pause song |
 | ⇧Space | Play / stop current pattern (loop) |
-| Escape | Stop and return to line 0 (when no popup is open) |
+| Escape | Leave record (edit) mode if it is on; otherwise stop and return to line 0 (when no popup is open) |
 | ⌘R | Record (edit) mode |
 | F1 / F2 | Edit octave down / up |
 | ⌘. | Panic: stop and silence everything |

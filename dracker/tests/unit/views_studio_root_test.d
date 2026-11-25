@@ -246,6 +246,24 @@ version (unittest) {
         r.session.engine().processHostBuffer(outs, ins, 256);
         r.frame();
         assert(!r.session.isPlaying());
+
+        r.press(49);
+        r.session.engine().processHostBuffer(outs, ins, 256);
+        r.frame();
+        assert(r.session.isPlaying());
+        r.ctx.recording = true;
+        r.press(53);
+        r.session.engine().processHostBuffer(outs, ins, 256);
+        r.frame();
+        assert(!r.ctx.recording && r.ctx.status == "Record off" && r.session.isPlaying());
+        r.press(53);
+        r.session.engine().processHostBuffer(outs, ins, 256);
+        r.frame();
+        assert(!r.ctx.recording && !r.session.isPlaying());
+        r.ctx.recording = true;
+        r.press(53, KeyModifiers.shift);
+        assert(r.ctx.recording);
+        r.ctx.recording = false;
     }
 
     unittest {

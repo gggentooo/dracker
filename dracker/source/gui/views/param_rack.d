@@ -552,6 +552,9 @@ final class ParamRackView : Widget {
     enum float SECTION_HEIGHT = 22.0f;
     enum float EDITOR_HEIGHT = 150.0f;
     enum float ITEM_HEIGHT = 24.0f;
+    enum float HEADER_TOGGLE_MIN_WIDTH = 44.0f;
+    enum float HEADER_TOGGLE_GAP = 6.0f;
+    enum float HEADER_TOGGLE_MARGIN = 6.0f;
 
     private StudioContext ctx_;
     private ScrollView scroll_;
@@ -559,6 +562,7 @@ final class ParamRackView : Widget {
     private Toggle muteToggle_;
     private Toggle bypassToggle_;
     private Toggle soloToggle_;
+    private float headerToggleLeft_ = 0.0f;
     private Button backButton_;
     private ParamRow[] rows_;
     private RackCurveEditor curve_;
@@ -1074,13 +1078,29 @@ final class ParamRackView : Widget {
         return learningParam_ >= 0;
     }
 
+    private float headerToggleWidth(Toggle t, float height) {
+        auto ui = context();
+        StudioTheme theme;
+        ITextMeasurer m = null;
+        if (ui !is null) {
+            theme = ui.theme;
+            m = ui.measurer();
+        }
+        immutable float w = t.contentWidth(m, theme, height) + 2.0f;
+        return w > HEADER_TOGGLE_MIN_WIDTH ? w : HEADER_TOGGLE_MIN_WIDTH;
+    }
+
     override void layoutChildren() {
-        immutable float tw = 44.0f;
         immutable float th = 20.0f;
         immutable float ty = bounds.y + (HEADER_HEIGHT - th) * 0.5f;
-        soloToggle_.arrange(RectF(bounds.right() - 6.0f - tw, ty, tw, th));
-        bypassToggle_.arrange(RectF(bounds.right() - 6.0f - 2.0f * tw, ty, tw, th));
-        muteToggle_.arrange(RectF(bounds.right() - 6.0f - 3.0f * tw, ty, tw, th));
+        float x = bounds.right() - HEADER_TOGGLE_MARGIN;
+        foreach (t; [soloToggle_, bypassToggle_, muteToggle_]) {
+            immutable float tw = headerToggleWidth(t, th);
+            x -= tw;
+            t.arrange(RectF(x, ty, tw, th));
+            x -= HEADER_TOGGLE_GAP;
+        }
+        headerToggleLeft_ = x + HEADER_TOGGLE_GAP;
         float y = bounds.y + HEADER_HEIGHT;
         backButton_.visible = inChildGraph();
         if (backButton_.visible) {
@@ -1108,7 +1128,8 @@ final class ParamRackView : Widget {
         immutable RectF hr = RectF(bounds.x, bounds.y, bounds.w, HEADER_HEIGHT);
         r.fillRect(hr, theme.panelRaised);
         immutable float lh = r.lineHeight(FontId.ui, theme.fontSizeTitle);
-        r.pushClip(RectF(hr.x, hr.y, hr.w - 140.0f > 0.0f ? hr.w - 140.0f : 0.0f, hr.h));
+        immutable float titleW = headerToggleLeft_ > hr.x ? headerToggleLeft_ - hr.x - HEADER_TOGGLE_GAP : hr.w - 140.0f;
+        r.pushClip(RectF(hr.x, hr.y, titleW > 0.0f ? titleW : 0.0f, hr.h));
         if (title_.length > 0) {
             r.drawText(Point2F(hr.x + 8.0f, hr.y + (hr.h - lh) * 0.5f), title_, FontId.ui, theme.fontSizeTitle, theme.text);
             immutable float nw = r.measureText(title_, FontId.ui, theme.fontSizeTitle);

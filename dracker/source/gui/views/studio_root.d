@@ -10,7 +10,8 @@
  *   the session Keymap: document-level actions run here
  *   (transport, record, octave, undo/redo, panic, play-pattern, loop) or go to the app layer (new/open/save/
  *   export/quit); context-dependent actions go to the StudioCommandSink view that holds focus (or was used last);
- *   unhandled piano keys play live notes on the selected module. Phase 8.5: openAppearance opens the Appearance
+ *   unhandled piano keys play live notes on the selected module. Esc (no modifiers) leaves record (edit) mode when
+ *   it is on, before the keymap's Esc = Stop binding is consulted. Phase 8.5: openAppearance opens the Appearance
  *   panel overlay, toggleContrast flips High/Low contrast, and every StudioContext appearance switch is pushed
  *   into the UiContext (theme + relayout) through a theme listener.
  *
@@ -45,7 +46,7 @@ import gui.views.scope_view : ScopeView;
 import gui.views.studio_context : StudioContext;
 import gui.views.timeline_view : TimelineView;
 import gui.views.transport_bar : TransportBarView;
-import gui.widgets : KeyEvent, SplitView, Widget;
+import gui.widgets : KeyCode, KeyEvent, SplitView, Widget;
 import platform.interfaces : PlatformEvent, PlatformEventKind;
 
 /**
@@ -296,6 +297,14 @@ final class StudioRoot : Widget {
     }
 
     override bool onKeyDown(const ref KeyEvent e) {
+        if (e.keyCode == KeyCode.escape && e.modifiers == 0 && ctx.recording) {
+            if (!e.isRepeat) {
+                ctx.recording = false;
+                ctx.setStatus("Record off");
+                invalidate();
+            }
+            return true;
+        }
         immutable StudioAction act = ctx.session.keymap().resolveAction(e.keyCode, e.modifiers);
         if (act != StudioAction.none) {
             return executeAction(act);

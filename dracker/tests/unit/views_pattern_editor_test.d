@@ -238,6 +238,23 @@ version (unittest) {
         }
 
         /**
+         * Double-clicks at a point (two presses inside the double-click interval).
+         *
+         * Params:
+         *   p = Position.
+         */
+        void doubleClick(Point2F p) {
+            click(p);
+            PlatformEvent e;
+            e.x = p.x;
+            e.y = p.y;
+            e.kind = PlatformEventKind.mouseDown;
+            ui.handleEvent(e);
+            e.kind = PlatformEventKind.mouseUp;
+            ui.handleEvent(e);
+        }
+
+        /**
          * Sends a scroll event.
          *
          * Params:
@@ -1143,5 +1160,76 @@ version (unittest) {
         rig.frame();
         assert(rig.hasOutlineAt(rig.ui.theme.trackerCursor, v.cellRect(3, 22).y));
         assert(!rig.scroll(Point2F(5000.0f, 5000.0f), 0.0f, -100.0f));
+    }
+
+    unittest {
+        auto rig = new PeRig(true);
+        auto v = rig.v;
+        auto ctx = rig.ctx;
+        ctx.recording = true;
+        ctx.editOctave = 5;
+        ctx.editStep = 1;
+        ctx.selectModule(1);
+        v.setCursor(0, 0, 0);
+        immutable size_t u0 = rig.undos();
+        assert(rig.key(6));
+        rig.keyUp(6);
+        assert(rig.cell(0, 0).isEmpty() && rig.undos() == u0 && v.cursorLine() == 0);
+        assert(ctx.status == MASTER_OUTPUT_BLOCKED_STATUS);
+
+        ctx.injectMidiNote(MidiNoteEvent(0, 64, 100, 0));
+        rig.frame();
+        assert(rig.cell(0, 0).isEmpty() && rig.cell(1, 0).isEmpty() && rig.undos() == u0 && v.cursorLine() == 0);
+
+        ctx.selectModule(0);
+        rig.put(1, 0, NoteCell.makeNote(60, 1.0f, 1));
+        immutable size_t u1 = rig.undos();
+        v.setCursor(1, 2, 0);
+        rig.key(6);
+        rig.keyUp(6);
+        assert(rig.cell(1, 2).isEmpty() && rig.undos() == u1 && v.cursorLine() == 2);
+
+        ctx.selectModule(rig.gen);
+        rig.key(6);
+        rig.keyUp(6);
+        assert(rig.cell(1, 2).note == NoteCell.encodeMidiNote(72) && rig.cell(1, 2).moduleId == rig.gen);
+        assert(rig.undos() == u1 + 1 && v.cursorLine() == 3);
+    }
+
+    unittest {
+        auto rig = new PeRig(true);
+        auto v = rig.v;
+        auto ctx = rig.ctx;
+        ctx.selectModule(rig.gen);
+        ctx.editOctave = 5;
+        ctx.editStep = 1;
+        assert(!ctx.recording);
+
+        rig.click(v.fieldRect(2, 5, PatternField.velocityHi).center());
+        assert(!ctx.recording && v.cursorField() == PatternField.velocityHi);
+
+        rig.doubleClick(v.fieldRect(2, 5, PatternField.velocityHi).center());
+        assert(ctx.recording && ctx.status == "Record on");
+        assert(v.cursorTrack() == 2 && v.cursorLine() == 5 && v.cursorField() == PatternField.note);
+        assert(!v.hasSelection());
+
+        assert(rig.key(6));
+        rig.keyUp(6);
+        assert(rig.cell(2, 5).note == NoteCell.encodeMidiNote(72) && rig.cell(2, 5).moduleId == rig.gen);
+        assert(v.cursorLine() == 6);
+
+        rig.doubleClick(v.cellRect(1, 9).center());
+        assert(ctx.recording && v.cursorTrack() == 1 && v.cursorLine() == 9);
+        ctx.injectMidiNote(MidiNoteEvent(0, 67, 127, 0));
+        rig.frame();
+        assert(rig.cell(1, 9).note == NoteCell.encodeMidiNote(67) && rig.cell(1, 9).moduleId == rig.gen);
+        assert(v.cursorLine() == 10);
+
+        ctx.selectModule(1);
+        rig.doubleClick(v.cellRect(3, 12).center());
+        assert(ctx.recording && v.cursorLine() == 12);
+        rig.key(6);
+        rig.keyUp(6);
+        assert(rig.cell(3, 12).isEmpty() && ctx.status == MASTER_OUTPUT_BLOCKED_STATUS);
     }
 }

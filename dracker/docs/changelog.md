@@ -10,6 +10,37 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
 
 ---
 
+## [2026-11-25 12:31:42 KST]
+- **Author:** Claude Opus 5.5
+- **Affected Files:** `source/gui/views/pattern_editor.d`, `source/gui/views/studio_root.d`, `tests/unit/views_pattern_editor_test.d`, `tests/unit/views_studio_root_test.d`, `docs/manual.md`, `docs/changelog.md`
+- **Reason / Summary:** Three changes to pattern note entry and record (edit) mode.
+  - **Master Output cannot receive notes (`gui/views/pattern_editor.d`):** Before, when the Master Output module (`core.output`) was selected in the patchbay, QWERTY, MIDI and on-screen piano input in record mode wrote notes with `MM = 01`. Note entry now checks the module that would be written, whether it comes from the patchbay selection, the cell's own module, or the nearest module above on the track. If it is the Master Output, nothing is written, the cursor does not move, no undo step is added, and the status bar shows `MASTER_OUTPUT_BLOCKED_STATUS` ("Master Output can't play notes; select an instrument module"). `writeNote()` also refuses it as a final check. Notes are still auditioned. Typing `01` into the MM hex field by hand is unchanged.
+  - **Double-click a row to enter edit mode (`PatternEditorView.onMouseDown`):** A double-click (`clickCount >= 2`, no Shift) on the grid cancels any selection drag, puts the cursor on the **note** field of the clicked track and row, and turns `ctx.recording` on (status "Record on"; the transport **Rec** button lights up on the next frame). The next QWERTY, MIDI (step recording) or on-screen piano note is written to that row, and the cursor then advances by the edit step as before. A single click still only moves the cursor.
+  - **Escape leaves edit mode (`StudioRoot.onKeyDown`):** Escape with no modifiers now turns record mode off (status "Record off") when it is on, before the keymap's `Esc = Stop` binding is checked, so playback keeps running. When record mode is already off, Escape stops playback as before. Widgets that already use Escape (open popups and menus, number-box editing, patchbay wire drags, timeline drags) still get it first, because they handle it before the key reaches the root.
+  - **Docs:** `docs/manual.md` §2 (Escape), §8.3 (double-click), §8.4 (entering edit mode, leaving with Escape, Master Output rule) and the shortcut table.
+- **Verification Results:**
+  - New tests in `tests/unit/views_pattern_editor_test.d` cover the Master Output block for QWERTY input, MIDI step input and a module inherited from an earlier cell, and recovery once an instrument is selected. They also cover double-click entering edit mode on the note field with QWERTY and MIDI writes to the clicked row, a single click not enabling it, and double-click combined with a selected Master Output. A new `PeRig.doubleClick()` helper sends a real double-click; the rig's `mouse()` advances the clock on every press, so it never produces one.
+  - `tests/unit/views_studio_root_test.d`: Escape with record on turns record off and keeps playback running; a second Escape stops playback; Shift+Escape does not leave record mode.
+  - `DFLAGS="-w" dub build --compiler=ldc2 --config=headless --force` and `--config=app --build=debug --force` both exit 0 with zero warnings. `dub test --compiler=ldc2 --config=app`: `4 modules passed unittests`.
+  - `dub test --compiler=ldc2 --config=headless`: 24/25 modules pass, including all new tests. The one failure is the existing, unrelated `tests/unit/views_patchbay_test.d:824` (`menu should contain 'Add Core ▸'`).
+  - Not run: `--studio-gui-selftest`, which opens a window and plays audio. Its QWERTY record check uses instrument modules and single clicks, so these changes should not affect it.
+
+---
+
+## [2026-11-25 12:22:55 KST]
+- **Author:** Claude Opus 5.5
+- **Affected Files:** `source/gui/widgets.d`, `source/gui/views/param_rack.d`, `tests/unit/views_param_rack_test.d`, `docs/changelog.md`
+- **Reason / Summary:** Fixed the module rack header **M / B / S** toggles, where the switch tracks covered the "M" and "B" labels.
+  - **Cause:** `ParamRackView.layoutChildren()` gave each toggle a fixed 44 px slot with no gap. The switch track (16 px × 1.8 = 28.8 px) and the 8 px `spacingMd` caption gap leave about 7 px for the caption, but "M" and "B" in Atkinson Hyperlegible Next at `fontSizeBody` (13 px) are wider than that. The caption ran into the next slot, and the next toggle's track was painted over it. "S" is the rightmost toggle, so nothing covered it.
+  - **Fix:** Added `Toggle.contentWidth(measurer, theme, height)`, which returns track + gap + measured caption width. The rack header now sizes each toggle from that width (minimum 44 px, so no toggle gets smaller), places them right to left with a 6 px gap (`HEADER_TOGGLE_GAP`), and clips the module title at the left edge of the toggle group instead of a fixed `w - 140`. `Toggle.measure()` is unchanged, so no other layout moves.
+  - **Tests:** The test `FakeRasterizer` glyph advance can now be configured. Its default 0.5 em is narrow enough that "M" fit in the old 44 px slot, so the old test could not catch this bug. A new wide-glyph (0.85 em) rack test checks that each caption fits inside its toggle bounds and that the toggles do not overlap. It fails on the old layout and passes with the fix.
+- **Verification Results:**
+  - `DFLAGS="-w" dub build --compiler=ldc2 --config=headless --force` and `--config=app --build=debug --force` both exit 0 with zero warnings.
+  - `dub test --compiler=ldc2 --config=app`: `4 modules passed unittests`.
+  - `dub test --compiler=ldc2 --config=headless`: 24/25 modules pass, including the new test. The one failure is the existing, unrelated `tests/unit/views_patchbay_test.d:824` (`menu should contain 'Add Core ▸'`), which fails the same way on a clean tree.
+
+---
+
 ## [2026-11-24 13:06:35 KST]
 - **Author:** Gemini (Antigravity)
 - **Reason / Summary:** Added a full-width, resizable, stark black-and-white high-contrast on-screen piano keyboard above the pattern editor and timeline panes, along with user manual documentation.

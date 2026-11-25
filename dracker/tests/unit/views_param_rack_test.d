@@ -51,9 +51,21 @@ version (unittest) {
     import sequencer.timeline : TimelineClip;
 
     /**
-     * Deterministic glyph rasterizer (advance = 0.5 em, solid boxes).
+     * Deterministic glyph rasterizer (advance = advanceEm em, default 0.5, solid boxes).
      */
     class FakeRasterizer : IGlyphRasterizer {
+        float advanceEm = 0.5f;
+
+        /**
+         * Creates a rasterizer with the given glyph advance.
+         *
+         * Params:
+         *   em = Advance per glyph in ems.
+         */
+        this(float em = 0.5f) {
+            advanceEm = em;
+        }
+
         /**
          * Produces a solid glyph.
          *
@@ -67,7 +79,7 @@ version (unittest) {
          *   True.
          */
         override bool rasterize(FontId font, float pixelSize, dchar cp, out RasterizedGlyph outGlyph) {
-            outGlyph.advance = pixelSize * 0.5f;
+            outGlyph.advance = pixelSize * advanceEm;
             if (cp == ' ') {
                 return true;
             }
@@ -109,11 +121,11 @@ version (unittest) {
         /**
          * Creates the session and context (call host() to attach a view).
          */
-        this() {
+        this(float glyphAdvanceEm = 0.5f) {
             session = new StudioSession();
             assert(session.initialize(44_100.0f));
             ctx = new StudioContext(session);
-            renderer = new HeadlessRenderer(new GlyphCache(new FakeRasterizer()));
+            renderer = new HeadlessRenderer(new GlyphCache(new FakeRasterizer(glyphAdvanceEm)));
         }
 
         /**
@@ -511,6 +523,30 @@ version (unittest) {
         float[9] back;
         resampleCurveToTable(ed, back[], -1.0f, 1.0f);
         assert(near(back[0], -1.0f) && near(back[4], 0.0f) && near(back[8], 1.0f));
+    }
+
+    unittest {
+        auto rig = new ViewRig(0.85f);
+        scope (exit) rig.dispose();
+        immutable uint ws = rig.session.doAddModule("fx.waveshaper", "Shaper");
+        auto view = new ParamRackView(rig.ctx);
+        rig.host(view);
+        rig.ctx.selectModule(ws);
+        rig.frame();
+        static immutable string[3] headerCaptions = ["M", "B", "S"];
+        foreach (k; 0 .. 3) {
+            immutable RectF hb = view.headerToggleRect(k);
+            assert(hb.w > 0.0f);
+            immutable float trackW = (hb.h < 16.0f ? hb.h : 16.0f) * 1.8f;
+            immutable float captionRight = hb.x + trackW + rig.ui.theme.spacingMd
+                + rig.renderer.measureText(headerCaptions[k], FontId.ui, rig.ui.theme.fontSizeBody);
+            assert(captionRight <= hb.right() + 0.01f);
+            assert(hb.right() <= rig.viewRect.right());
+            if (k < 2) {
+                assert(hb.right() <= view.headerToggleRect(k + 1).x);
+            }
+        }
+        rig.assertClipped(rig.frame());
     }
 
     unittest {

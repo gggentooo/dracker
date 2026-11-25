@@ -1885,6 +1885,26 @@ class Toggle : Widget {
         return RectF(bounds.x, bounds.y + (bounds.h - h) * 0.5f, w, h);
     }
 
+    /**
+     * Computes the width needed to draw the switch track and caption without overflowing the bounds.
+     *
+     * Params:
+     *   m = Text measurer (may be null; falls back to an estimate).
+     *   theme = Theme metrics.
+     *   height = Height the toggle will be arranged with.
+     *
+     * Returns:
+     *   Track width, plus the caption gap and caption advance when text is set.
+     */
+    float contentWidth(ITextMeasurer m, const ref StudioTheme theme, float height) const {
+        immutable float h = height < 16.0f ? height : 16.0f;
+        immutable float track = h * 1.8f;
+        if (text.length == 0) {
+            return track;
+        }
+        return track + theme.spacingMd + measureTextOr(m, text, FontId.ui, theme.fontSizeBody);
+    }
+
     override bool onMouseDown(const ref MouseEvent e) {
         if (e.button != MouseButton.left) {
             return false;
