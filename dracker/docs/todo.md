@@ -122,17 +122,29 @@ Facts about the current code that the tasks rely on:
 
 ## Stage 0 — Ready now
 
-#### [Compose] Project writer: properties, modules, saving · T76 · Build
+#### [Compose] Sections, parts, and their patterns · T77 · Build
 
-- **Files:** `source/compose/project_writer.d` (new), `tests/unit/compose_project_test.d` (new)
-- **Task:** `ProjectWriter`, first part: title, tempo, ticks per line, time signature, key; modules added from a `ModuleWriter` under a handle name (the Master Output exists from the start as `out`), renamed, repositioned (automatic layout when no position is given) and removed; validation through the app's own checks (`validateProjectForSave`); the document as a `LoadedProject`, as `.msv` bytes and as a file. Problems come back as data with the nearest valid handle. No wires yet (T96). Tests: properties round-trip through a file; every refusal (duplicate or unknown handle, invalid handle name, bad tempo, signature or key); a written file with modules opens in `StudioSession`.
-- **Needs:** T74, T92
+- **Files:** `source/compose/part_writer.d` (new), `source/app/pattern_notes.d`, `tests/unit/compose_part_test.d` (new)
+- **Task:** Sections and parts per T68, without notes yet: a section has a name and a length in bars; a part is a name bound to one module handle of the project writer; each part gets one pattern per section it plays in, named "*part* · *section*", created on first use and sized from the section length and the time signature; the implicit section for scripts that name none. Lookups by name without regard to case or spaces, with the nearest name in every refusal. Tests: pattern names, sizes in 4/4, 3/4 and 6/8; two parts never share a pattern; a section longer than a pattern can hold is refused; unknown and duplicate names.
+- **Needs:** T68, T76
+
+#### [Compose/script] Script language: lexer, interpreter core, project commands · T83 · Build
+
+- **Files:** `source/compose/script/lexer.d`, `source/compose/script/interpreter.d`, `source/compose/script/commands.d` (all new), `tests/unit/compose_script_test.d` (new), `tests/fuzz/compose_script_fuzz.d` (new)
+- **Task:** The interpreter per T67, first part. Lexer: one command per line, `//` comments (not inside quotes), `\` line continuation, double-quoted text, `name=value` options, with line and column for every token. Interpreter: a command table with typed arguments and named options, the state between commands (a project writer), and problems as data (line, column, what was expected, the nearest valid name). It takes one command at a time from any source and never prints (the seam for the app's script tab, T112). Commands of this task: `project`, `tempo`, `signature`, `key`, `save`. Tests for every token rule, every command and every error; a fuzz test that no input crashes the lexer or the interpreter.
+- **Needs:** T67, T76
 
 #### [Compose/script] Script language: note notation · T84 · Build
 
 - **Files:** `source/compose/script/notation.d` (new), `tests/unit/compose_notation_test.d` (new)
 - **Task:** The note notation of T67 as pure functions, independent of the interpreter: `<pitch>[:<length>][@<velocity>]`, `-` for a rest (with a length), `[C4 E4 G4]:2` for notes together, pitches spelled as in the app (`app.music_theory`, C4 = middle C), lengths through `compose.timing`. The result is a list of events (offset in lines, length in lines, pitches, velocity); a note without a length takes the length of the note before it (the first: one beat). Every problem is data with the offset of the offending note inside the text and the nearest valid spelling. Tests: every form in 4/4 and 6/8; every refusal with its offset; all three-token sequences from a small alphabet never crash.
 - **Needs:** T67, T73
+
+#### [Compose] Project writer: wires and trial activation · T96 · Build
+
+- **Files:** `source/compose/project_writer.d`, `tests/unit/compose_project_test.d`
+- **Task:** Split from T76. Wires by handle and port name, with defaults (a module's first audio output to the target's first audio input) and gain; removing a wire; removing a module removes its wires. Before saving, a trial activation in a `StudioSession` so a saved file always opens and plays. Tests: wiring errors as data (unknown handle, unknown port with the nearest name, incompatible port kinds, an input used as a source, a duplicate wire, feedback loops as the graph compiler reports them); a written file opens in `StudioSession` and its render is not silent.
+- **Needs:** T76
 
 #### [GUI/widgets] Multi-line text editor widget · T110 · Build
 
@@ -149,28 +161,6 @@ Facts about the current code that the tasks rely on:
 ---
 
 ## Stage 1
-
-#### [Compose] Sections, parts, and their patterns · T77 · Build
-
-- **Files:** `source/compose/part_writer.d` (new), `source/app/pattern_notes.d`, `tests/unit/compose_part_test.d` (new)
-- **Task:** Sections and parts per T68, without notes yet: a section has a name and a length in bars; a part is a name bound to one module handle of the project writer; each part gets one pattern per section it plays in, named "*part* · *section*", created on first use and sized from the section length and the time signature; the implicit section for scripts that name none. Lookups by name without regard to case or spaces, with the nearest name in every refusal. Tests: pattern names, sizes in 4/4, 3/4 and 6/8; two parts never share a pattern; a section longer than a pattern can hold is refused; unknown and duplicate names.
-- **Needs:** T68, T76
-
-#### [Compose/script] Script language: lexer, interpreter core, project commands · T83 · Build
-
-- **Files:** `source/compose/script/lexer.d`, `source/compose/script/interpreter.d`, `source/compose/script/commands.d` (all new), `tests/unit/compose_script_test.d` (new), `tests/fuzz/compose_script_fuzz.d` (new)
-- **Task:** The interpreter per T67, first part. Lexer: one command per line, `//` comments (not inside quotes), `\` line continuation, double-quoted text, `name=value` options, with line and column for every token. Interpreter: a command table with typed arguments and named options, the state between commands (a project writer), and problems as data (line, column, what was expected, the nearest valid name). It takes one command at a time from any source and never prints (the seam for the app's script tab, T112). Commands of this task: `project`, `tempo`, `signature`, `key`, `save`. Tests for every token rule, every command and every error; a fuzz test that no input crashes the lexer or the interpreter.
-- **Needs:** T67, T76
-
-#### [Compose] Project writer: wires and trial activation · T96 · Build
-
-- **Files:** `source/compose/project_writer.d`, `tests/unit/compose_project_test.d`
-- **Task:** Split from T76. Wires by handle and port name, with defaults (a module's first audio output to the target's first audio input) and gain; removing a wire; removing a module removes its wires. Before saving, a trial activation in a `StudioSession` so a saved file always opens and plays. Tests: wiring errors as data (unknown handle, unknown port with the nearest name, incompatible port kinds, an input used as a source, a duplicate wire, feedback loops as the graph compiler reports them); a written file opens in `StudioSession` and its render is not silent.
-- **Needs:** T76
-
----
-
-## Stage 2
 
 #### [Compose/program] Render and report · T86 · Build
 
@@ -228,7 +218,7 @@ Facts about the current code that the tasks rely on:
 
 ---
 
-## Stage 3
+## Stage 2
 
 #### [Compose] Chords for parts: timing, basic styles, voicing in root position · T78 · Build
 
@@ -268,7 +258,7 @@ Facts about the current code that the tasks rely on:
 
 ---
 
-## Stage 4
+## Stage 3
 
 #### [Compose/script] Describe: modules, properties, and wires · T87 · Build
 
@@ -290,7 +280,7 @@ Facts about the current code that the tasks rely on:
 
 ---
 
-## Stage 5
+## Stage 4
 
 #### [Compose/script] Script language: chords and drums · T105 · Build
 
@@ -300,7 +290,7 @@ Facts about the current code that the tasks rely on:
 
 ---
 
-## Stage 6
+## Stage 5
 
 #### [Compose/script] Describe: music · T107 · Build
 
@@ -316,7 +306,7 @@ Facts about the current code that the tasks rely on:
 
 ---
 
-## Stage 7
+## Stage 6
 
 #### [Tests] End-to-end check of the composition helper · T88 · Build
 
@@ -332,7 +322,7 @@ Facts about the current code that the tasks rely on:
 
 ---
 
-## Stage 8
+## Stage 7
 
 #### [Docs] Composition helper: reference and guides · T89 · Build
 
@@ -343,6 +333,12 @@ Facts about the current code that the tasks rely on:
 ---
 
 ## Done
+
+#### [Compose] Project writer: properties, modules, saving · T76 · Build
+
+- **Files:** `source/compose/project_writer.d` (new), `tests/unit/compose_project_test.d` (new)
+- **Done:** 2026-11-27. ProjectWriter built in compose.project_writer: properties (title, tempo, ticks per line, signature, key), modules under handles added from ModuleWriter (Master Output as out from the start), rename, displayed name, position and removal, automatic layout, the app's starter pattern and clip, and output as LoadedProject, .msv bytes or a file through the app's own save checks; parseKey added. Recorded in docs/changelog.md (2026-11-27 07:41:44 KST).
+- **Needs:** T74, T92
 
 #### [Compose] Module writer: Sampler samples · T75 · Build
 
@@ -1196,3 +1192,8 @@ Facts about the current code that the tasks rely on:
 
 - Modified: T111 moved to *Done*.
 - Modified: T75 moved to *Done*.
+
+### 2026-11-27T07:44:04+09:00 — Qwen3.8 Flash Next, T76 done
+
+- Modified: T76 moved to *Done*.
+- Modified: Stages recomputed: T77 Stage 1 → 0; T83 Stage 1 → 0; T96 Stage 1 → 0; T86 Stage 2 → 1; T97 Stage 2 → 1; T78 Stage 3 → 2; T79 Stage 2 → 1; T80 Stage 3 → 2; T81 Stage 3 → 2; T82 Stage 2 → 1; T85 Stage 2 → 1; T101 Stage 2 → 1; T103 Stage 3 → 2; T87 Stage 4 → 3; T98 Stage 2 → 1; T100 Stage 3 → 2; T104 Stage 3 → 2; T99 Stage 4 → 3; T105 Stage 5 → 4; T106 Stage 4 → 3; T107 Stage 6 → 5; T102 Stage 2 → 1; T88 Stage 7 → 6; T89 Stage 8 → 7; T112 Stage 2 → 1; T113 Stage 6 → 5; T114 Stage 7 → 6.
