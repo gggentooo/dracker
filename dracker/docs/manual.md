@@ -1186,7 +1186,7 @@ Choice parameters are listed with the name of each value, in order from the lowe
 | **DrumSynth** | 8 | Kit Decay · Tone · Snappy · Pan Spread · Master Vol. The note picks the drum: 36 kick, 38/40 snare, 42/44 closed hat, 46 open hat, 41/43/45 low tom, 47 high tom; other notes by pitch class (C kick, D/E snare, F#/G# hat, A# open hat, otherwise percussion). |
 | **Kicker** | 1 | Waveform: Sine, Triangle, Square · Pitch Start (220 Hz) · Pitch End (48 Hz) · Sweep Time (45 ms) · Decay (220 ms) · Click Drive |
 | **Sampler** | 16 | Volume · Panning · Fine Tune · Offset · Loop Mode: One-Shot (plays once and stops), Forward, Ping-Pong (a loop shorter than one sample plays once) · Quality (Cubic): Nearest, Linear, Cubic. Extra **Audio Thru** input. Load samples in the sample editor. |
-| **SpectraVoice** | 16 | Profile: Organ, Brass, Choir, Bell (harmonic recipes; Profile and Bandwidth take effect when the module is prepared, not while it plays) · Bandwidth · Attack · Release |
+| **SpectraVoice** | 16 | Profile: Organ, Brass, Choir, Bell (harmonic recipes) · Bandwidth · Attack · Release |
 | **Input** | — | Brings live audio input into the graph. Input Gain · Channel Route: Stereo, Left, Right, Mono Mix (Left and Right send that side to both outputs) · Mute Off/On |
 | **Vorbis Player** | — | Volume · Transpose · Loop Off/On. *QA: there is no way to load a file in this build.* |
 
@@ -1254,7 +1254,6 @@ These are known limitations of the current build. Please report behavior that *d
 | 12 | Transport | The MIDI source list refreshes only at startup and when the device dropdown is opened |
 | 13 | Patchbay | Cable gain can't be edited; Duplicate doesn't copy cables, samples or curves |
 | 14 | Rack | Header toggle order is M B S; the patchbay badges are M S B |
-| 15 | Modules | SpectraVoice *Profile* and *Bandwidth* change the sound only when the module is prepared again, for example after reopening the project |
 | 16 | Rack | Envelope editor: moving the sustain marker has no effect on parameters |
 | 17 | Rack | MetaModule inner edits are not undoable |
 | 18 | Sampler | AIFF is offered in the import dialog but can't be decoded; drag-and-drop isn't implemented |

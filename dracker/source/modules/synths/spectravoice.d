@@ -4,17 +4,18 @@
  * Phase:        Phase 4.9 (Tier 2) — Additive Harmonic / FFT Wavetable Synth
  *
  * Purpose:
- *   Synthesizes harmonic spectra via off-RT inverse FFT wavetable synthesis and plays polyphonic voices through VoicePool with lock-free SwapModuleAsset spectral table updates.
+ *   Synthesizes harmonic spectra via off-RT inverse FFT wavetable synthesis and plays polyphonic voices through VoicePool. prepare() precomputes every Profile x Bandwidth harmonic table into an unmanaged SpectraTableBank off the audio thread so Profile and Bandwidth take effect immediately from the rack, automation, MIDI or loading; an attached slot-0 SpectraTableAsset overrides the bank.
  *
  * Real-Time & Safety Contract:
- *   @nogc nothrow on process()/handleEvent()/swapAsset(); inverse FFT wavetables precomputed off-RT into unmanaged SpectraTableAsset buffers.
+ *   @nogc nothrow on process()/handleEvent()/swapAsset(); no harmonic table is ever built on the audio thread; tables live in unmanaged SpectraTableBank and SpectraTableAsset buffers, and serializeExtra prefixes a custom table mark so old stored tables are ignored.
  *
  * Dependencies:
  *   Internal: dsp.envelope, dsp.fft, dsp.interp, dsp.voice_pool, foundation.math_rt, foundation.memory, foundation.types, graph.context, graph.event, graph.module_api, graph.port
  *   External: core.lifetime, core.stdc.stdlib, core.stdc.string, std.math
  *
  * Planned API (Types, Functions & Hooks):
- *   - struct SpectraTableAsset
+ *   - struct SpectraTableAsset, struct SpectraTableBank
+ *   - clampBandwidth, harmonicCount, fillHarmonicTable
  *   - struct SpectraVoice (typeId = "synth.spectravoice", ports: event in, audioStereo out)
  *   - @Param harmonicProfile, bandwidth, attackMs, releaseMs
  *   - Hooks: handleEvent, process, swapAsset, serializeExtra, deserializeExtra
@@ -88,55 +89,8 @@ struct SpectraTableAsset {
             return null;
         }
 
-        immutable float bw = isFinite(bandwidth)
-            ? (bandwidth < 0.05f ? 0.05f : (bandwidth > 1.0f ? 1.0f : bandwidth)) : 0.35f;
-        immutable size_t maxBins = tableSize / 2;
-        immutable size_t activeHarmonics = cast(size_t)(4.0 + cast(double) bw * 44.0);
-        immutable size_t limit = activeHarmonics < maxBins ? activeHarmonics : (maxBins - 1);
-
-        foreach (h; 1 .. limit + 1) {
-            double mag = 0.0;
-            double ph = 0.0;
-            switch (profile) {
-                case 0:
-                    if (h == 1 || h == 2 || h == 3 || h == 4 || h == 6 || h == 8 || h == 12 || h == 16) {
-                        mag = 1.0 / (cast(double) h * 0.65 + 0.35);
-                    }
-                    break;
-                case 1:
-                    mag = 1.0 / cast(double) h;
-                    if ((h & 1) == 0) mag *= 0.85;
-                    break;
-                case 2:
-                    mag = exp(-0.08 * cast(double)(h - 1)) * (0.6 + 0.4 * cos(cast(double) h * 0.9));
-                    if (mag < 0.0) mag = 0.0;
-                    break;
-                default:
-                    mag = exp(-0.05 * cast(double)(h - 1)) / (1.0 + 0.1 * cast(double) h);
-                    ph = cast(double) h * 1.17;
-                    break;
-            }
-            immutable double amp = mag * cast(double) tableSize * 0.5;
-            re[h] = cast(float)(amp * cos(ph));
-            im[h] = cast(float)(amp * sin(ph));
-            re[tableSize - h] = re[h];
-            im[tableSize - h] = -im[h];
-        }
-
-        FftFloat.inverse(re[], im[]);
-
-        float peak = 0.0f;
-        foreach (i; 0 .. tableSize) {
-            tbl[i] = re[i];
-            immutable float a = fabs(tbl[i]);
-            if (a > peak) peak = a;
-        }
-        if (peak > 1e-6f) {
-            immutable float inv = 0.95f / peak;
-            foreach (i; 0 .. tableSize) {
-                tbl[i] *= inv;
-            }
-        }
+        immutable float bw = clampBandwidth(bandwidth);
+        fillHarmonicTable(tbl[], re[], im[], profile, harmonicCount(bw));
 
         auto ptr = cast(SpectraTableAsset*) calloc(1, SpectraTableAsset.sizeof);
         if (ptr is null) {
@@ -158,6 +112,190 @@ struct SpectraTableAsset {
     static void destroyErased(void* raw) {
         if (raw !is null) {
             auto typed = cast(SpectraTableAsset*) raw;
+            destroy!false(*typed);
+            free(raw);
+        }
+    }
+}
+
+/**
+ * Clamps a Bandwidth parameter to the table-building range.
+ *
+ * Params:
+ *   bandwidth = Requested spectral brightness/spread.
+ *
+ * Returns:
+ *   bandwidth clamped to [0.05f, 1.0f]; 0.35f when not finite.
+ */
+float clampBandwidth(float bandwidth) @nogc nothrow pure @safe {
+    return isFinite(bandwidth)
+        ? (bandwidth < 0.05f ? 0.05f : (bandwidth > 1.0f ? 1.0f : bandwidth)) : 0.35f;
+}
+
+/**
+ * Maps a Bandwidth value to the number of harmonics a wavetable fill activates.
+ *
+ * Params:
+ *   bandwidth = Requested spectral brightness/spread.
+ *
+ * Returns:
+ *   floor(4 + clampedBandwidth * 44), so 6 at 0.05 and 48 at 1.0.
+ */
+size_t harmonicCount(float bandwidth) @nogc nothrow pure @safe {
+    return cast(size_t)(4.0 + cast(double) clampBandwidth(bandwidth) * 44.0);
+}
+
+/**
+ * Fills one harmonic wavetable from a profile and harmonic count via inverse FFT, normalizing peak to 0.95.
+ *
+ * Params:
+ *   tbl = Destination 2048-point (or other power-of-two) wavetable slice.
+ *   re = Reused inverse-FFT real buffer (zeroed here before use).
+ *   im = Reused inverse-FFT imaginary buffer (zeroed here before use).
+ *   profile = Spectral preset (0=organ, 1=brass, 2=choir, 3=bell).
+ *   harmonics = Number of harmonics to activate.
+ */
+void fillHarmonicTable(float[] tbl, float[] re, float[] im, uint profile, size_t harmonics) @nogc nothrow {
+    re[] = 0.0f;
+    im[] = 0.0f;
+    immutable size_t tableSize = tbl.length;
+    immutable size_t maxBins = tableSize / 2;
+    immutable size_t limit = harmonics < maxBins ? harmonics : (maxBins - 1);
+
+    foreach (h; 1 .. limit + 1) {
+        double mag = 0.0;
+        double ph = 0.0;
+        switch (profile) {
+            case 0:
+                if (h == 1 || h == 2 || h == 3 || h == 4 || h == 6 || h == 8 || h == 12 || h == 16) {
+                    mag = 1.0 / (cast(double) h * 0.65 + 0.35);
+                }
+                break;
+            case 1:
+                mag = 1.0 / cast(double) h;
+                if ((h & 1) == 0) mag *= 0.85;
+                break;
+            case 2:
+                mag = exp(-0.08 * cast(double)(h - 1)) * (0.6 + 0.4 * cos(cast(double) h * 0.9));
+                if (mag < 0.0) mag = 0.0;
+                break;
+            default:
+                mag = exp(-0.05 * cast(double)(h - 1)) / (1.0 + 0.1 * cast(double) h);
+                ph = cast(double) h * 1.17;
+                break;
+        }
+        immutable double amp = mag * cast(double) tableSize * 0.5;
+        re[h] = cast(float)(amp * cos(ph));
+        im[h] = cast(float)(amp * sin(ph));
+        re[tableSize - h] = re[h];
+        im[tableSize - h] = -im[h];
+    }
+
+    FftFloat.inverse(re[], im[]);
+
+    float peak = 0.0f;
+    foreach (i; 0 .. tableSize) {
+        tbl[i] = re[i];
+        immutable float a = fabs(tbl[i]);
+        if (a > peak) peak = a;
+    }
+    if (peak > 1e-6f) {
+        immutable float inv = 0.95f / peak;
+        foreach (i; 0 .. tableSize) {
+            tbl[i] *= inv;
+        }
+    }
+}
+
+/**
+ * Unmanaged @nogc bank of every precomputed harmonic wavetable: 4 profiles times 43 harmonic counts,
+ * built once off the audio thread so parameter changes only pick a table.
+ */
+struct SpectraTableBank {
+    enum size_t TABLE_SIZE = 2048;
+    enum size_t PROFILE_COUNT = 4;
+    enum size_t MIN_HARMONICS = 6;
+    enum size_t MAX_HARMONICS = 48;
+    enum size_t COUNTS_PER_PROFILE = MAX_HARMONICS - MIN_HARMONICS + 1;
+    enum size_t TABLE_COUNT = PROFILE_COUNT * COUNTS_PER_PROFILE;
+
+    OwnedBuffer!float tables;
+
+    @disable this(this);
+
+    @nogc nothrow:
+
+    /**
+     * Releases the unmanaged @nogc table storage on teardown.
+     */
+    ~this() {
+        tables.reset();
+    }
+
+    /**
+     * Allocates and fills all profile/harmonic-count wavetables off the real-time thread.
+     *
+     * Returns:
+     *   Allocated SpectraTableBank*, or null on out-of-memory.
+     */
+    static SpectraTableBank* build() {
+        auto ptr = cast(SpectraTableBank*) calloc(1, SpectraTableBank.sizeof);
+        if (ptr is null) {
+            return null;
+        }
+        emplace(ptr);
+
+        OwnedBuffer!float re;
+        OwnedBuffer!float im;
+        if (!OwnedBuffer!float.tryAllocate(TABLE_COUNT * TABLE_SIZE, ptr.tables)
+                || !OwnedBuffer!float.tryAllocate(TABLE_SIZE, re)
+                || !OwnedBuffer!float.tryAllocate(TABLE_SIZE, im)) {
+            destroy!false(*ptr);
+            free(ptr);
+            return null;
+        }
+
+        foreach (p; 0 .. PROFILE_COUNT) {
+            foreach (count; MIN_HARMONICS .. MAX_HARMONICS + 1) {
+                immutable size_t idx = p * COUNTS_PER_PROFILE + (count - MIN_HARMONICS);
+                fillHarmonicTable(ptr.tables[idx * TABLE_SIZE .. (idx + 1) * TABLE_SIZE],
+                    re[], im[], cast(uint) p, count);
+            }
+        }
+        return ptr;
+    }
+
+    /**
+     * Returns the precomputed 2048-float wavetable for a profile and bandwidth.
+     *
+     * Params:
+     *   profile = Spectral preset; values above 3 clamp to 3.
+     *   bandwidth = Spectral brightness/spread; clamped to [0.05f, 1.0f].
+     *
+     * Returns:
+     *   The selected table slice, or null when the bank is empty.
+     */
+    const(float)[] table(uint profile, float bandwidth) const {
+        if (tables.empty()) {
+            return null;
+        }
+        immutable uint p = profile < PROFILE_COUNT ? profile : (PROFILE_COUNT - 1);
+        immutable size_t rawCount = harmonicCount(bandwidth);
+        immutable size_t count = rawCount < MIN_HARMONICS ? MIN_HARMONICS
+            : (rawCount > MAX_HARMONICS ? MAX_HARMONICS : rawCount);
+        immutable size_t idx = p * COUNTS_PER_PROFILE + (count - MIN_HARMONICS);
+        return tables[idx * TABLE_SIZE .. (idx + 1) * TABLE_SIZE];
+    }
+
+    /**
+     * Type-erased destructor freeing SpectraTableBank memory off the real-time thread.
+     *
+     * Params:
+     *   raw = Opaque SpectraTableBank* pointer.
+     */
+    static void destroyErased(void* raw) {
+        if (raw !is null) {
+            auto typed = cast(SpectraTableBank*) raw;
             destroy!false(*typed);
             free(raw);
         }
@@ -327,6 +465,8 @@ struct SpectraVoice {
         PortDescriptor("out", "Audio Out", PortKind.audioStereo, PortDirection.output)
     ];
 
+    static immutable ubyte[4] CUSTOM_TABLE_MAGIC = ['S', 'V', 'T', '1'];
+
     @Param("Profile", 0.0f, 3.0f, 0.0f, "", ParamScale.discrete,
         ["Organ", "Brass", "Choir", "Bell"])
     float harmonicProfile = 0.0f;
@@ -342,17 +482,18 @@ struct SpectraVoice {
 
     private VoicePool!(SpectraVoiceSlot, 16) voices_;
     private SpectraTableAsset* tableAsset_ = null;
+    private SpectraTableBank* bank_ = null;
     private float sampleRate_ = 44_100.0f;
     private float pitchBendSemitones_ = 0.0f;
 
     /**
-     * Serializes the attached inverse-FFT wavetable slice off-RT.
+     * Serializes the attached inverse-FFT wavetable slice off-RT, prefixed with the custom table mark.
      *
      * Params:
-     *   payload = Byte array holding serialized wavetable floats.
+     *   payload = Byte array holding the mark followed by serialized wavetable floats.
      *
      * Returns:
-     *   True on success.
+     *   True on success; payload is empty when no slot-0 table is attached.
      */
     bool serializeExtra(out ubyte[] payload) const {
         if (tableAsset_ is null || tableAsset_.wavetable.empty()) {
@@ -360,8 +501,9 @@ struct SpectraVoice {
             return true;
         }
         immutable size_t bytes = tableAsset_.wavetable.length * float.sizeof;
-        payload = new ubyte[bytes];
-        memcpy(payload.ptr, tableAsset_.wavetable.ptr, bytes);
+        payload = new ubyte[CUSTOM_TABLE_MAGIC.length + bytes];
+        memcpy(payload.ptr, CUSTOM_TABLE_MAGIC.ptr, CUSTOM_TABLE_MAGIC.length);
+        memcpy(payload.ptr + CUSTOM_TABLE_MAGIC.length, tableAsset_.wavetable.ptr, bytes);
         return true;
     }
 
@@ -382,29 +524,37 @@ struct SpectraVoice {
     }
 
     /**
-     * Deserializes a saved harmonic wavetable slice cleanly off the real-time thread.
+     * Deserializes a marked harmonic wavetable slice cleanly off the real-time thread.
+     *
+     * Payloads without the custom mark (old stored tables) are treated as empty and install nothing,
+     * so the module keeps sounding from its parameters via the prebuilt table bank.
      *
      * Params:
-     *   payload = Raw little-endian float wavetable bytes.
+     *   payload = Mark followed by raw little-endian float wavetable bytes.
      *   sampleRate = Active sample rate in Hertz.
      *
      * Returns:
-     *   True if empty or validly restored; false on malformed length or OOM.
+     *   True if empty, unmarked or validly restored; false on malformed marked length or OOM.
      */
     bool deserializeExtra(const(ubyte)[] payload, float sampleRate) {
         cast(void) sampleRate;
         if (payload.length == 0) {
             return true;
         }
-        if ((payload.length % float.sizeof) != 0 || payload.length < 64 * float.sizeof) {
+        if (payload.length < CUSTOM_TABLE_MAGIC.length
+                || payload[0 .. CUSTOM_TABLE_MAGIC.length] != CUSTOM_TABLE_MAGIC[]) {
+            return true;
+        }
+        const(ubyte)[] tableBytes = payload[CUSTOM_TABLE_MAGIC.length .. $];
+        if ((tableBytes.length % float.sizeof) != 0 || tableBytes.length < 64 * float.sizeof) {
             return false;
         }
-        immutable size_t count = payload.length / float.sizeof;
+        immutable size_t count = tableBytes.length / float.sizeof;
         OwnedBuffer!float buf;
         if (!OwnedBuffer!float.tryAllocate(count, buf)) {
             return false;
         }
-        memcpy(buf.ptr, payload.ptr, payload.length);
+        memcpy(buf.ptr, tableBytes.ptr, tableBytes.length);
 
         auto ptr = cast(SpectraTableAsset*) calloc(1, SpectraTableAsset.sizeof);
         if (ptr is null) {
@@ -423,17 +573,21 @@ struct SpectraVoice {
     @nogc nothrow:
 
     /**
-     * Frees any owned inverse-FFT harmonic wavetable asset on teardown.
+     * Frees any owned inverse-FFT harmonic wavetable asset and table bank on teardown.
      */
     ~this() {
         if (tableAsset_ !is null) {
             SpectraTableAsset.destroyErased(tableAsset_);
             tableAsset_ = null;
         }
+        if (bank_ !is null) {
+            SpectraTableBank.destroyErased(bank_);
+            bank_ = null;
+        }
     }
 
     /**
-     * Builds the default harmonic wavetable if none is attached and initializes voices.
+     * Builds the full profile/bandwidth harmonic table bank off the audio thread and initializes voices.
      *
      * Params:
      *   sampleRate = Audio sample rate in Hertz.
@@ -442,10 +596,26 @@ struct SpectraVoice {
     void prepare(float sampleRate, uint maxSliceFrames) {
         cast(void) maxSliceFrames;
         sampleRate_ = (!isFinite(sampleRate) || sampleRate < 1.0f) ? 44_100.0f : sampleRate;
-        if (tableAsset_ is null) {
-            tableAsset_ = SpectraTableAsset.buildHarmonicTable(selectedProfile(), bandwidth, 2048);
+        if (bank_ is null) {
+            bank_ = SpectraTableBank.build();
         }
         reset();
+    }
+
+    /**
+     * Selects the wavetable for the current parameters: an attached slot-0 asset overrides the bank.
+     *
+     * Returns:
+     *   Active table slice, or null when no table is available.
+     */
+    private const(float)[] activeTable() const {
+        if (tableAsset_ !is null && !tableAsset_.wavetable.empty()) {
+            return tableAsset_.wavetable[];
+        }
+        if (bank_ !is null) {
+            return bank_.table(selectedProfile(), bandwidth);
+        }
+        return null;
     }
 
     /**
@@ -547,7 +717,8 @@ struct SpectraVoice {
     bool process(const(float[])[2] audioIn, float[][2] audioOut, ref ProcessContext ctx) {
         cast(void) audioIn;
         voices_.deactivateFinished();
-        if (!voices_.hasActiveVoices() || tableAsset_ is null || tableAsset_.wavetable.empty()) {
+        const(float)[] tbl = activeTable();
+        if (!voices_.hasActiveVoices() || tbl.length < 2) {
             audioOut[0][0 .. ctx.frames] = 0.0f;
             audioOut[1][0 .. ctx.frames] = 0.0f;
             return false;
@@ -560,7 +731,6 @@ struct SpectraVoice {
 
         immutable float sr = ctx.sampleRate > 0.0f ? ctx.sampleRate : sampleRate_;
         immutable uint frames = ctx.frames;
-        const(float)[] tbl = tableAsset_.wavetable[];
 
         voices_.forEachActive((ref SpectraVoiceSlot v, NoteId id) @nogc nothrow {
             cast(void) id;

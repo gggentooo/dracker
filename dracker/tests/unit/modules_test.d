@@ -47,7 +47,7 @@ version (unittest) {
     import modules.effects.waveshaper : WaveShaperCurveAsset;
     import modules.synths.analog_gen : DrawnWaveAsset;
     import modules.synths.sampler : Sampler, SamplerSlotAsset, createSamplerAssetFromMemory;
-    import modules.synths.spectravoice : SpectraTableAsset;
+    import modules.synths.spectravoice : SpectraTableAsset, SpectraTableBank, harmonicCount;
     import sequencer.stream_worker : AsyncSampleResult, StreamAudioRing, StreamWorker;
     import tests.rt_malloc_trap : verifyZeroRtAllocationsNothrow;
 
@@ -603,7 +603,7 @@ version (unittest) {
         SpectraTableAsset* specTbl = SpectraTableAsset.buildHarmonicTable(2, 0.7f, 1024);
         assert(specTbl !is null);
         void* oldSpec = null;
-        assert(spec.desc.vtable.swapAsset(spec.state, 0, specTbl, oldSpec) && oldSpec !is null);
+        assert(spec.desc.vtable.swapAsset(spec.state, 0, specTbl, oldSpec) && oldSpec is null);
         SpectraTableAsset.destroyErased(oldSpec);
         assert(spec.desc.vtable.process(spec.state, io, ctx));
 
@@ -639,6 +639,208 @@ version (unittest) {
         ubyte[] sampBlob;
         assert(samp.desc.vtable.serializeExtra(samp.state, sampBlob) && sampBlob.length > 0);
         assert(samp.desc.vtable.deserializeExtra(samp.state, sampBlob, 44_100.0f));
+    }
+
+    /**
+     * Plays note 60 on a SpectraVoice module and collects the left-channel output.
+     *
+     * Params:
+     *   desc = Descriptor of the module.
+     *   state = State of the module.
+     *   blocks = Number of 64-frame blocks to process.
+     *   noteOn = True sends a note-on before the first block.
+     *
+     * Returns:
+     *   blocks * 64 left-channel samples; index 0 is the first processed sample.
+     */
+    private float[] playSpectra(const(ModuleDescriptor)* desc, void* state, uint blocks, bool noteOn) {
+        float[FIXED_BLOCK_FRAMES] left = 0.0f;
+        float[FIXED_BLOCK_FRAMES] right = 0.0f;
+        ProcessIO io;
+        io.audioOut = [left[], right[]];
+        ProcessContext ctx;
+        ctx.sampleRate = 44_100.0f;
+        ctx.frames = FIXED_BLOCK_FRAMES;
+        ctx.inputSilent = true;
+        float[] samples;
+        if (noteOn) {
+            sendEvent(desc, state, ModEvent.makeNoteOn(NoteId(1), 60.0f, 0.9f), 44_100.0f);
+        }
+        foreach (_; 0 .. blocks) {
+            assert(desc.vtable.process(state, io, ctx));
+            samples ~= left[];
+        }
+        return samples;
+    }
+
+    unittest {
+        assert(harmonicCount(0.05f) == 6);
+        assert(harmonicCount(0.35f) == 19);
+        assert(harmonicCount(0.6f) == 30);
+        assert(harmonicCount(1.0f) == 48);
+        assert(harmonicCount(float.nan) == 19);
+        assert(harmonicCount(-3.0f) == 6);
+        assert(harmonicCount(9.0f) == 48);
+
+        assert(SpectraTableBank.TABLE_COUNT == 172);
+        SpectraTableBank* bank = SpectraTableBank.build();
+        assert(bank !is null);
+        scope (exit) SpectraTableBank.destroyErased(bank);
+        assert(bank.tables.length == 352_256);
+    }
+
+    unittest {
+        SpectraTableBank* bank = SpectraTableBank.build();
+        assert(bank !is null);
+        scope (exit) SpectraTableBank.destroyErased(bank);
+
+        foreach (p; 0 .. 4) {
+            foreach (n; 0 .. 96) {
+                immutable float bw = 0.05f + cast(float) n * 0.01f;
+                SpectraTableAsset* asset = SpectraTableAsset.buildHarmonicTable(p, bw);
+                assert(asset !is null);
+                assert(bank.table(p, bw) == asset.wavetable[]);
+                SpectraTableAsset.destroyErased(asset);
+            }
+        }
+
+        assert(bank.table(0, 0.35f) == bank.table(0, 1.0f));
+        assert(bank.table(0, 0.05f) != bank.table(0, 0.35f));
+        assert(bank.table(1, 0.35f) != bank.table(1, 1.0f));
+        assert(bank.table(7, 0.35f) == bank.table(3, 0.35f));
+    }
+
+    unittest {
+        ModuleInstance organ;
+        ModuleInstance brass;
+        assert(ModuleRegistry.createOffRT("synth.spectravoice", ModuleId(1), 44_100.0f, organ));
+        assert(ModuleRegistry.createOffRT("synth.spectravoice", ModuleId(2), 44_100.0f, brass));
+        scope (exit) {
+            organ.destroyOffRT();
+            brass.destroyOffRT();
+        }
+        assert(brass.desc.vtable.setParam(brass.state, 0, 1.0f, 44_100.0f, true));
+
+        float[] organSound = playSpectra(organ.desc, organ.state, 40, true);
+        float[] brassSound = playSpectra(brass.desc, brass.state, 40, true);
+        assert(organSound.length == 40 * FIXED_BLOCK_FRAMES && brassSound.length == organSound.length);
+
+        float sumDiff = 0.0f;
+        float organPeak = 0.0f;
+        float brassPeak = 0.0f;
+        foreach (i; 0 .. organSound.length) {
+            immutable float d = fabs(organSound[i] - brassSound[i]);
+            sumDiff += d;
+            if (fabs(organSound[i]) > organPeak) organPeak = fabs(organSound[i]);
+            if (fabs(brassSound[i]) > brassPeak) brassPeak = fabs(brassSound[i]);
+        }
+        assert(sumDiff > 1.0f);
+        assert(brassPeak > 0.5f && organPeak > 0.5f);
+
+        ModuleInstance swapped;
+        assert(ModuleRegistry.createOffRT("synth.spectravoice", ModuleId(3), 44_100.0f, swapped));
+        scope (exit) swapped.destroyOffRT();
+        SpectraTableAsset* brassTable = SpectraTableAsset.buildHarmonicTable(1, 0.35f);
+        assert(brassTable !is null);
+        void* oldAsset = null;
+        assert(swapped.desc.vtable.swapAsset(swapped.state, 0, brassTable, oldAsset) && oldAsset is null);
+        float[] swappedSound = playSpectra(swapped.desc, swapped.state, 40, true);
+        assert(brassSound == swappedSound);
+    }
+
+    unittest {
+        ModuleInstance changed;
+        ModuleInstance untouched;
+        assert(ModuleRegistry.createOffRT("synth.spectravoice", ModuleId(1), 44_100.0f, changed));
+        assert(ModuleRegistry.createOffRT("synth.spectravoice", ModuleId(2), 44_100.0f, untouched));
+        scope (exit) {
+            changed.destroyOffRT();
+            untouched.destroyOffRT();
+        }
+
+        float[] first = playSpectra(changed.desc, changed.state, 20, true);
+        float[] twin = playSpectra(untouched.desc, untouched.state, 20, true);
+        assert(first == twin);
+        assert(changed.desc.vtable.setParam(changed.state, 0, 3.0f, 44_100.0f, true));
+        float[] after = playSpectra(changed.desc, changed.state, 20, false);
+        float[] afterTwin = playSpectra(untouched.desc, untouched.state, 20, false);
+        assert(after != afterTwin);
+
+        ModuleInstance brassLow;
+        ModuleInstance brassHigh;
+        assert(ModuleRegistry.createOffRT("synth.spectravoice", ModuleId(3), 44_100.0f, brassLow));
+        assert(ModuleRegistry.createOffRT("synth.spectravoice", ModuleId(4), 44_100.0f, brassHigh));
+        scope (exit) {
+            brassLow.destroyOffRT();
+            brassHigh.destroyOffRT();
+        }
+        assert(brassLow.desc.vtable.setParam(brassLow.state, 0, 1.0f, 44_100.0f, true));
+        assert(brassHigh.desc.vtable.setParam(brassHigh.state, 0, 1.0f, 44_100.0f, true));
+        assert(brassHigh.desc.vtable.setParam(brassHigh.state, 1, 1.0f, 44_100.0f, true));
+
+        float[] lowSound = playSpectra(brassLow.desc, brassLow.state, 40, true);
+        float[] highSound = playSpectra(brassHigh.desc, brassHigh.state, 40, true);
+        assert(lowSound != highSound);
+    }
+
+    unittest {
+        ModuleInstance spec;
+        assert(ModuleRegistry.createOffRT("synth.spectravoice", ModuleId(1), 44_100.0f, spec));
+        scope (exit) spec.destroyOffRT();
+
+        float[FIXED_BLOCK_FRAMES] outL = 0.0f;
+        float[FIXED_BLOCK_FRAMES] outR = 0.0f;
+        ProcessIO io;
+        io.audioOut = [outL[], outR[]];
+        ProcessContext ctx;
+        ctx.sampleRate = 44_100.0f;
+        ctx.frames = FIXED_BLOCK_FRAMES;
+        ctx.inputSilent = true;
+
+        verifyZeroRtAllocationsNothrow(() @nogc nothrow {
+            sendEvent(spec.desc, spec.state, ModEvent.makeNoteOn(NoteId(1), 60.0f, 0.9f), 44_100.0f);
+            assert(spec.desc.vtable.setParam(spec.state, 0, 1.0f, 44_100.0f, true));
+            assert(spec.desc.vtable.setParam(spec.state, 1, 0.9f, 44_100.0f, false));
+            assert(spec.desc.vtable.process(spec.state, io, ctx));
+        });
+
+        float peak = 0.0f;
+        foreach (s; outL) {
+            assert(isFinite(s));
+            if (fabs(s) > peak) peak = fabs(s);
+        }
+        assert(peak > 0.01f);
+    }
+
+    unittest {
+        ModuleInstance fresh;
+        assert(ModuleRegistry.createOffRT("synth.spectravoice", ModuleId(1), 44_100.0f, fresh));
+        scope (exit) fresh.destroyOffRT();
+
+        ubyte[] emptyBlob;
+        assert(fresh.desc.vtable.serializeExtra(fresh.state, emptyBlob) && emptyBlob.length == 0);
+
+        ubyte[8192] legacy = 0;
+        assert(fresh.desc.vtable.deserializeExtra(fresh.state, legacy[], 44_100.0f));
+        ubyte[] afterLegacy;
+        assert(fresh.desc.vtable.serializeExtra(fresh.state, afterLegacy) && afterLegacy.length == 0);
+
+        ModuleInstance marked;
+        assert(ModuleRegistry.createOffRT("synth.spectravoice", ModuleId(2), 44_100.0f, marked));
+        scope (exit) marked.destroyOffRT();
+
+        SpectraTableAsset* tbl = SpectraTableAsset.buildHarmonicTable(1, 0.6f, 2048);
+        assert(tbl !is null);
+        void* oldAsset = null;
+        assert(marked.desc.vtable.swapAsset(marked.state, 0, tbl, oldAsset) && oldAsset is null);
+        ubyte[] markedBlob;
+        assert(marked.desc.vtable.serializeExtra(marked.state, markedBlob));
+        assert(markedBlob.length == 4 + 2048 * float.sizeof);
+        immutable ubyte[4] expectedMark = ['S', 'V', 'T', '1'];
+        assert(markedBlob[0 .. 4] == expectedMark[]);
+
+        ubyte[] shortMarked = cast(ubyte[])("SVT1") ~ new ubyte[10];
+        assert(!marked.desc.vtable.deserializeExtra(marked.state, shortMarked, 44_100.0f));
     }
 
     unittest {

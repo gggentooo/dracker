@@ -10,6 +10,53 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
 
 ---
 
+## [2026-11-26 20:42:37 KST]
+- **Author:** Gemini 4 Neon
+- **Task:** T94 reviewed and closed (owner approved `Strings.wav`)
+- **Affected Files:**
+  - `docs/todo.json`, `docs/todo.md`, `docs/todo-guides.md` (through `tools/todo.py`)
+  - `docs/changelog.md`
+- **Description:**
+  - Reviewed Qwen3.8 Flash Next's T94 implementation (`source/modules/synths/spectravoice.d`, `tests/unit/modules_test.d`, `docs/manual.md`) and independently verified all gates (zero defects found).
+  - Closed T94 after the owner confirmed `build/preset-sounds/Pads & Leads - Strings.wav` sounds right; `tools/todo.py` moved T115 (SpectraVoice table-change crossfade) to Stage 0 (no guide yet).
+- **Verification:**
+  - `dub test --skip-registry=all --compiler=ldc2 --config=headless` → `41 modules passed unittests`
+  - `ldc2 -w -unittest -c -o- ... source/modules/synths/spectravoice.d tests/unit/modules_test.d` → no output, exit 0
+  - `dub build --skip-registry=all --compiler=ldc2 --config=compose` → linked `dracker-compose`, exit 0
+  - `grep -n '//' source/modules/synths/spectravoice.d tests/unit/modules_test.d` → no matches
+  - `python3 tools/todo.py check` → `ok: 115 tasks (33 open, 82 done), 4 features, 28 changelog entries`
+
+---
+
+## [2026-11-26 20:30:52 KST]
+- **Author:** Qwen3.8 Flash Next
+- **Task:** T94 (SpectraVoice: Profile and Bandwidth have no effect)
+- **Affected Files:**
+  - `source/modules/synths/spectravoice.d`
+  - `tests/unit/modules_test.d`
+  - `docs/manual.md` (Appendix B SpectraVoice row, Appendix C row 15)
+  - `build/preset-sounds/Pads & Leads - Strings.wav` (rendered preview, build output)
+  - `docs/todo.json`, `docs/todo.md` (through `tools/todo.py`; `docs/todo-guides.md` was regenerated with identical content)
+  - `docs/changelog.md`
+- **Description:**
+  - `source/modules/synths/spectravoice.d`: added the free functions `clampBandwidth` (the old lines 91-92 clamp: NaN → 0.35, range 0.05..1), `harmonicCount` (`cast(size_t)(4.0 + cast(double) clampedBandwidth * 44.0)`) and `fillHarmonicTable` (zeroes the reused `re`/`im` buffers, then runs the old fill, inverse FFT and 0.95 normalization unchanged). `SpectraTableAsset.buildHarmonicTable` keeps its signature, allocations and failure result and now calls these three, so every table is bit-equal to what it built before, including the Organ 0.35 table.
+  - Added `struct SpectraTableBank`: 172 tables (`PROFILE_COUNT 4 × COUNTS_PER_PROFILE 43`, harmonic counts 6..48) of 2048 floats each — 352,256 floats, about 1.4 MB — allocated with `OwnedBuffer!float.tryAllocate` and filled off-RT by `build()` (null on OOM); `table(profile, bandwidth)` clamps the profile to 3 and the harmonic count to 6..48 and returns the 2048-float slice, null for an empty bank. `prepare()` builds `bank_` once instead of building `tableAsset_`; `~this()` frees the bank through `destroyErased`.
+  - `SpectraVoice.activeTable()` returns the slot-0 asset's table when one is attached and non-empty, else `bank_.table(selectedProfile(), bandwidth)`; `process()` reads `activeTable()` once per block and is silent when its length is below 2. Profile and Bandwidth now take effect at once from the rack, automation and MIDI (all parameter writes run on the audio thread; only a table *pick* happens there — no table is ever built in `process()` or `onParamChanged`). No crossfade; a table change is a hard switch at a block boundary (owner decision 3; crossfade stays in T115).
+  - `serializeExtra` now prefixes the payload with the four magic bytes `['S','V','T','1']` before the floats; `deserializeExtra` treats a payload shorter than 4 bytes or without the mark as empty and installs nothing (returns true), and a marked payload must have a tail that is a multiple of `float.sizeof` and at least 64 floats, else false. Per owner decision 2, stored tables without the mark are ignored, so existing projects whose Profile is not Organ — and the bundled `Strings` preset (Brass, Bandwidth 0.6) — now sound as their parameters say; `Strings` was rendered again for the owner to listen to.
+  - `tests/unit/modules_test.d`: added `playSpectra` (note-on 60/0.9, 64-frame blocks, `ctx.inputSilent = true`, collects left-channel samples) and six unittests — one assert per acceptance-table row: `harmonicCount` of 0.05/0.35/0.6/1.0 → 6/19/30/48 and NaN/-3/9 → 19/6/48; `TABLE_COUNT == 172` and `bank.tables.length == 352_256`; all 384 `bank.table(p, bw)` slices bit-equal to `buildHarmonicTable(p, bw).wavetable` (p 0..3, bw 0.05..1.0 step 0.01); `table(0,0.35)==table(0,1.0)`, `table(0,0.05)!=table(0,0.35)`, `table(1,0.35)!=table(1,1.0)`, `table(7,0.35)==table(3,0.35)`; a Profile 1 module vs an untouched Organ module over 40 blocks (sum of absolute differences > 1, both peaks > 0.5) and bit-equal output against a `buildHarmonicTable(1, 0.35f)` swap; Profile 3 mid-play (first 20 blocks equal, next 20 differ); Profile 1 with Bandwidth 0.35 vs 1.0 differ; `verifyZeroRtAllocationsNothrow` around note-on, `setParam` of Profile and Bandwidth and `process`; and the four extra-data rows (serialize 0 after `createOffRT`; 8196 bytes starting `SVT1` after a 2048 swap; 8192 unmarked bytes deserialize true with serialize still 0; `SVT1` + 10 bytes deserialize false). The synth-suite swap assertion at line 606 was changed from `oldSpec !is null` to `oldSpec is null` because `prepare()` no longer builds a slot-0 table (guide step 5; the guide's line 437 predates T93's added ADSR tests).
+  - `docs/manual.md`: the Appendix B SpectraVoice row lost `; Profile and Bandwidth take effect when the module is prepared, not while it plays`; Appendix C row 15 had only the SpectraVoice sentence left after T93, so deleting it left an empty row and the whole row 15 was removed. Row numbers were not renumbered (the guide only says to delete the empty row).
+  - Mutation check: restoring the old `prepare()` table build made the suite fail at `tests/unit/modules_test.d(606)`; the fix was then restored and the suite passes.
+- **Verification:**
+  - `dub test --compiler=ldc2 --config=headless` → `41 modules passed unittests` (run twice after the fix; also `1/41 modules FAILED unittests` during the mutation check with `core.exception.AssertError@tests/unit/modules_test.d(606): Assertion failure`)
+  - `ldc2 -w -unittest -c -o- $I -Itests $V source/modules/synths/spectravoice.d tests/unit/modules_test.d` → no output apart from `exit 0`
+  - `grep -n '//' source/modules/synths/spectravoice.d tests/unit/modules_test.d` → no matches, and no `/* ... */` comment outside the file header and DDoc blocks
+  - `dub build --compiler=ldc2 --config=headless && ./build/dracker --sound-check-presets=build/preset-sounds` → `Pads & Leads - Strings.wav                11.0 s  peak 0.51` and `Wrote 20 files to build/preset-sounds`, run exit 0
+  - `ls -l "build/preset-sounds/Pads & Leads - Strings.wav"` → `-rw-r--r--@ 1 leehk  staff  3881004 Nov 26 20:30 build/preset-sounds/Pads & Leads - Strings.wav`
+  - `python3 tools/todo.py check` → `ok: 115 tasks (34 open, 81 done), 4 features, 27 changelog entries`
+  - Not run: `dub build --compiler=ldc2 --config=compose` (nothing in `source/compose/` changed), `dub build --compiler=ldc2 --config=app --build=debug` and `dub test --compiler=ldc2 --config=app` (nothing in `source/platform/`, `source/app/studio_app.d`, `source/app/gui_shell.d`, `source/app/audio_host.d` or `source/app/gui_gallery.d` changed; `source/main.d` was listed in Files only for running `--sound-check-presets` and was not edited).
+
+---
+
 ## [2026-11-26 19:48:53 KST]
 - **Author:** Qwen3.8 Flash Next
 - **Task:** T93 (ADSR One-Shot and Inverted modes)

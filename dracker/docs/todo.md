@@ -140,12 +140,6 @@ Facts about the current code that the tasks rely on:
 - **Task:** The note notation of T67 as pure functions, independent of the interpreter: `<pitch>[:<length>][@<velocity>]`, `-` for a rest (with a length), `[C4 E4 G4]:2` for notes together, pitches spelled as in the app (`app.music_theory`, C4 = middle C), lengths through `compose.timing`. The result is a list of events (offset in lines, length in lines, pitches, velocity); a note without a length takes the length of the note before it (the first: one beat). Every problem is data with the offset of the offending note inside the text and the nearest valid spelling. Tests: every form in 4/4 and 6/8; every refusal with its offset; all three-token sequences from a small alphabet never crash.
 - **Needs:** T67, T73
 
-#### [Modules] SpectraVoice: Profile and Bandwidth have no effect · T94 · Build
-
-- **Files:** `source/modules/synths/spectravoice.d`, `tests/unit/modules_test.d`, `source/main.d` (preset sound check), `docs/manual.md` (Appendix B, Appendix C row 15)
-- **Task:** Found while checking the option names of T91, and wider than first recorded: every SpectraVoice always plays Organ at Bandwidth 0.35. Its table is built once in `prepare()` with the default parameters, before the saved ones are set, and that table is then stored with the module; so *Profile* and *Bandwidth* do nothing in the rack, from automation or MIDI, or after reopening, and the bundled `Strings` preset (Brass, 0.6) plays Organ. Fix decided by the owner on 2026-11-26: `prepare()` builds all 172 tables (4 profiles × 43 harmonic counts, about 1.4 MB per module) off the audio thread and `process()` picks one from the current parameters; stored tables without a new mark are ignored. Existing projects with another Profile and the `Strings` preset then sound as their parameters say: render `Strings` again for the owner. Tests that Profile and Bandwidth change the rendered sound while a note plays and after loading; then remove the SpectraVoice notes from Appendix B and Appendix C row 15.
-- **Needs:** —
-
 #### [GUI/widgets] Multi-line text editor widget · T110 · Build
 
 - **Files:** `source/gui/widgets.d`, `tests/unit/widgets_textarea_test.d` (new; uses the `Harness` of `tests/unit/gui_test.d`), `source/app/gui_gallery.d` (compiled in the `app` configuration only)
@@ -157,6 +151,12 @@ Facts about the current code that the tasks rely on:
 - **Files:** `source/app/session.d`, `source/app/history.d`, `tests/unit/session_test.d` (new)
 - **Task:** An undoable `StudioSession.doReplaceDocument(LoadedProject, label)` for the script tab (T113): activate the new document as `openProjectFromMemory()` does, but as one history command whose undo restores the document before it, without clearing the history, the file path or the modified flag logic. If the new document cannot be activated, the old one stays and the reason is returned. Playback continues where the timeline allows it. Tests: replace, undo, redo give identical documents and identical renders; a document that fails activation changes nothing; the undo count grows by one; a replace while playing keeps the transport running.
 - **Needs:** —
+
+#### [Modules] SpectraVoice: crossfade when the table changes · T115 · Build
+
+- **Files:** `source/modules/synths/spectravoice.d`, `tests/unit/modules_test.d`
+- **Task:** After T94 a change of *Profile* or *Bandwidth* switches the table at a block boundary, which can click on a held note. Crossfade from the old table to the new one over a few milliseconds, without allocating on the audio thread. Tests: the largest sample-to-sample step during a change on a held note stays below a stated bound; no allocation (`rt_malloc_trap`).
+- **Needs:** T94
 
 ---
 
@@ -179,12 +179,6 @@ Facts about the current code that the tasks rely on:
 - **Files:** `source/compose/project_writer.d`, `tests/unit/compose_project_test.d`
 - **Task:** Split from T76. Wires by handle and port name, with defaults (a module's first audio output to the target's first audio input) and gain; removing a wire; removing a module removes its wires. Before saving, a trial activation in a `StudioSession` so a saved file always opens and plays. Tests: wiring errors as data (unknown handle, unknown port with the nearest name, incompatible port kinds, an input used as a source, a duplicate wire, feedback loops as the graph compiler reports them); a written file opens in `StudioSession` and its render is not silent.
 - **Needs:** T76
-
-#### [Modules] SpectraVoice: crossfade when the table changes · T115 · Build
-
-- **Files:** `source/modules/synths/spectravoice.d`, `tests/unit/modules_test.d`
-- **Task:** After T94 a change of *Profile* or *Bandwidth* switches the table at a block boundary, which can click on a held note. Crossfade from the old table to the new one over a few milliseconds, without allocating on the audio thread. Tests: the largest sample-to-sample step during a change on a held note stays below a stated bound; no allocation (`rt_malloc_trap`).
-- **Needs:** T94
 
 ---
 
@@ -361,6 +355,12 @@ Facts about the current code that the tasks rely on:
 ---
 
 ## Done
+
+#### [Modules] SpectraVoice: Profile and Bandwidth have no effect · T94 · Build
+
+- **Files:** `source/modules/synths/spectravoice.d`, `tests/unit/modules_test.d`, `source/main.d` (preset sound check), `docs/manual.md` (Appendix B, Appendix C row 15)
+- **Done:** 2026-11-26 (built by Qwen3.8 Flash Next; owner listened to Strings.wav and approved). SpectraVoice now precomputes all 172 Profile x Bandwidth harmonic tables (4 profiles x 43 harmonic counts, 2048 floats each) off the audio thread in SpectraTableBank via prepare() and picks the active table in process() with zero RT allocations; serializeExtra/deserializeExtra use the SVT1 mark so unmarked legacy tables are ignored and existing projects plus the bundled Strings preset sound as their parameters specify. Six unit tests in tests/unit/modules_test.d cover all acceptance rows and rt_malloc_trap; Appendix B and empty Appendix C row 15 in docs/manual.md updated. Recorded in docs/changelog.md (2026-11-26 20:30:52 KST).
+- **Needs:** —
 
 #### [Modules] ADSR One-Shot and Inverted modes · T93 · Build
 
@@ -1182,6 +1182,12 @@ Facts about the current code that the tasks rely on:
 
 - Modified: T95 moved to *Done*.
 
-### 2026-11-26T19:50:59+09:00 — Qwen3.8 Flash Next, T93 done
+### 2026-11-26T19:50:59+09:00 — Qwen3.8 Flash Next, T94 built, awaiting owner listen
 
 - Modified: T93 moved to *Done*.
+- Modified: T94 status changed.
+
+### 2026-11-26T20:42:37+09:00 — Gemini 4 Neon, T94 done (reviewed; owner approved Strings.wav)
+
+- Modified: T94 moved to *Done* (built by Qwen3.8 Flash Next; owner listened to Strings.wav and approved).
+- Modified: Stages recomputed: T115 Stage 1 → 0.
