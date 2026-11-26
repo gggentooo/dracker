@@ -1216,7 +1216,7 @@ Choice parameters are listed with the name of each value, in order from the lowe
 | Module | Ports | Parameters |
 |---|---|---|
 | **LFO** | Audio In/Out, **CV Out** | Waveform: Sine, Triangle, Saw, Square, S&H Random (a new random value each cycle) · Frequency (2) · Sync Unit: Hz, Beats/Cycle (Frequency is then the number of beats per cycle) · Amplitude · Phase Offset · Stereo Spread |
-| **ADSR** | Events In, **CV Out**, Audio Out | Attack · Decay · Sustain · Release · Mode: Gated, One-Shot, Inverted (see Appendix C) |
+| **ADSR** | Events In, **CV Out**, Audio Out | Attack · Decay · Sustain · Release · Mode: Gated, One-Shot, Inverted |
 | **Glide** | Events In/Out | Response (ms) · Polyphonic Off/On · Reset On First Off/On (On) |
 | **MultiSynth** | Events In/Out | Transpose · Fine Tune · Random Pitch · Velocity Scale · Curve Mode: Off, Velocity, Velocity + Pitch (needs a drawn curve) |
 | **MultiCtl** | Events In, CV In, Events Out | Value · Gain · Quantization. The curve is drawn in the rack. |
@@ -1254,7 +1254,7 @@ These are known limitations of the current build. Please report behavior that *d
 | 12 | Transport | The MIDI source list refreshes only at startup and when the device dropdown is opened |
 | 13 | Patchbay | Cable gain can't be edited; Duplicate doesn't copy cables, samples or curves |
 | 14 | Rack | Header toggle order is M B S; the patchbay badges are M S B |
-| 15 | Modules | ADSR *One-Shot* is silent (the release starts before the attack has risen), and *Inverted* rests at 0 instead of 1 when no note plays. SpectraVoice *Profile* and *Bandwidth* change the sound only when the module is prepared again, for example after reopening the project |
+| 15 | Modules | SpectraVoice *Profile* and *Bandwidth* change the sound only when the module is prepared again, for example after reopening the project |
 | 16 | Rack | Envelope editor: moving the sustain marker has no effect on parameters |
 | 17 | Rack | MetaModule inner edits are not undoable |
 | 18 | Sampler | AIFF is offered in the import dialog but can't be decoded; drag-and-drop isn't implemented |

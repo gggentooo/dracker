@@ -375,6 +375,175 @@ version (unittest) {
         assert(fabs(cvOut[10]) > 1e-4f);
     }
 
+    /**
+     * Plays one note on an ADSR module and collects its CV output.
+     *
+     * Params:
+     *   desc = Descriptor of the module.
+     *   state = State of the module.
+     *   velocity = Note-on velocity; a value below 0 sends no note-on.
+     *   blocks = Number of 64-frame blocks to process.
+     *   noteOffBlock = Block before which the note-off is sent; -1 sends none.
+     *   lastProduced = Receives what the last process call returned.
+     *
+     * Returns:
+     *   blocks * 64 CV samples; index 0 is the first sample after the note-on.
+     */
+    private float[] renderAdsr(const(ModuleDescriptor)* desc, void* state, float velocity, uint blocks,
+            int noteOffBlock, out bool lastProduced) {
+        float[FIXED_BLOCK_FRAMES] cv = 0.0f;
+        float[FIXED_BLOCK_FRAMES] left = 0.0f;
+        float[FIXED_BLOCK_FRAMES] right = 0.0f;
+        ProcessIO io;
+        ProcessContext ctx;
+        ctx.sampleRate = 44_100.0f;
+        ctx.frames = FIXED_BLOCK_FRAMES;
+        io.audioOut = [left[], right[]];
+        io.numCvOut = 1;
+        io.cvOut[0].samples = cv[];
+        io.cvOut[0].active = true;
+        float[] samples;
+        if (velocity >= 0.0f) {
+            sendEvent(desc, state, ModEvent.makeNoteOn(NoteId(1), 60.0f, velocity), 44_100.0f);
+        }
+        foreach (block; 0 .. blocks) {
+            if (cast(int) block == noteOffBlock) {
+                sendEvent(desc, state, ModEvent.makeNoteOff(NoteId(1)), 44_100.0f);
+            }
+            lastProduced = desc.vtable.process(state, io, ctx);
+            foreach (i; 0 .. FIXED_BLOCK_FRAMES) {
+                assert(left[i] == cv[i] && right[i] == cv[i]);
+            }
+            samples ~= cv[];
+        }
+        return samples;
+    }
+
+    /**
+     * Applies the acceptance-table ADSR timings (Attack 10 ms, Decay 20 ms, Sustain 0.5, Release 40 ms).
+     *
+     * Params:
+     *   inst = Instance of the ADSR module.
+     *   mode = Mode parameter value: 0 Gated, 1 One-Shot, 2 Inverted.
+     */
+    private void setAdsrShape(ref ModuleInstance inst, float mode) {
+        assert(inst.desc.vtable.setParam(inst.state, 0, 10.0f, 44_100.0f, true));
+        assert(inst.desc.vtable.setParam(inst.state, 1, 20.0f, 44_100.0f, true));
+        assert(inst.desc.vtable.setParam(inst.state, 2, 0.5f, 44_100.0f, true));
+        assert(inst.desc.vtable.setParam(inst.state, 3, 40.0f, 44_100.0f, true));
+        assert(inst.desc.vtable.setParam(inst.state, 4, mode, 44_100.0f, true));
+    }
+
+    unittest {
+        bool produced = false;
+
+        ModuleInstance gatedHold;
+        assert(ModuleRegistry.createOffRT("ctl.adsr", ModuleId(1), 44_100.0f, gatedHold));
+        scope (exit) gatedHold.destroyOffRT();
+        setAdsrShape(gatedHold, 0.0f);
+
+        float[] held = renderAdsr(gatedHold.desc, gatedHold.state, 1.0f, 51, -1, produced);
+        assert(fabs(held[219] - 0.4989f) < 1e-3f);
+        assert(fabs(held[882] - 0.75f) < 1e-3f);
+        assert(fabs(held[3200] - 0.5f) < 1e-3f);
+        assert(produced);
+
+        ModuleInstance gatedOff;
+        assert(ModuleRegistry.createOffRT("ctl.adsr", ModuleId(2), 44_100.0f, gatedOff));
+        scope (exit) gatedOff.destroyOffRT();
+        setAdsrShape(gatedOff, 0.0f);
+
+        float[] released = renderAdsr(gatedOff.desc, gatedOff.state, 1.0f, 69, 40, produced);
+        assert(fabs(released[2000] - 0.5f) < 1e-3f);
+        assert(fabs(released[3441] - 0.25f) < 1e-3f);
+        assert(fabs(released[4400]) < 1e-3f);
+        assert(!produced);
+
+        ModuleInstance gatedIdle;
+        assert(ModuleRegistry.createOffRT("ctl.adsr", ModuleId(3), 44_100.0f, gatedIdle));
+        scope (exit) gatedIdle.destroyOffRT();
+        setAdsrShape(gatedIdle, 0.0f);
+
+        float[] silent = renderAdsr(gatedIdle.desc, gatedIdle.state, -1.0f, 1, -1, produced);
+        foreach (s; silent) {
+            assert(fabs(s) < 1e-6f);
+        }
+        assert(!produced);
+    }
+
+    unittest {
+        bool produced = false;
+
+        ModuleInstance oneShot;
+        assert(ModuleRegistry.createOffRT("ctl.adsr", ModuleId(1), 44_100.0f, oneShot));
+        scope (exit) oneShot.destroyOffRT();
+        setAdsrShape(oneShot, 1.0f);
+
+        float[] fired = renderAdsr(oneShot.desc, oneShot.state, 1.0f, 51, -1, produced);
+        assert(fabs(fired[219] - 0.4989f) < 1e-3f);
+        assert(fabs(fired[882] - 0.75f) < 1e-3f);
+        assert(fabs(fired[1500] - 0.4501f) < 1e-3f);
+        assert(fabs(fired[2206] - 0.25f) < 1e-3f);
+        assert(fabs(fired[3200]) < 1e-3f);
+        assert(!produced);
+        float loudest = 0.0f;
+        foreach (s; fired) {
+            if (fabs(s) > loudest) loudest = fabs(s);
+        }
+        assert(loudest >= 0.99f);
+
+        ModuleInstance oneShotIgnored;
+        assert(ModuleRegistry.createOffRT("ctl.adsr", ModuleId(2), 44_100.0f, oneShotIgnored));
+        scope (exit) oneShotIgnored.destroyOffRT();
+        setAdsrShape(oneShotIgnored, 1.0f);
+
+        float[] unheld = renderAdsr(oneShotIgnored.desc, oneShotIgnored.state, 1.0f, 51, 2, produced);
+        assert(fabs(unheld[882] - 0.75f) < 1e-3f);
+
+        ModuleInstance oneShotQuiet;
+        assert(ModuleRegistry.createOffRT("ctl.adsr", ModuleId(3), 44_100.0f, oneShotQuiet));
+        scope (exit) oneShotQuiet.destroyOffRT();
+        setAdsrShape(oneShotQuiet, 1.0f);
+
+        float[] half = renderAdsr(oneShotQuiet.desc, oneShotQuiet.state, 0.5f, 14, -1, produced);
+        assert(fabs(half[882] - 0.375f) < 1e-3f);
+    }
+
+    unittest {
+        bool produced = false;
+
+        ModuleInstance invertedIdle;
+        assert(ModuleRegistry.createOffRT("ctl.adsr", ModuleId(1), 44_100.0f, invertedIdle));
+        scope (exit) invertedIdle.destroyOffRT();
+        setAdsrShape(invertedIdle, 2.0f);
+
+        float[] resting = renderAdsr(invertedIdle.desc, invertedIdle.state, -1.0f, 1, -1, produced);
+        foreach (s; resting) {
+            assert(fabs(s - 1.0f) < 1e-6f);
+        }
+        assert(produced);
+
+        ModuleInstance invertedHeld;
+        assert(ModuleRegistry.createOffRT("ctl.adsr", ModuleId(2), 44_100.0f, invertedHeld));
+        scope (exit) invertedHeld.destroyOffRT();
+        setAdsrShape(invertedHeld, 2.0f);
+
+        float[] rising = renderAdsr(invertedHeld.desc, invertedHeld.state, 1.0f, 51, -1, produced);
+        assert(fabs(rising[219] - 0.5011f) < 1e-3f);
+        assert(fabs(rising[882] - 0.25f) < 1e-3f);
+
+        ModuleInstance invertedOff;
+        assert(ModuleRegistry.createOffRT("ctl.adsr", ModuleId(3), 44_100.0f, invertedOff));
+        scope (exit) invertedOff.destroyOffRT();
+        setAdsrShape(invertedOff, 2.0f);
+
+        float[] falling = renderAdsr(invertedOff.desc, invertedOff.state, 1.0f, 69, 40, produced);
+        assert(fabs(falling[2000] - 0.5f) < 1e-3f);
+        assert(fabs(falling[3441] - 0.75f) < 1e-3f);
+        assert(fabs(falling[4400] - 1.0f) < 1e-3f);
+        assert(produced);
+    }
+
     unittest {
         ModuleInstance kick;
         ModuleInstance drum;

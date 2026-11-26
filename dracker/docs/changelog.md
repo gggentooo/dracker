@@ -10,6 +10,32 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
 
 ---
 
+## [2026-11-26 19:48:53 KST]
+- **Author:** Qwen3.8 Flash Next
+- **Task:** T93 (ADSR One-Shot and Inverted modes)
+- **Affected Files:**
+  - `source/modules/control/adsr_mod.d`
+  - `tests/unit/modules_test.d`
+  - `docs/manual.md` (§ Appendix C row 15, Control table ADSR row)
+  - `docs/todo.json`, `docs/todo.md`, `docs/todo-guides.md` (through `tools/todo.py`)
+  - `docs/changelog.md`
+- **Description:**
+  - `source/modules/control/adsr_mod.d`: imports `EnvStage` alongside `AdsrEnvelope`. In `handleEvent` the `if (modeIdx == 1) { env_.releaseNote(); }` block after `env_.trigger(false)` was deleted, so *One-Shot* no longer releases at once — the release used to start from level 0 because Attack is never 0 (its minimum is 0.5 ms), which made the mode silent. The note-off and all-notes-off branch is unchanged, so One-Shot still ignores note-off and all-notes-off (owner decision 1).
+  - `process` now reads the mode before the idle branch: when idle it writes `restLevel` (1.0 in *Inverted*, 0.0 otherwise) to both audio channels and `CV Out`, and returns `invert`, so Inverted rests at 1 with no step click at the start or end of a note (owner decision 2) while Gated still returns false and stays silent — the all-module sweep at `tests/unit/modules_test.d:153-161` still expects silence at default parameters. While the envelope runs, One-Shot calls `env_.releaseNote()` when `env_.stage()` becomes `EnvStage.sustain`, so attack, decay and release run to the end by themselves; the sustain level is the release start value. The `Returns:` DDoc now says true while the envelope is active, output is non-silent, or Inverted rests at 1. `source/dsp/envelope.d` was not changed, and no parameter changed.
+  - `tests/unit/modules_test.d`: added the private helper `renderAdsr(const(ModuleDescriptor)* desc, void* state, float velocity, uint blocks, int noteOffBlock, out bool lastProduced)` (collects `blocks * 64` CV samples, asserts `left == right == CV Out` on every sample, sends no note-on when velocity < 0) and `setAdsrShape(ref ModuleInstance inst, float mode)` (Attack 10 ms, Decay 20 ms, Sustain 0.5, Release 40 ms, Mode), plus three unittests — Gated, One-Shot, Inverted — each using a fresh instance per note. Rows checked at 44100 Hz: attack `k = 219` → 0.4989 (Inverted 0.5011), decay `k = 882` → 0.75 (Inverted 0.25), One-Shot release `k = 1500` → 0.4501 and `k = 2206` → 0.25 (release begins at `k = 1324`), One-Shot idle from `k = 3089` → 0 with the last `process` false, One-Shot loudest sample ≥ 0.99, One-Shot ignores a note-off sent before block 2 (`k = 882` → 0.75), One-Shot at velocity 0.5 → 0.375, Gated sustain hold at `k = 3200` → 0.5 with last `process` true, Gated note-off before block 40 → 0.5 at `k = 2000`, 0.25 at `k = 3441`, idle from `k = 4324` → Gated 0 with last `process` false and Inverted 1 with last `process` true, and the idle blocks (Gated 64 samples of 0 and false, Inverted 64 samples of 1 and true). Stage boundaries (`k` 440-442, 1323-1325, 3088-3089, 4323-4324) are not asserted because `10.0f * 0.001f` is slightly above 0.01.
+  - Test-side typing only: the nine `immutable float[]` locals receiving `renderAdsr` were changed to `float[]` (LDC refuses the implicit `float[]` → `immutable(float[])` conversion). No expected value was changed.
+  - `docs/manual.md`: Appendix C row 15 lost the ADSR sentence; the SpectraVoice sentence stayed, so row 15 is not empty and was not deleted. The ADSR row of the Control table lost ` (see Appendix C)`.
+- **Verification:**
+  - `dub test --compiler=ldc2 --config=headless` → `41 modules passed unittests`
+  - Mutation check: `dub test --compiler=ldc2 --config=headless` with the fix not yet applied → `1/41 modules FAILED unittests`, with `core.exception.AssertError@tests/unit/modules_test.d(483): Assertion failure` (`assert(fabs(fired[219] - 0.4989f) < 1e-3f)`, the first One-Shot row), then the fix was restored and the suite passes.
+  - `ldc2 -w -unittest -c -o- $I -Itests $V source/modules/control/adsr_mod.d tests/unit/modules_test.d` → no output apart from `exit 0`
+  - `grep -n '//' source/modules/control/adsr_mod.d tests/unit/modules_test.d` → no matches, and no `/* ... */` comment outside the file header and DDoc blocks
+  - `grep -ril 'adsr' tests/golden source/app/factory_presets.d resources/presets tests/unit/dsp_test.d` → only `tests/unit/dsp_test.d`, so no golden file, factory preset or bundled preset uses `ctl.adsr` and no golden output changes
+  - `python3 tools/todo.py check` → `ok: 115 tasks (34 open, 81 done), 4 features, 27 changelog entries`
+  - Not run: `dub build --compiler=ldc2 --config=compose` (nothing in `source/compose/` or `source/compose_main.d` changed), `dub build --compiler=ldc2 --config=app --build=debug` (nothing in `source/app/gui_gallery.d` changed), `dub test --compiler=ldc2 --config=app` (nothing under `source/platform/`, `source/app/studio_app.d`, `source/app/gui_shell.d` or `source/app/audio_host.d` changed), and the `--sound-check-presets` check (that belongs to T94).
+
+---
+
 ## [2026-11-26 18:45:58 KST]
 - **Author:** Qwen3.8 Flash Next
 - **Task:** T95 (Timeline: selecting a clip opens its pattern in the pattern editor)

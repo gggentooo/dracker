@@ -24,7 +24,7 @@ module modules.control.adsr_mod;
 
 import std.math : fabs, isFinite;
 
-import dsp.envelope : AdsrEnvelope;
+import dsp.envelope : AdsrEnvelope, EnvStage;
 import graph.buffer : ProcessIO;
 import graph.context : ProcessContext;
 import graph.event : ModEvent, ModEventKind;
@@ -117,9 +117,6 @@ struct AdsrMod {
         if (ev.kind == ModEventKind.noteOn) {
             noteVel_ = isFinite(ev.valueB) ? (ev.valueB < 0.0f ? 0.0f : (ev.valueB > 1.0f ? 1.0f : ev.valueB)) : 1.0f;
             env_.trigger(false);
-            if (modeIdx == 1) {
-                env_.releaseNote();
-            }
         } else if (ev.kind == ModEventKind.noteOff || ev.kind == ModEventKind.allNotesOff) {
             if (modeIdx != 1) {
                 env_.releaseNote();
@@ -135,27 +132,32 @@ struct AdsrMod {
      *   ctx = Per-slice execution context.
      *
      * Returns:
-     *   True while the envelope remains active or output non-silent.
+     *   True while the envelope remains active, its output is non-silent, or Inverted mode rests at 1.
      */
     bool process(ref ProcessIO io, ref ProcessContext ctx) {
         immutable bool hasCvOut = io.numCvOut > 0 && io.cvOut[0].samples.length >= ctx.frames;
+        immutable int modeIdx = isFinite(stateMode) ? cast(int)(stateMode + 0.5f) : 0;
+        immutable bool oneShot = modeIdx == 1;
+        immutable bool invert = modeIdx == 2;
         if (!env_.isActive()) {
-            io.audioOut[0][0 .. ctx.frames] = 0.0f;
-            io.audioOut[1][0 .. ctx.frames] = 0.0f;
+            immutable float restLevel = invert ? 1.0f : 0.0f;
+            io.audioOut[0][0 .. ctx.frames] = restLevel;
+            io.audioOut[1][0 .. ctx.frames] = restLevel;
             if (hasCvOut) {
-                io.cvOut[0].samples[0 .. ctx.frames] = 0.0f;
+                io.cvOut[0].samples[0 .. ctx.frames] = restLevel;
             }
-            return false;
+            return invert;
         }
 
-        immutable int modeIdx = isFinite(stateMode) ? cast(int)(stateMode + 0.5f) : 0;
-        immutable bool invert = modeIdx == 2;
         auto outL = io.audioOut[0];
         auto outR = io.audioOut[1];
 
         float peak = 0.0f;
         foreach (i; 0 .. ctx.frames) {
             float v = env_.next() * noteVel_;
+            if (oneShot && env_.stage() == EnvStage.sustain) {
+                env_.releaseNote();
+            }
             if (invert) {
                 v = 1.0f - v;
             }

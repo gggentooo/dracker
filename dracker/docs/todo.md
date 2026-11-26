@@ -140,12 +140,6 @@ Facts about the current code that the tasks rely on:
 - **Task:** The note notation of T67 as pure functions, independent of the interpreter: `<pitch>[:<length>][@<velocity>]`, `-` for a rest (with a length), `[C4 E4 G4]:2` for notes together, pitches spelled as in the app (`app.music_theory`, C4 = middle C), lengths through `compose.timing`. The result is a list of events (offset in lines, length in lines, pitches, velocity); a note without a length takes the length of the note before it (the first: one beat). Every problem is data with the offset of the offending note inside the text and the nearest valid spelling. Tests: every form in 4/4 and 6/8; every refusal with its offset; all three-token sequences from a small alphabet never crash.
 - **Needs:** T67, T73
 
-#### [Modules] ADSR One-Shot and Inverted modes · T93 · Build
-
-- **Files:** `source/modules/control/adsr_mod.d`, `source/dsp/envelope.d`, `tests/unit/modules_test.d`, `docs/manual.md` (Appendix C row 15)
-- **Task:** Found while checking the option names of T91. *One-Shot* (Mode 1) is silent: `trigger()` sets the level to 0 when Attack > 0 (always, its minimum is 0.5 ms) and `releaseNote()` follows at once, so the release starts from 0 (`dsp/envelope.d:125-158`). *Inverted* (Mode 2) outputs 1 − envelope while it runs but 0 when idle, so the level jumps at the start and end of every note (`adsr_mod.d:140-146`). Make One-Shot run attack and decay to the end and then release, and Inverted rest at 1. Tests for the shape of all three modes; then remove the ADSR sentence from Appendix C row 15.
-- **Needs:** —
-
 #### [Modules] SpectraVoice: Profile and Bandwidth have no effect · T94 · Build
 
 - **Files:** `source/modules/synths/spectravoice.d`, `tests/unit/modules_test.d`, `source/main.d` (preset sound check), `docs/manual.md` (Appendix B, Appendix C row 15)
@@ -367,6 +361,12 @@ Facts about the current code that the tasks rely on:
 ---
 
 ## Done
+
+#### [Modules] ADSR One-Shot and Inverted modes · T93 · Build
+
+- **Files:** `source/modules/control/adsr_mod.d`, `source/dsp/envelope.d`, `tests/unit/modules_test.d`, `docs/manual.md` (Appendix C row 15)
+- **Done:** 2026-11-26. ADSR One-Shot no longer releases at note-on, so attack, decay and release run to the end by themselves (release starts from the sustain level), and Inverted now rests at 1.0 on CV Out and Audio Out when idle while Gated stays silent and returns false. Three unittests in tests/unit/modules_test.d check the shape of all three modes from the guide's acceptance table; the mutation check failed at tests/unit/modules_test.d(483) before the fix. docs/manual.md Appendix C row 15 lost the ADSR sentence. Recorded in docs/changelog.md (2026-11-26 19:48:53 KST).
+- **Needs:** —
 
 #### [GUI/views] Timeline: selecting a clip opens its pattern in the pattern editor · T95 · Build
 
@@ -1181,3 +1181,7 @@ Facts about the current code that the tasks rely on:
 ### 2026-11-26T18:48:31+09:00 — Qwen3.8 Flash Next, T95 done
 
 - Modified: T95 moved to *Done*.
+
+### 2026-11-26T19:50:59+09:00 — Qwen3.8 Flash Next, T93 done
+
+- Modified: T93 moved to *Done*.
