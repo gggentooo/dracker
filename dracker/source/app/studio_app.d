@@ -1079,6 +1079,36 @@ int runStudioGuiSelfTest(string[] args) {
                     toRoll, backTracker, drumAdded, padToggled, drumTracker, backDrumpad));
         }
 
+        {
+            auto sb = root.patchbay.sidebar;
+            immutable float canvasW0 = root.patchbay.canvasRect().w;
+            click(sb.collapseButton.bounds.center());
+            pumpFor(0.08);
+            immutable bool collapsedOk = sb.collapsed() && root.patchbay.canvasRect().w > canvasW0;
+            click(sb.collapseButton.bounds.center());
+            pumpFor(0.08);
+            immutable bool expandedOk = !sb.collapsed() && root.patchbay.canvasRect().w == canvasW0;
+
+            immutable bool hasGroups = sb.list.groups().length > 0 && !sb.list.rowRect(0, 0).isEmpty();
+            immutable size_t modsBefore = doc().modules.length;
+            immutable Point2F rowPt = sb.list.rowRect(0, 0).center();
+            postSyntheticMouse(shell.window, 1, rowPt.x, rowPt.y, 0);
+            postSyntheticMouse(shell.window, 2, rowPt.x, rowPt.y, 0);
+            pumpFor(0.02);
+            postSyntheticMouse(shell.window, 1, rowPt.x, rowPt.y, 0);
+            postSyntheticMouse(shell.window, 2, rowPt.x, rowPt.y, 0);
+            immutable bool dblAdded = pumpUntil(() => doc().modules.length == modsBefore + 1);
+
+            immutable Point2F dropPt = Point2F(root.patchbay.canvasRect().center().x + 50.0f,
+                root.patchbay.canvasRect().center().y + 30.0f);
+            drag(rowPt, dropPt);
+            immutable bool dragAdded = pumpUntil(() => doc().modules.length == modsBefore + 2);
+
+            check("instrument library (sidebar)", collapsedOk && expandedOk && hasGroups && dblAdded && dragAdded,
+                format("collapse=%s expand=%s groups=%s dbl=%s drag=%s",
+                    collapsedOk, expandedOk, sb.list.groups().length, dblAdded, dragAdded));
+        }
+
         key(8, "c", KeyModifiers.command | KeyModifiers.alt);
         immutable bool toggledLow = ctx.theme.contrast == ContrastMode.low && !shell.app.menuItemChecked("View", "High Contrast");
         string saved;

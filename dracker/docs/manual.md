@@ -309,6 +309,8 @@ Shape and line style identify the kind even without color.
 
 The new module appears where you right-clicked and becomes selected. Its parameters show in the rack. The Master Output is never offered, because there is only one.
 
+You can also add preconfigured instruments and effects directly from the **instrument sidebar** on the left side of the patchbay ([§6.8](#68-the-instrument-sidebar)).
+
 ### 6.4 Connecting modules
 - **Press on an output port and drag** to an input port, then release.
 - While dragging:
@@ -356,7 +358,7 @@ The new module appears where you right-clicked and becomes selected. Its paramet
 
 | Right-click on | Menu items |
 |---|---|
-| A node | Mute/Unmute · Solo/Unsolo · Bypass/Enable · Save Preset… · Apply Preset… · Duplicate · Delete. All are disabled for the Master Output. |
+| A node | Mute/Unmute · Solo/Unsolo · Bypass/Enable · Save Preset… · Apply Preset… · Add to Instruments… · Duplicate · Delete. All are disabled for the Master Output. |
 | A cable | Delete Wire |
 | Empty canvas | Add Synth ▸ · Add Effect ▸ · Add Control ▸ · Add Core ▸ · Load Preset… · Fit All · Reset Zoom |
 
@@ -372,6 +374,19 @@ The new module appears where you right-clicked and becomes selected. Its paramet
 | Fit everything in view | Double-click empty canvas, or **Fit All** |
 
 Zoom ranges from 25% to 300%.
+
+### 6.8 The instrument sidebar
+At the left edge of the patchbay is the collapsible **Instruments** sidebar (200 points wide; click **`<`** / **`>`** in its header to collapse or expand it). Presets are organized in collapsible group headings (**Bass**, **Keys**, **Pads & Leads**, **Drums**, **Effects**, custom group folders, and **Other** for loose `.msym` files) sorted by name. Each row displays the preset name, its module type underneath, and a **user** tag if it belongs to your library.
+
+- **Adding from the sidebar (one undo step, unwired):**
+  - **Double-click** a row (or select it and press **Return**) to add the module at the next free canvas position and select it.
+  - **Drag** a row onto the canvas (the canvas highlights with a border when ready; press **Escape** to cancel) to add the module at the drop position.
+  - Neither gesture adds cables automatically.
+- **Navigation:** click a group header to collapse or expand it; use **↑** / **↓**, **←** (collapse or jump to header), **→** (expand or enter rows), **Home** / **End**, or scroll with the mouse wheel. Focusing the sidebar rescans the folders automatically.
+- **Bundled presets:** Dracker ships with 16 built-in presets: **Electric Bass**, **Synth Bass** (*Bass*); **Electric Piano**, **Bright Piano**, **Organ**, **Bell** (*Keys*); **Warm Pad**, **Strings**, **Saw Lead**, **Pluck** (*Pads & Leads*); **Drum Kit**, **Kick** (*Drums*); **Room Reverb**, **Tempo Delay**, **Bus Compressor**, **Warm Overdrive** (*Effects*).
+- **Managing user presets:**
+  - Right-click any module (except Master Output) and choose **Add to Instruments…** to save it into your user folder by name and group (existing names get ` 2`, ` 3`, …).
+  - Right-click a **user** row in the sidebar for **Rename…**, **Move to group ▸**, **Remove…** (moves the `.msym` file to `~/.Trash` after confirmation), and **Show in Finder**. Bundled presets are read-only and offer none of these actions. Failures (such as a read-only folder or invalid name) appear in the status bar.
 
 > **QA note:** cable gain can't currently be changed in the GUI. The thickness of a cable reflects its gain, which is 1.0 for every cable drawn in the GUI.
 
@@ -892,10 +907,13 @@ A preset file stores one module: its type, name, parameter values and extra data
 | To | Do this |
 |---|---|
 | Save a module as a preset | Right-click the module → **Save Preset…**, or select it and use **File ▸ Save Module Preset…** (⌥⌘S). The default file name is the module's name. |
+| Save a module to the instrument library | Right-click the module → **Add to Instruments…** ([§6.8](#68-the-instrument-sidebar)) |
 | Add a module from a preset | Right-click empty canvas → **Load Preset…** (the module appears where you clicked), or **File ▸ Load Module Preset…** (⌥⌘O; it appears to the right of the existing modules). The new module is selected and has no cables. |
 | Apply a preset to an existing module | Right-click the module → **Apply Preset…**. The module's parameters and extra data are replaced; its name, position, cables and mute/bypass state are kept. The preset must be for the same module type, and MetaModules can't be applied to (load the preset as a new module instead). |
 
 Loading and applying are each one undo step. The Master Output can't be saved or applied to. Problems are reported in the status bar ("Load preset failed: …", "Apply preset failed: …").
+
+**Library folders:** bundled presets ship inside `Contents/Resources/Presets` in the `.app` bundle (or `resources/presets` beside a development build). User presets are stored under `~/Library/Application Support/Dracker/Instruments/<Group>/` (presets placed directly inside `Instruments/` appear under **Other**). The sidebar rescans on focus; unreadable files or unknown module types are skipped automatically.
 
 ### 13.7 Preferences
 Appearance settings are saved separately from projects, in `~/Library/Application Support/Dracker/appearance.cfg`. If this file is damaged, the app uses the defaults and shows "Appearance settings ignored (…); using defaults".
@@ -963,7 +981,7 @@ The total length is shown next to the buttons ("6½ bars · 104 lines"). Changin
 
 **Instruments**
 
-**Bass** and **Piano** each offer **Default** (the built-in bass and electric-piano sounds), **Analog Generator**, **FM Synth**, **SpectraVoice**, or **Load preset file…**, which loads a module preset (`.msym`, [§13.6](#136-module-presets-msym)) that can play notes; it then appears in the list as "Preset: *name*". A file that can't be read, or a preset of a module that can't play notes (an effect, for example), is refused with a message and the earlier choice stays. The instrument menus are only available when there are chords.
+**Bass** and **Piano** each offer **Default** (the bundled **Electric Bass** and **Electric Piano** presets, falling back to the built-in constants if the bundled preset files are missing), followed by every playable preset in the instrument library (bundled presets first, then your user presets labelled `(user)`; effects are excluded), and **Load preset file…**, which loads a module preset (`.msym`, [§13.6](#136-module-presets-msym)) that can play notes; it then appears in the list as "Preset: *name*". A file that can't be read, or a preset of a module that can't play notes (an effect, for example), is refused with a message and the earlier choice stays. The instrument menus are only available when there are chords.
 
 **Create**
 
@@ -1251,6 +1269,9 @@ These are known limitations of the current build. Please report behavior that *d
 | 27 | Pattern editor | The view chosen per pattern (Tracker, Piano roll, Drumpad) resets when reopening Dracker (not saved in `.msv`), and there are no keyboard shortcuts for switching views |
 | 28 | Piano roll | Effect columns, sub-line delays (`40`–`5F`), and sub-line note timings are preserved when editing notes, but cannot be viewed or edited directly in the piano roll |
 | 29 | Drumpad | Swing, per-step probability, per-step pitch overrides, and lane mute/solo are not implemented in this version |
+| 30 | Patchbay | The instrument sidebar has no search/filter box in this version |
+| 31 | Patchbay | Adding a preset from the instrument sidebar (double-click or drag) adds an unwired module |
+| 32 | Patchbay | Bundled presets are read-only; to save modified parameters, use **Add to Instruments…** to create a user preset |
 
 ### Suggested QA passes
 1. **Audio path:**

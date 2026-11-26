@@ -1125,4 +1125,194 @@ version (unittest) {
             }
         }
     }
+
+    unittest {
+        import std.algorithm : canFind;
+        import std.conv : to;
+        import std.file : dirEntries, mkdirRecurse, rmdirRecurse, SpanMode;
+
+        import app.factory_presets : FACTORY_PRESETS, writeFactoryPresets;
+        import app.instrument_library : InstrumentLibrary, PresetOrigin;
+        import gui.views.patchbay_view : AddInstrumentDialog;
+        import gui.views.skeleton_panel : SkeletonPanel;
+        import gui.widgets : ContextMenu, ListGroup;
+
+        immutable string tmpRoot = buildPath(tempDir(), "dracker_t57_lib_" ~ to!string(thisProcessID()));
+        immutable string bundlePresets = buildPath(tmpRoot, "Dracker.app", "Contents", "Resources", "Presets");
+        immutable string userDir = buildPath(tmpRoot, "UserInstruments");
+        immutable string trashDir = buildPath(tmpRoot, "Trash");
+        mkdirRecurse(bundlePresets);
+        mkdirRecurse(userDir);
+        mkdirRecurse(trashDir);
+        scope (exit) if (exists(tmpRoot)) rmdirRecurse(tmpRoot);
+
+        string[] written;
+        string err;
+        assert(writeFactoryPresets(bundlePresets, written, err), err);
+        assert(written.length == FACTORY_PRESETS.length);
+
+        Rig r = makeRig();
+        scope (exit) r.session.dispose();
+        r.ctx.library = new InstrumentLibrary([bundlePresets], userDir, trashDir);
+        assert(r.ctx.library.entries().length == 16 && r.ctx.library.problems().length == 0);
+        r.root.patchbay.sidebar.refresh(false);
+        r.frame();
+
+        bool findRow(string groupName, string rowName, out size_t gIdx, out size_t rIdx) {
+            ListGroup[] grps = r.root.patchbay.sidebar.list.groups();
+            foreach (gi, ref g; grps) {
+                if (groupName.length > 0 && g.title != groupName) {
+                    continue;
+                }
+                foreach (ri, ref row; g.rows) {
+                    if (row.text == rowName) {
+                        gIdx = gi;
+                        rIdx = ri;
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        size_t bassG = 0, bassR = 0;
+        assert(findRow("Bass", "Electric Bass", bassG, bassR));
+        immutable Point2F bassPt = r.root.patchbay.sidebar.list.rowRect(bassG, bassR).center();
+        r.mouse(PlatformEventKind.mouseDown, bassPt);
+        r.mouse(PlatformEventKind.mouseUp, bassPt);
+        r.mouse(PlatformEventKind.mouseDown, bassPt);
+        r.mouse(PlatformEventKind.mouseUp, bassPt);
+        r.frame();
+
+        assert(r.session.document().modules.length == 2 && r.session.document().wires.length == 0);
+        immutable uint bassId = r.session.document().modules[$ - 1].id;
+        assert(r.session.document().modules[$ - 1].name == "Electric Bass");
+        assert(r.session.document().modules[$ - 1].typeId == "synth.analog_gen");
+        assert(r.ctx.selectedModule() == bassId);
+        assert(r.session.doConnectWire(bassId, 2, 1, 0, 0.5f));
+
+        float[512] l = 0.0f;
+        float[512] rr = 0.0f;
+        float[][2] outs = [l[], rr[]];
+        const(float[])[2] ins = [null, null];
+        float renderPeak() {
+            float p = 0.0f;
+            foreach (_; 0 .. 8) {
+                r.session.engine().processHostBuffer(outs, ins, 512);
+                foreach (v; l) {
+                    if (fabs(v) > p) p = fabs(v);
+                }
+            }
+            return p;
+        }
+
+        r.key(6);
+        assert(renderPeak() > 0.01f);
+        r.key(6, 0, false);
+        foreach (_; 0 .. 16) r.session.engine().processHostBuffer(outs, ins, 512);
+
+        size_t pianoG = 0, pianoR = 0;
+        assert(findRow("Keys", "Electric Piano", pianoG, pianoR));
+        immutable Point2F dragStart = r.root.patchbay.sidebar.list.rowRect(pianoG, pianoR).center();
+        immutable Point2F dropPt = r.root.patchbay.canvasRect().center() + Point2F(40.0f, 20.0f);
+        immutable Point2F expectedWorld = r.root.patchbay.viewToWorld(dropPt);
+
+        r.mouse(PlatformEventKind.mouseDown, dragStart);
+        r.mouse(PlatformEventKind.mouseMove, dragStart + Point2F(10.0f, 0.0f));
+        assert(r.ui.isDragging());
+        r.mouse(PlatformEventKind.mouseMove, dropPt);
+        assert(r.root.patchbay.isDropHovered());
+        r.mouse(PlatformEventKind.mouseUp, dropPt);
+        r.frame();
+
+        assert(r.session.document().modules.length == 3 && r.session.document().wires.length == 1);
+        immutable uint pianoId = r.session.document().modules[$ - 1].id;
+        assert(r.session.document().modules[$ - 1].name == "Electric Piano");
+        assert(r.session.document().modules[$ - 1].typeId == "synth.fm_synth");
+        assert(fabs(r.session.document().modules[$ - 1].posX - expectedWorld.x) < 1e-2f);
+        assert(fabs(r.session.document().modules[$ - 1].posY - expectedWorld.y) < 1e-2f);
+        assert(r.ctx.selectedModule() == pianoId);
+        assert(r.session.doConnectWire(pianoId, 1, 1, 0, 0.5f));
+
+        r.key(6);
+        assert(renderPeak() > 0.01f);
+        r.key(6, 0, false);
+
+        assert(r.session.doSetParam(pianoId, 0, 5.0f));
+        assert(r.session.doRenameModule(pianoId, "Studio Custom"));
+        bool openedAddDlg = false;
+        foreach (it; r.root.patchbay.nodeMenuItems(pianoId)) {
+            if (it.label == "Add to Instruments…") {
+                it.action();
+                openedAddDlg = true;
+                break;
+            }
+        }
+        assert(openedAddDlg);
+        r.frame();
+        AddInstrumentDialog addDlg = null;
+        foreach (w; r.ui.overlays()) {
+            if (auto d = cast(AddInstrumentDialog) w) addDlg = d;
+        }
+        assert(addDlg !is null && addDlg.nameField.text() == "Studio Custom");
+        r.click(addDlg.addButton.bounds.center());
+        assert(r.ui.overlays().length == 0);
+
+        size_t customG = 0, customR = 0;
+        assert(findRow("", "Studio Custom", customG, customR));
+        assert(r.root.patchbay.sidebar.list.groups()[customG].rows[customR].tag == "user");
+
+        r.press(45, KeyModifiers.command | KeyModifiers.shift);
+        SkeletonPanel sp = r.root.skeletonPanel();
+        assert(sp !is null);
+        size_t userMenuIdx = size_t.max;
+        foreach (i, item; sp.pianoBox.items) {
+            if (item == "Studio Custom (user)") {
+                userMenuIdx = i;
+                break;
+            }
+        }
+        assert(userMenuIdx != size_t.max);
+        assert(sp.addChords("I V"));
+        sp.pianoBox.select(userMenuIdx);
+        r.click(sp.createButton.bounds.center());
+        assert(r.root.unsavedPrompt() !is null);
+        r.press(36);
+        assert(r.root.skeletonPanel() is null);
+        assert(r.session.document().modules.length == 3);
+        assert(r.session.document().modules[2].typeId == "synth.fm_synth");
+        assert(r.session.document().modules[2].paramValues[0] == 5.0f);
+
+        r.root.patchbay.sidebar.refresh(false);
+        r.frame();
+        assert(findRow("", "Studio Custom", customG, customR));
+        bool clickedRemove = false;
+        foreach (it; r.root.patchbay.sidebar.rowMenuItems(customG, customR)) {
+            if (it.label == "Remove…") {
+                it.action();
+                clickedRemove = true;
+                break;
+            }
+        }
+        assert(clickedRemove && r.ui.overlays().length == 1);
+        r.press(36);
+        r.frame();
+        assert(!findRow("", "Studio Custom", customG, customR));
+        bool foundInLib = false;
+        foreach (ref e; r.ctx.library.entries()) {
+            if (e.name == "Studio Custom" && e.origin == PresetOrigin.user) foundInLib = true;
+        }
+        assert(!foundInLib);
+        size_t trashedFiles = 0;
+        foreach (de; dirEntries(trashDir, SpanMode.depth)) {
+            if (!de.isDir && de.name.length > 5 && de.name[$ - 5 .. $] == ".msym") trashedFiles++;
+        }
+        assert(trashedFiles == 1);
+
+        r.press(45, KeyModifiers.command | KeyModifiers.shift);
+        sp = r.root.skeletonPanel();
+        assert(sp !is null && !sp.pianoBox.items.canFind("Studio Custom (user)"));
+        r.press(53);
+        assert(r.root.skeletonPanel() is null);
+    }
 }

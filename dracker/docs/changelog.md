@@ -10,6 +10,31 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
 
 ---
 
+## [2026-11-26 09:28:12 KST]
+- **Author:** Gemini 4 Neon
+- **Summary:** Composed original house track **Midnight Pulse** (`sample-projects/midnight_pulse.msv`).
+- **Details:**
+  - `sample-projects/midnight_pulse.msv`: 124 BPM, 4/4 (`TPL = 6`), A minor (`keyTonic = 9`, `keyMode = KEY_MODE_MINOR`), 40 bars (`loopStartLine = 0`, `loopEndLine = 640`).
+  - **Modules & Routing:** 10 modules (`Master Output`, custom `House Kick` `synth.kicker`, tuned `Drum Kit` `synth.drumsynth`, custom `Acid Sub Bass` `synth.analog_gen`, `Electric Piano` `House Chords`, `Warm Pad`, `Pluck` `Pluck Arp`, custom `Stereo Delay` `fx.delay`, sidechained `Sidechain Duck` `fx.compressor`, and wet-only `House Verb` `fx.reverb`) connected via 14 wires.
+  - **Patterns & Arrangement:** 8 distinct patterns (3 `PATTERN_KIND_DRUM` grooves/builds + 5 `PATTERN_KIND_NORMAL` melodic/bass/chord/pad/arp patterns) arranged across 35 Supertrack timeline clips on 5 lanes, verified via `validateProjectForSave()`, `StudioSession.openProjectFile()`, and full 40-bar offline render (78.4 s, overall peak `0.7528`, zero silent bars or clipping).
+
+---
+
+## [2026-11-26 09:12:49 KST]
+- **Author:** Gemini 4 Neon
+- **Task:** Build items `T57` (awaiting owner hand-check) and `T59` (Done)
+- **Summary:**
+  - **T57 (Tests — Instrument library end-to-end check):** Added headless integration test in `tests/unit/views_studio_root_test.d` verifying a `Contents/Resources/Presets` bundle layout with all 16 factory presets, adding bundled instruments by double-click and drag-and-drop (unwired, then wired and played through `StudioSession`), saving a module via `"Add to Instruments…"` (`AddInstrumentDialog`), selecting it from `SkeletonPanel` to generate a project with preserved parameters, and removing it via the sidebar context menu into Trash (`~` removed from sidebar and generator). Added synthetic `"instrument library (sidebar)"` step (collapse/expand, groups, double-click add, drag add) to `runStudioGuiSelfTest()` in `source/app/studio_app.d`.
+  - **T59 (Docs — Manual and architecture: instrument library):** Documented the instrument sidebar, 16 bundled presets, user preset workflows, library folders, skeleton generator library dropdowns, and v1 limitations in `docs/manual.md` (§6.3, §6.6, new §6.8, §13.6, §13.9, Appendix C); added §9 *Instrument Library and Bundled Presets* (components and owner decisions T35–T37, T60–T62) in `../architecture.md`; verified `agents.md` package map and changelog entries across all build tasks.
+- **Verification:**
+  - `dub test --compiler=ldc2 --config=headless` (`37 modules passed unittests`)
+  - `dub test --compiler=ldc2 --config=app` (`4 modules passed unittests`)
+  - `DFLAGS="-w" dub build --compiler=ldc2 --config=app --build=debug --force` (exit 0, zero warnings; `build/dracker` is GUI binary)
+  - `./build/dracker --studio-gui-selftest --quick` (`17/17 checks passed`, including `"instrument library (sidebar)"` and `"pattern editor views (switch)"`)
+  - Inline-comment audit (`! grep -n '//'` on `source/app/studio_app.d` and `tests/unit/views_studio_root_test.d`): 0 matches
+
+---
+
 ## [2026-11-26 08:05:02 KST]
 - **Author:** Gemini 4 Neon
 - **Task:** Owner sign-off (`T46`, `T56`, `T64`) and Build items (`T49`, `T52`, `T58`)
