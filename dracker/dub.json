@@ -69,6 +69,24 @@
                 "CoreMIDI",
                 "CoreFoundation"
             ]
+        },
+        {
+            "name": "compose",
+            "targetName": "dracker-compose",
+            "versions": [
+                "ComposeProgram"
+            ],
+            "excludedSourceFiles": [
+                "source/main.d",
+                "source/gui/*",
+                "source/platform/macos/*",
+                "source/app/audio_host.d",
+                "source/app/gui_gallery.d",
+                "source/app/gui_shell.d",
+                "source/app/studio_app.d",
+                "source/app/studio_selftest.d",
+                "source/app/telemetry.d"
+            ]
         }
     ],
     "buildTypes": {

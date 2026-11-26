@@ -47,6 +47,35 @@ jobs:
       - name: Verify headless release build
         run: dub build --compiler=ldc2 --config=headless --build=release
 
+      - name: Build dracker-compose and run one script through it
+        run: |
+          dub build --compiler=ldc2 --config=compose
+          ./build/dracker-compose help > /dev/null
+          ./build/dracker-compose --json help | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ok"] and len(d["subcommands"]) == 6'
+          printf 'project "CI"\ntempo 120\n' > /tmp/ci-script.dcs
+          set +e
+          ./build/dracker-compose --json check /tmp/ci-script.dcs > /tmp/ci-check.json
+          code=$?
+          set -e
+          python3 - "$code" <<'PY'
+          import json, sys
+          code = int(sys.argv[1])
+          doc = json.load(open("/tmp/ci-check.json"))
+          pending = code == 1 and doc["error"]["code"] == "not_available"
+          assert (code == 0 and doc["ok"]) or pending, (code, doc)
+          PY
+          set +e
+          ./build/dracker-compose check /tmp/no-such-script.dcs
+          missing=$?
+          ./build/dracker-compose frobnicate
+          usage=$?
+          set -e
+          test "$missing" -eq 1
+          test "$usage" -eq 2
+
+      - name: Verify the task list (docs/todo.md is generated from docs/todo.json)
+        run: python3 tools/todo.py check
+
       - name: Verify standalone x86_64 foundation cross-compile and macOS tooling lints
         run: |
           ldc2 -mtriple=x86_64-apple-macos12.0 -w -c -o- -Isource source/foundation/types.d source/foundation/memory.d source/foundation/concurrency.d source/foundation/math_rt.d

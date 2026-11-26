@@ -9,7 +9,7 @@
 
 ## 1. Non-Negotiable Engineering & Agent Rules
 
-Every contributor and autonomous agent working in `dracker/` **must** follow these four rules without exception:
+Every contributor and autonomous agent working in `dracker/` **must** follow these six rules without exception:
 
 ### Rule 1 — Strict Comment Policy (No Inline Comments)
 Comments are permitted **only** in two places:
@@ -57,6 +57,38 @@ All major changes to the codebase must be recorded in [docs/changelog.md](./docs
 ### Rule 5 - Require Explicit Owner Confirmation for Critical Changes/Decisions
 For any changes or decisions that may have significant impact on the codebase, the human owner of the codebase must be consulted for approval before the change is made. This is to ensure that the change is in line with the project's goals and vision.
 
+### Rule 6 — The Task List Is Changed Only Through `tools/todo.py`
+The task list has one source, [`docs/todo.json`](./docs/todo.json). [`docs/todo.md`](./docs/todo.md) is **generated** from it by [`tools/todo.py`](./tools/todo.py) so people can read it.
+
+- **Editing `docs/todo.md` directly is strictly prohibited, for agents and for humans.** A hand edit is overwritten at the next run, and `python3 tools/todo.py check` (also run in CI) fails when the file does not match `docs/todo.json`.
+- **Change `docs/todo.json` only with the script.** Do not open it in an editor and do not write a one-off script to patch it. If the script cannot do what you need, add a command to `tools/todo.py` (and say so in `docs/changelog.md`).
+- Every changing command needs `--author` with your full model or person name. The script validates the list, writes both files, computes the stages from each task's *Needs*, gives new tasks the next free id, and adds a changelog entry to the list with the time read from the clock. You never compute a stage, pick an id, or type a timestamp.
+- Decision tasks are closed only on the owner's word (Rule 5); `done` asks for `--how` with what the owner said.
+
+Run from inside `dracker/`:
+
+```zsh
+python3 tools/todo.py help                     # all commands; `<command> --help` for the options of one
+python3 tools/todo.py list --stage 0           # what can be started now (also --open, --done, --area)
+python3 tools/todo.py show T72 T76             # tasks in full
+
+python3 tools/todo.py add --author "<name>" --area Compose --title "Short title" --type Build \
+    --files '`source/compose/x.d` (new)' --task "What needs to be done." --needs T74,T76
+python3 tools/todo.py set T76 --author "<name>" --needs T74,T92        # also --title --area --type --files --task --status
+python3 tools/todo.py set T76 --author "<name>" --append-task "One more nested bullet."
+python3 tools/todo.py done T72 --author "<name>" --text "What was built. Recorded in docs/changelog.md (…)."
+python3 tools/todo.py done T90 --author "<name>" --how "owner accepted the proposal" --text "The decision, in full."
+python3 tools/todo.py reopen T73 --author "<name>" --reason "The suite fails at x_test.d:61."
+
+python3 tools/todo.py feature list             # the feature sections (F1, F2, …)
+python3 tools/todo.py feature set F4 --author "<name>" --append "- A new fact."
+python3 tools/todo.py feature set F4 --author "<name>" --replace "old text" "new text"
+python3 tools/todo.py log --author "<name>" --title "T72 done; T92 added" --note "Anything worth adding."
+python3 tools/todo.py check                    # validate, and confirm docs/todo.md matches docs/todo.json
+```
+
+A text option takes the text itself, `@file` to read a file, or `-` to read standard input (use these for long or multi-line text). Inside a text, a nested bullet is a new line that starts with two spaces (`  - text`). Commands by the same author within 60 minutes share one changelog entry; `log --title` names it.
+
 ---
 
 ## 2. Core Architecture & Real-Time Invariants
@@ -97,13 +129,15 @@ For any changes or decisions that may have significant impact on the codebase, t
 | `source/sequencer/` | `note.d`, `pattern.d`, `timeline.d`, `clock.d`, `track_effects.d`, `stream_worker.d`, `engine.d` | RT step `@nogc nothrow`; `stream_worker.d` off-RT worker |
 | `source/io/` | `binary_stream.d`, `project_format.d`, `audio_io.d`, `importers/` (`.mid`, `.xm`, `.sunvox`) | `@safe` off-RT I/O & `audio-formats` (`boost`) |
 | `source/app/` | `session.d`, `history.d`, `keymap.d`, `pattern_ops.d`, `telemetry.d`, `music_theory.d` (keys, scales, note spelling), `skeleton_gen.d` (skeleton project generator: instrument choices, sound-check preview), `chord_progression.d` (chord and progression parser), `pattern_notes.d` (piano-roll note model), `instrument_library.d` (bundled and user preset library), `factory_presets.d` (bundled preset definitions; files in `resources/presets/`), `audio_host.d` + `studio_selftest.d` (macOS), `gui_shell.d` + `gui_gallery.d` + `studio_app.d` (`StudioGUI` only) | Main/UI thread orchestration, undo/redo, native GUI main loop & `--gui-selftest` |
+| `source/compose/`, `source/compose_main.d` | Composition helper `dracker-compose`: `compose/timing.d` (positions and lengths), `compose/module_writer.d` (`ModuleWriter`), `compose_main.d` (command line: subcommands, help, `--json`, exit codes; its `main` exists only in the `compose` configuration) | Off-RT, `@safe`; no GUI, audio-device or macOS platform code (the `compose` configuration excludes them) |
 | `source/gui/` | `renderer.d`, `theme.d`, `layout.d`, `widgets.d`, `views/` (`studio_context.d`, `studio_root.d` + 7 studio views, `appearance_panel.d`, `skeleton_panel.d` (skeleton project generator panel), `piano_roll_view.d`, `drumpad_view.d`, `instrument_sidebar.d`) | Main/UI thread only; toolkit and all views are built and unit-tested in `headless` |
 | `source/platform/` | `interfaces.d` + `macos/` (`corefoundation.d`, `coreaudio.d`, `coremidi.d`, `objc_runtime.d`, `objc_blocks_shim.m`, `appkit.d`, `coretext.d`, `metal_renderer.d`) | Only OS FFI boundary in the project |
 | `shaders/` | `ui2d.metal` (Metal 2D instanced UI, Beziers, R8 glyphs) | Compiled to `build/ui2d.metallib` |
 | `resources/` | `fonts/`, `presets/` (bundled `.msym` presets matching `app.factory_presets`) | Read-only app resources |
 | `packaging/macos/`, `ci/` | `Info.plist`, `entitlements.plist`, `bundle_macos.sh`, `macos.yml` | Release bundling & CI automation |
 | `tests/` | `audio_harness.d`, `rt_malloc_trap.d`, `unit/`, `golden/`, `fuzz/` | Offline CI & local verification |
-| `docs/` | `manual.md`, `todo.md`, `changelog.md` | User manual, task tracker, mandatory change log (Rule 4) |
+| `docs/` | `manual.md`, `todo.json` (task list, the source), `todo.md` (generated from it; never edited), `changelog.md` | User manual, task tracker (Rule 6), mandatory change log (Rule 4) |
+| `tools/` | `todo.py` (Python 3, standard library only) | Maintains `docs/todo.json` and writes `docs/todo.md`; a maintenance tool, not part of the program (Rule 3 covers the program) |
 
 ---
 
@@ -255,6 +289,13 @@ dub test --compiler=ldc2 --config=headless
 dub run --compiler=ldc2 --config=headless -- --cli-demo
 ./build/dracker --studio-selftest [--quick]   # live session audio/MIDI backend check (plays quiet audio)
 dub build --compiler=ldc2 --config=headless --build=release
+
+# Composition helper: the second executable build/dracker-compose (no GUI, audio-device or platform code)
+dub build --compiler=ldc2 --config=compose
+./build/dracker-compose help                   # subcommands: run, check, catalog, describe, render, help; --json anywhere
+
+# Task list: docs/todo.md is generated from docs/todo.json (Rule 6)
+python3 tools/todo.py check
 
 # Native macOS AppKit/Metal GUI build (precompiles build/ui2d.metallib when the Xcode Metal toolchain exists;
 # otherwise MetalRenderer compiles the embedded shaders/ui2d.metal source at runtime)
