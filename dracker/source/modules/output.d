@@ -47,7 +47,8 @@ struct MasterOutput {
     @Param("Volume", 0.0f, 2.0f, 1.0f, "", ParamScale.linear)
     float volume = 1.0f;
 
-    @Param("Limiter", 0.0f, 1.0f, 1.0f, "", ParamScale.discrete)
+    @Param("Limiter", 0.0f, 1.0f, 1.0f, "", ParamScale.discrete,
+        ["Off", "On"])
     float limiterEnable = 1.0f;
 
     private ParamSmoother volSmoother_;

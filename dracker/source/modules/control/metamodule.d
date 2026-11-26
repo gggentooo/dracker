@@ -205,10 +205,12 @@ struct MetaModule {
         PortDescriptor("out", "Audio Out", PortKind.audioStereo, PortDirection.output)
     ];
 
-    @Param("BPM Sync", 0.0f, 1.0f, 1.0f, "", ParamScale.discrete)
+    @Param("BPM Sync", 0.0f, 1.0f, 1.0f, "", ParamScale.discrete,
+        ["Off", "On"])
     float bpmSync = 1.0f;
 
-    @Param("Play Patterns", 0.0f, 2.0f, 1.0f, "", ParamScale.discrete)
+    @Param("Play Patterns", 0.0f, 2.0f, 1.0f, "", ParamScale.discrete,
+        ["Off", "Follow Parent", "Note Triggered"])
     float playPatterns = 1.0f;
 
     @Param("Input Module", 0.0f, 64.0f, 1.0f, "", ParamScale.discrete)

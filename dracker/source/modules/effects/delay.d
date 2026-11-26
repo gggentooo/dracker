@@ -55,10 +55,12 @@ struct Delay {
     @Param("Delay R", 0.1f, 2000.0f, 375.0f, "", ParamScale.linear)
     float delayR = 375.0f;
 
-    @Param("Unit", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Unit", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete,
+        ["ms", "Hz", "Lines/100"])
     float unitMode = 0.0f;
 
-    @Param("Inverse", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Inverse", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete,
+        ["Normal", "Swap Wet L/R"])
     float inversePan = 0.0f;
 
     private DelayLine[2] lines_;

@@ -511,10 +511,12 @@ struct Sampler {
     @Param("Offset", 0.0f, 1.0f, 0.0f, "", ParamScale.linear)
     float sampleOffset = 0.0f;
 
-    @Param("Loop Mode", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Loop Mode", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete,
+        ["One-Shot", "Forward", "Ping-Pong"])
     float loopMode = 0.0f;
 
-    @Param("Quality", 0.0f, 2.0f, 2.0f, "", ParamScale.discrete)
+    @Param("Quality", 0.0f, 2.0f, 2.0f, "", ParamScale.discrete,
+        ["Nearest", "Linear", "Cubic"])
     float interpQuality = 2.0f;
 
     private SamplerSlotAsset*[MAX_SLOTS] slots_ = null;

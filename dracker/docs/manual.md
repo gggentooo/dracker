@@ -419,7 +419,7 @@ Editing:
 - **Double-click the parameter name** to reset it to its default.
 - **Right-click a row** for: **MIDI Learn** · **Remove MIDI Mapping** (only if mapped) · **Reset to Default**.
 
-> **QA note:** choice parameters show numbers, not names. For example, Analog Generator *Waveform* 0–5 means sine, triangle, saw, pulse, noise, drawn. [Appendix B](#appendix-b-module-reference) lists every module's numbers and their meanings.
+Choice parameters show the name of each value (Analog Generator *Waveform*: Sine, Triangle, Saw, Square, Noise, Drawn); on/off switches show *Off* and *On*. Parameters whose values are plain counts (Unison, Repeats, FFT Size and a few others) show numbers. [Appendix B](#appendix-b-module-reference) lists every module's names; the composition helper takes the same names (`Waveform=Saw`).
 
 ### 7.3 MIDI Learn: controlling a parameter from hardware
 1. Right-click a parameter row and choose **MIDI Learn**. The row shows **"learning…"** with an outline.
@@ -1168,7 +1168,7 @@ Opening a project or starting a new one clears the history.
 
 ## Appendix B: Module reference
 
-Discrete (choice) parameters are listed with the meaning of each number, because the rack shows only the number. Unless noted otherwise:
+Choice parameters are listed with the name of each value, in order from the lowest value (the first name is value 0 unless the range says otherwise); the rack shows these names, and the composition helper accepts them in place of the numbers. On/off switches are *Off* (0) and *On* (1). Unless noted otherwise:
 
 - effects have **Input** (audio in) and **Output** (audio out) ports;
 - synths have **Events In** (event) and **Audio Out** (audio) ports.
@@ -1176,57 +1176,57 @@ Discrete (choice) parameters are listed with the meaning of each number, because
 ### Core
 | Module | Ports | Parameters |
 |---|---|---|
-| **Master Output** | Input; Output | Volume 0–2 (1) · Limiter 0/1 (on): soft limiter that prevents harsh clipping |
+| **Master Output** | Input; Output | Volume 0–2 (1) · Limiter Off/On (On): soft limiter that prevents harsh clipping |
 
 ### Synths
 | Module | Voices | Parameters (default) |
 |---|---|---|
-| **Analog Generator** | 32 | Waveform 0–5 (2): 0 sine, 1 triangle, 2 saw, 3 pulse, 4 noise, 5 drawn · Unison 1–4 voices (1) · Detune (0.15) · Cutoff 40–18000 Hz (4000) · Resonance 0–0.95 (0.2) · Attack (0.005 s) · Decay (0.2 s) · Sustain (0.7) · Release (0.25 s). Extra **Cutoff CV** input. |
-| **FM Synth** | 16 | Algorithm 0–5 (0): 0 serial 5→4→3→2→1, 1 split branches, 2 two stacks, 3 four into one, 4 mixed, 5 additive · Feedback (0.2) · Op1–5 Ratio 0.5–16 · Op1–5 Level · Attack/Decay/Release (ms) · Sustain |
+| **Analog Generator** | 32 | Waveform (Saw): Sine, Triangle, Saw, Square, Noise, Drawn · Unison 1–4 voices (1) · Detune (0.15) · Cutoff 40–18000 Hz (4000) · Resonance 0–0.95 (0.2) · Attack (0.005 s) · Decay (0.2 s) · Sustain (0.7) · Release (0.25 s). Extra **Cutoff CV** input. |
+| **FM Synth** | 16 | Algorithm (Serial): Serial (5→4→3→2→1), Split Branches (5→4, then 4→3→1 and 4→2→1), Two Stacks (4→2→1 and 5→3), Four Into One (2, 3, 4, 5 → 1), Carrier + Stacks (1 alone, 5→4→2 and 4→3), Additive (all five summed) · Feedback (0.2) · Op1–5 Ratio 0.5–16 · Op1–5 Level · Attack/Decay/Release (ms) · Sustain |
 | **DrumSynth** | 8 | Kit Decay · Tone · Snappy · Pan Spread · Master Vol. The note picks the drum: 36 kick, 38/40 snare, 42/44 closed hat, 46 open hat, 41/43/45 low tom, 47 high tom; other notes by pitch class (C kick, D/E snare, F#/G# hat, A# open hat, otherwise percussion). |
-| **Kicker** | 1 | Waveform 0–2 (0 sine, 1 triangle, 2 pulse) · Pitch Start (220 Hz) · Pitch End (48 Hz) · Sweep Time (45 ms) · Decay (220 ms) · Click Drive |
-| **Sampler** | 16 | Volume · Panning · Fine Tune · Offset · Loop Mode 0–2 (off, forward, ping-pong) · Quality 0–2 (nearest, linear, cubic). Extra **Audio Thru** input. Load samples in the sample editor. |
-| **SpectraVoice** | 16 | Profile 0–3 (harmonic recipes) · Bandwidth · Attack · Release |
-| **Input** | — | Brings live audio input into the graph. Input Gain · Channel Route 0–3 (stereo, left, right, mono mix) · Mute |
-| **Vorbis Player** | — | Volume · Transpose · Loop. *QA: there is no way to load a file in this build.* |
+| **Kicker** | 1 | Waveform: Sine, Triangle, Square · Pitch Start (220 Hz) · Pitch End (48 Hz) · Sweep Time (45 ms) · Decay (220 ms) · Click Drive |
+| **Sampler** | 16 | Volume · Panning · Fine Tune · Offset · Loop Mode: One-Shot (plays once and stops), Forward, Ping-Pong (a loop shorter than one sample plays once) · Quality (Cubic): Nearest, Linear, Cubic. Extra **Audio Thru** input. Load samples in the sample editor. |
+| **SpectraVoice** | 16 | Profile: Organ, Brass, Choir, Bell (harmonic recipes; Profile and Bandwidth take effect when the module is prepared, not while it plays) · Bandwidth · Attack · Release |
+| **Input** | — | Brings live audio input into the graph. Input Gain · Channel Route: Stereo, Left, Right, Mono Mix (Left and Right send that side to both outputs) · Mute Off/On |
+| **Vorbis Player** | — | Volume · Transpose · Loop Off/On. *QA: there is no way to load a file in this build.* |
 
 ### Effects
 | Module | Parameters (default) |
 |---|---|
-| **Amplifier** | Volume 0–4 · Pan · DC Offset · Stereo Width · Invert. **Gain CV** input. |
-| **Filter Pro** | Mode 0–7 (lowpass, highpass, bandpass, notch, allpass, peaking, low shelf, high shelf) · Slope 1–4 stages · Cutoff (1200 Hz) · Resonance (Q 0.707) · Gain dB · Drive. **Cutoff CV** and **Resonance CV** inputs. |
+| **Amplifier** | Volume 0–4 · Pan · DC Offset · Stereo Width · Invert Off/On. **Gain CV** input. |
+| **Filter Pro** | Mode: Lowpass, Highpass, Bandpass, Notch, Allpass, Peaking, Low Shelf, High Shelf · Slope 1–4 stages · Cutoff (1200 Hz) · Resonance (Q 0.707) · Gain dB · Drive. **Cutoff CV** and **Resonance CV** inputs. |
 | **3-Band EQ** | Low/Mid/High Gain ±24 dB · Low Freq (160) · Mid Freq (1000) · Mid Q · High Freq (6000) |
-| **Distortion** | Mode 0–3 (soft clip, hard clip, sine fold, asymmetric) · Drive · Bit Depth · SR Div · Mix |
-| **WaveShaper** | Input Gain · Mix · DC Block · Oversample 0–2 (1×, 2×, 4×). The shape is drawn in the rack's **Transfer Curve**. |
-| **Delay** | Dry · Wet · Delay L (250) · Delay R (375) · Unit 0–2 (ms, Hz, hundredths of a line) · Inverse (swap L/R) |
-| **Echo** | Dry · Wet · Feedback · Delay Time (300 ms) · Stereo Mode 0/1 (stereo, ping-pong) · Damping (6000 Hz) |
-| **Reverb** | Dry · Wet (0.35) · Room Size · Damping · Stereo Width · Pre-Delay · Freeze |
-| **Compressor** | Threshold (−18 dB) · Ratio (4:1) · Attack · Release · Makeup · Mode 0/1 (peak, RMS). **Sidechain** input. |
+| **Distortion** | Mode: Soft Clip, Hard Clip, Sine Fold, Asymmetric · Drive · Bit Depth · SR Div · Mix |
+| **WaveShaper** | Input Gain · Mix · DC Block Off/On (On) · Oversample: 1x, 2x, 4x. The shape is drawn in the rack's **Transfer Curve**. |
+| **Delay** | Dry · Wet · Delay L (250) · Delay R (375) · Unit: ms, Hz, Lines/100 (hundredths of a line) · Inverse: Normal, Swap Wet L/R (the delayed signal changes sides; the dry signal does not) |
+| **Echo** | Dry · Wet · Feedback · Delay Time (300 ms) · Stereo Mode: Stereo, Ping-Pong (the feedback crosses sides) · Damping (6000 Hz) |
+| **Reverb** | Dry · Wet (0.35) · Room Size · Damping · Stereo Width · Pre-Delay · Freeze Off/On |
+| **Compressor** | Threshold (−18 dB) · Ratio (4:1) · Attack · Release · Makeup · Mode: Peak, RMS. **Sidechain** input. |
 | **Flanger** | Dry · Wet · Feedback · Delay · LFO Freq · LFO Depth |
 | **Vibrato** | Freq · Depth · Stereo Phase · Mix |
-| **Modulator** | Mod Type 0–2 (AM, ring, phase) · Mix · PM Max Delay. Inputs: **Carrier In**, **Modulator In** (sidechain), **Modulator CV**. |
+| **Modulator** | Mod Type (Ring): AM, Ring, Phase · Mix · PM Max Delay. Inputs: **Carrier In**, **Modulator In** (sidechain), **Modulator CV**. |
 | **Pitch Shifter** | Pitch ±24 st · Fine Cents · Grain Size · Feedback · Mix |
-| **Vocal Filter** | Vowel 0–4 (morphs A→E→I→O→U) · Formant Shift · Bandwidth · Voice Type 0–3 · Mix. **Vowel CV** input. |
-| **FFT FX** | FFT Size 0–3 (256–2048) · Feedback · Bin Shift · Freeze · Mix |
-| **Loop** | Repeats · Length (ticks) · Mode 0/1 (forward, ping-pong) · Mix. **Trigger In** event input. |
+| **Vocal Filter** | Vowel 0–4 (morphs A→E→I→O→U) · Formant Shift · Bandwidth · Voice Type: Soprano, Alto, Tenor, Bass (formants scaled ×1.18, ×1.02, ×0.88, ×0.76) · Mix. **Vowel CV** input. |
+| **FFT FX** | FFT Size 0–3 (256, 512, 1024, 2048) · Feedback · Bin Shift · Freeze Off/On · Mix |
+| **Loop** | Repeats · Length (ticks) · Mode: Forward, Ping-Pong (the first pass plays backwards) · Mix. **Trigger In** event input. |
 | **Smooth** | Rise Time · Fall Time · Scale. It also has **CV In** and **CV Out** ports. |
 | **DC Blocker** | Cutoff (20 Hz) |
 
 ### Control
 | Module | Ports | Parameters |
 |---|---|---|
-| **LFO** | Audio In/Out, **CV Out** | Waveform 0–4 (sine, triangle, saw, square, random) · Frequency (2) · Sync Unit 0/1 (Hz, beats per cycle) · Amplitude · Phase Offset · Stereo Spread |
-| **ADSR** | Events In, **CV Out**, Audio Out | Attack · Decay · Sustain · Release · Mode 0–2 (gated, one-shot, inverted) |
-| **Glide** | Events In/Out | Response (ms) · Polyphonic · Reset On First |
-| **MultiSynth** | Events In/Out | Transpose · Fine Tune · Random Pitch · Velocity Scale · Curve Mode 0–2 (off, velocity curve, velocity + pitch curves) |
+| **LFO** | Audio In/Out, **CV Out** | Waveform: Sine, Triangle, Saw, Square, S&H Random (a new random value each cycle) · Frequency (2) · Sync Unit: Hz, Beats/Cycle (Frequency is then the number of beats per cycle) · Amplitude · Phase Offset · Stereo Spread |
+| **ADSR** | Events In, **CV Out**, Audio Out | Attack · Decay · Sustain · Release · Mode: Gated, One-Shot, Inverted (see Appendix C) |
+| **Glide** | Events In/Out | Response (ms) · Polyphonic Off/On · Reset On First Off/On (On) |
+| **MultiSynth** | Events In/Out | Transpose · Fine Tune · Random Pitch · Velocity Scale · Curve Mode: Off, Velocity, Velocity + Pitch (needs a drawn curve) |
 | **MultiCtl** | Events In, CV In, Events Out | Value · Gain · Quantization. The curve is drawn in the rack. |
-| **Ctl2Note** | Events In, CV In, Events Out | Pitch · First Note · Range Notes · Trigger Mode 0–2 |
+| **Ctl2Note** | Events In, CV In, Events Out | Pitch · First Note · Range Notes · Trigger Mode: Retrigger (a new note whenever the note changes), Legato (the held note changes pitch), Gate (as Retrigger, and a note-off when the control returns to 0) |
 | **Pitch2Ctl** | Events In/Out, CV Out | First Note · Semitones · Out Min · Out Max |
-| **Velocity2Ctl** | Events In/Out, CV Out | Out Min · Out Max · NoteOff Action 0–2 (keep, go to Min, go to 0) |
+| **Velocity2Ctl** | Events In/Out, CV Out | Out Min · Out Max · NoteOff Action: Keep, Go To Min, Go To 0 |
 | **Sound2Ctl** | Audio In, CV Out, Events Out | Gain · Smooth · Out Min · Out Max · Rate |
-| **Pitch Detector** | Audio In, Events Out | Algorithm 0/1 (autocorrelation, zero-crossing) · Threshold · Min/Max Freq · Hysteresis |
-| **Feedback** | Input, Output | Volume · Channels 0/1 (stereo, mono) · Fixed Delay (frames). Use this to build intentional feedback loops. |
-| **MetaModule** | Audio In, Events In, Audio Out | BPM Sync · Play Patterns 0–2 (off, follow parent, note-triggered) · Input Module · Macro 1–8. Contains a whole sub-project. |
+| **Pitch Detector** | Audio In, Events Out | Algorithm: Autocorrelation, Zero-Crossing · Threshold · Min/Max Freq · Hysteresis |
+| **Feedback** | Input, Output | Volume · Channels: Stereo, Mono · Fixed Delay (frames). Use this to build intentional feedback loops. |
+| **MetaModule** | Audio In, Events In, Audio Out | BPM Sync Off/On (On) · Play Patterns (Follow Parent): Off, Follow Parent, Note Triggered (a note starts the child song from its first line; any note-off stops it) · Input Module · Macro 1–8. Contains a whole sub-project. |
 
 **Project limits**
 - 1,024 modules; 8,192 cables; 256 patterns of up to 64 tracks × 4,096 lines; 4,096 clips; 256 MIDI mappings.
@@ -1254,7 +1254,7 @@ These are known limitations of the current build. Please report behavior that *d
 | 12 | Transport | The MIDI source list refreshes only at startup and when the device dropdown is opened |
 | 13 | Patchbay | Cable gain can't be edited; Duplicate doesn't copy cables, samples or curves |
 | 14 | Rack | Header toggle order is M B S; the patchbay badges are M S B |
-| 15 | Rack | Choice parameters show numbers, not names (see Appendix B) |
+| 15 | Modules | ADSR *One-Shot* is silent (the release starts before the attack has risen), and *Inverted* rests at 0 instead of 1 when no note plays. SpectraVoice *Profile* and *Bandwidth* change the sound only when the module is prepared again, for example after reopening the project |
 | 16 | Rack | Envelope editor: moving the sustain marker has no effect on parameters |
 | 17 | Rack | MetaModule inner edits are not undoable |
 | 18 | Sampler | AIFF is offered in the import dialog but can't be decoded; drag-and-drop isn't implemented |

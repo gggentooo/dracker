@@ -52,7 +52,8 @@ struct Feedback {
     @Param("Volume", 0.0f, 2.0f, 0.5f, "", ParamScale.linear)
     float volume = 0.5f;
 
-    @Param("Channels", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Channels", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete,
+        ["Stereo", "Mono"])
     float channels = 0.0f;
 
     @Param("Fixed Delay", 64.0f, 4096.0f, 64.0f, "frames", ParamScale.discrete)

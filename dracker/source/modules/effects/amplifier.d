@@ -56,7 +56,8 @@ struct Amplifier {
     @Param("Stereo Width", 0.0f, 2.0f, 1.0f, "", ParamScale.linear)
     float stereoWidth = 1.0f;
 
-    @Param("Invert", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Invert", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete,
+        ["Off", "On"])
     float invert = 0.0f;
 
     private ParamSmoother volSmoother_;

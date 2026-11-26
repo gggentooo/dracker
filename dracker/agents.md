@@ -58,9 +58,9 @@ All major changes to the codebase must be recorded in [docs/changelog.md](./docs
 For any changes or decisions that may have significant impact on the codebase, the human owner of the codebase must be consulted for approval before the change is made. This is to ensure that the change is in line with the project's goals and vision.
 
 ### Rule 6 — The Task List Is Changed Only Through `tools/todo.py`
-The task list has one source, [`docs/todo.json`](./docs/todo.json). [`docs/todo.md`](./docs/todo.md) is **generated** from it by [`tools/todo.py`](./tools/todo.py) so people can read it.
+The task list has one source, [`docs/todo.json`](./docs/todo.json). [`docs/todo.md`](./docs/todo.md) (the list) and [`docs/todo-guides.md`](./docs/todo-guides.md) (the step-by-step guides of the open tasks) are **generated** from it by [`tools/todo.py`](./tools/todo.py) so people can read them.
 
-- **Editing `docs/todo.md` directly is strictly prohibited, for agents and for humans.** A hand edit is overwritten at the next run, and `python3 tools/todo.py check` (also run in CI) fails when the file does not match `docs/todo.json`.
+- **Editing `docs/todo.md` or `docs/todo-guides.md` directly is strictly prohibited, for agents and for humans.** A hand edit is overwritten at the next run, and `python3 tools/todo.py check` (also run in CI) fails when a file does not match `docs/todo.json`.
 - **Change `docs/todo.json` only with the script.** Do not open it in an editor and do not write a one-off script to patch it. If the script cannot do what you need, add a command to `tools/todo.py` (and say so in `docs/changelog.md`).
 - Every changing command needs `--author` with your full model or person name. The script validates the list, writes both files, computes the stages from each task's *Needs*, gives new tasks the next free id, and adds a changelog entry to the list with the time read from the clock. You never compute a stage, pick an id, or type a timestamp.
 - Decision tasks are closed only on the owner's word (Rule 5); `done` asks for `--how` with what the owner said.
@@ -71,6 +71,10 @@ Run from inside `dracker/`:
 python3 tools/todo.py help                     # all commands; `<command> --help` for the options of one
 python3 tools/todo.py list --stage 0           # what can be started now (also --open, --done, --area)
 python3 tools/todo.py show T72 T76             # tasks in full
+python3 tools/todo.py brief T76                # everything needed to build one task: the task, the finished tasks it
+                                               # rests on (with their full decisions), its guide, the finishing steps
+python3 tools/todo.py list --no-guide          # open tasks that have no guide yet
+python3 tools/todo.py guide T76 --author "<name>" --text @/tmp/t76-guide.md    # set a guide (no --text: print it)
 
 python3 tools/todo.py add --author "<name>" --area Compose --title "Short title" --type Build \
     --files '`source/compose/x.d` (new)' --task "What needs to be done." --needs T74,T76
@@ -86,6 +90,8 @@ python3 tools/todo.py feature set F4 --author "<name>" --replace "old text" "new
 python3 tools/todo.py log --author "<name>" --title "T72 done; T92 added" --note "Anything worth adding."
 python3 tools/todo.py check                    # validate, and confirm docs/todo.md matches docs/todo.json
 ```
+
+**Guides.** A task may carry a guide: detailed instructions for whoever builds it, written so that a small local model can follow them (`qwen-inkling.md`). Start every Build task from `python3 tools/todo.py brief <id>`. A guide is written by a capable model **after reading the code**, when the tasks it needs are built, so that it can name real functions; it is Markdown without headings and uses these bold labels in order: **Goal**, **Read first** (files, functions, line numbers), **Existing code to use** (exact signatures copied from the source, with what each returns on failure), **Write** (new types and functions), **Steps** (each small enough to compile and test on its own), **Acceptance table** (input, working, expected; values worked out from the code), **Tests**, **Pitfalls**, **Do not**, **Done when**. If the code no longer matches a guide, the builder stops and reports; the guide is then corrected with the `guide` command. A task that is too large for one sitting is split: narrow it with `set` and `add` the rest as new tasks that need it.
 
 A text option takes the text itself, `@file` to read a file, or `-` to read standard input (use these for long or multi-line text). Inside a text, a nested bullet is a new line that starts with two spaces (`  - text`). Commands by the same author within 60 minutes share one changelog entry; `log --title` names it.
 
@@ -136,8 +142,8 @@ A text option takes the text itself, `@file` to read a file, or `-` to read stan
 | `resources/` | `fonts/`, `presets/` (bundled `.msym` presets matching `app.factory_presets`) | Read-only app resources |
 | `packaging/macos/`, `ci/` | `Info.plist`, `entitlements.plist`, `bundle_macos.sh`, `macos.yml` | Release bundling & CI automation |
 | `tests/` | `audio_harness.d`, `rt_malloc_trap.d`, `unit/`, `golden/`, `fuzz/` | Offline CI & local verification |
-| `docs/` | `manual.md`, `todo.json` (task list, the source), `todo.md` (generated from it; never edited), `changelog.md` | User manual, task tracker (Rule 6), mandatory change log (Rule 4) |
-| `tools/` | `todo.py` (Python 3, standard library only) | Maintains `docs/todo.json` and writes `docs/todo.md`; a maintenance tool, not part of the program (Rule 3 covers the program) |
+| `docs/` | `manual.md`, `todo.json` (task list and task guides, the source), `todo.md` and `todo-guides.md` (generated from it; never edited), `changelog.md` | User manual, task tracker (Rule 6), mandatory change log (Rule 4) |
+| `tools/` | `todo.py` (Python 3, standard library only) | Maintains `docs/todo.json` and writes `docs/todo.md` and `docs/todo-guides.md`; a maintenance tool, not part of the program (Rule 3 covers the program) |
 
 ---
 

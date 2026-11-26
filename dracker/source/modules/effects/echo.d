@@ -56,7 +56,8 @@ struct Echo {
     @Param("Delay Time", 1.0f, 2000.0f, 300.0f, "ms", ParamScale.logarithmic)
     float delayTime = 300.0f;
 
-    @Param("Stereo Mode", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Stereo Mode", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete,
+        ["Stereo", "Ping-Pong"])
     float stereoMode = 0.0f;
 
     @Param("Damping", 200.0f, 20_000.0f, 6000.0f, "Hz", ParamScale.logarithmic)

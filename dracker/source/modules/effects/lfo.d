@@ -46,13 +46,15 @@ struct LfoMod {
         PortDescriptor("cvOut", "CV Out", PortKind.cvControl, PortDirection.output)
     ];
 
-    @Param("Waveform", 0.0f, 4.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Waveform", 0.0f, 4.0f, 0.0f, "", ParamScale.discrete,
+        ["Sine", "Triangle", "Saw", "Square", "S&H Random"])
     float waveform = 0.0f;
 
     @Param("Frequency", 0.01f, 100.0f, 2.0f, "Hz", ParamScale.logarithmic)
     float freq = 2.0f;
 
-    @Param("Sync Unit", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Sync Unit", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete,
+        ["Hz", "Beats/Cycle"])
     float syncUnit = 0.0f;
 
     @Param("Amplitude", 0.0f, 1.0f, 1.0f, "", ParamScale.linear)

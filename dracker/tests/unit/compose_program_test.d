@@ -212,7 +212,7 @@ version (unittest) {
             UsageCase(["catlog"], "unknown subcommand 'catlog'", "catalog", ["catalog"]),
             UsageCase(["rn", "a.dcs"], "unknown subcommand 'rn'", "run", ["run", "a.dcs"]),
             UsageCase(["frobnicate"], "unknown subcommand 'frobnicate'", "", []),
-            UsageCase(["HELP"], "unknown subcommand 'HELP'", "", []),
+            UsageCase(["HELP"], "unknown subcommand 'HELP'", "help", ["help"]),
             UsageCase(["help", "rn"], "help does not know the subcommand 'rn'", "run", ["help", "run"]),
             UsageCase(["help", "nope"], "help does not know the subcommand 'nope'", "", []),
             UsageCase(["run", "--jsn"], "unknown option '--jsn'", "--json", ["run", "a.dcs", "--json"]),
@@ -234,7 +234,7 @@ version (unittest) {
                 suggested++;
             }
         }
-        assert(suggested == 6);
+        assert(suggested == 7);
         ParsedCommandLine jsonKept = parseCommandLine(["--json", "run"]);
         assert(!jsonKept.ok && jsonKept.command.json && jsonKept.command.subcommand == Subcommand.run);
         ParsedCommandLine jsonKept2 = parseCommandLine(["--json", "render", "x.msv"]);

@@ -42,7 +42,8 @@ struct Distortion {
         PortDescriptor("out", "Output", PortKind.audioStereo, PortDirection.output)
     ];
 
-    @Param("Mode", 0.0f, 3.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Mode", 0.0f, 3.0f, 0.0f, "", ParamScale.discrete,
+        ["Soft Clip", "Hard Clip", "Sine Fold", "Asymmetric"])
     float mode = 0.0f;
 
     @Param("Drive", 1.0f, 50.0f, 2.0f, "x", ParamScale.logarithmic)

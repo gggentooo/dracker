@@ -10,6 +10,64 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
 
 ---
 
+## [2026-11-26 17:17:54 KST]
+- **Author:** Claude Fable 5.2
+- **Task:** Task guides ("verbose todo"): script, guides, rules; large tasks split; Script tab tasks; T95 and T115 added
+- **Affected Files:**
+  - `tools/todo.py`
+  - `docs/todo.json`, `docs/todo.md`, `docs/todo-guides.md` (new, generated)
+  - `agents.md`, `qwen-inkling.md`
+  - `docs/changelog.md`
+- **Description:**
+  - **`tools/todo.py`.** A task can carry a **guide**: step-by-step instructions for whoever builds it, meant for the local models. New commands: `guide <id>` (print, `--text @file` to set, `--clear`), `brief <id>` (the task, the finished tasks it rests on with their full decisions, the guide, and the finishing steps with the task's own `done` command), and `list --no-guide`. `list` shows which tasks have a guide. The guides of the open tasks are written to the new generated file `docs/todo-guides.md`, which `check` verifies like `docs/todo.md`. A guide may not contain headings or `---` lines outside code blocks.
+  - **Rules.** `agents.md` Rule 6 now covers `docs/todo-guides.md`, the new commands, what a guide contains (Goal, Read first, Existing code to use, Write, Steps, Acceptance table, Tests, Pitfalls, Do not, Done when), that a guide is written by a capable model after reading the code and only when the tasks it needs are built, and how to split a task. `qwen-inkling.md`: every task starts from `brief`; a missing guide, a "do not start yet", a signature that no longer matches or an acceptance row that cannot pass means stop and tell the owner; the local models do not write or change guides.
+  - **Tasks split** (no code changed): T76 → T96 (wires); T77 → T97 (notes), T98 (arrangement); T78 → T99; T82 → T100; T83 → T101, T102, T103; T84 (now the note notation only, so it can start) → T104, T105, T106; T87 → T107. The stages follow from the new *Needs*.
+  - **Script tab** (owner decision T108, 2026-11-26: a fourth tab in the pattern editor; Apply clears the input on success, keeps it on an error and then applies nothing; this replaces "no human-oriented mode"). Tasks: T109 (decision with proposals: project access, file commands, undo, errors), T110 (multi-line text editor), T111 (replace the document as one undo step), T112 (the view), T113 (applying), T114 (end-to-end check and manual).
+  - **Other tasks:** T95 (selecting a clip in the timeline opens its pattern), T115 (SpectraVoice crossfade). T94 was rewritten: the guide's investigation found that every SpectraVoice always plays Organ at Bandwidth 0.35, also after reopening a project, so the bundled `Strings` preset plays Organ.
+  - **Owner decisions recorded** (2026-11-26): script comments start with `//` instead of `#`, which is the sharp sign (T67 and T83 changed); a module is shown in the app under its handle; SpectraVoice gets prebuilt tables and ignores old stored ones; the smaller proposals of the guides stand as proposed.
+  - **Guides written** for the eight Build tasks that can start now: T75, T76, T84, T93, T94, T95, T110, T111. Each was drafted by a helper agent that read the code, and for T76, T84 (lengths), T93, T94, T95, T110 and T111 built a prototype outside the repository to get the acceptance values; the guides were then adjusted to the owner's decisions. Two task texts were corrected from what the guides found: `tests/unit/widgets_test.d` and `tests/unit/session_test.d` do not exist, and `TextField` has no clipboard or selection.
+  - **One deviation to confirm:** the owner accepted "ADSR Inverted rests at 1 on its CV output and at 0 on its audio output", but the audio output carries the same envelope level, so resting at 0 would bring back the jump T93 removes. The T93 guide keeps both at 1 and tells the builder to report it as an open point.
+- **Verification:**
+  - `python3 tools/todo.py check` → `ok: 115 tasks (37 open, 78 done), 4 features, 24 changelog entries`
+  - `python3 tools/todo.py brief T76` → prints the task, T74 and T92, the guide and the finishing steps; `brief T75` before its guide existed printed "No guide has been written for this task yet"
+  - Spot check of guide references against the source: `session.d:4188` `activateLoadedProject`, `session.d:3097` `doLoadSample`, `adsr_mod.d:119-122`, `gui_test.d:314` `Harness`, `timeline_view.d:516`, `music_theory.d:234` `noteName`, `project_format.d:66` and `:732` → all as the guides say
+  - Not run: the D test suites (no D source changed in this entry). The prototypes behind the guides were built by the helper agents in scratch folders and are not part of the repository; their results were not re-run here.
+
+---
+
+## [2026-11-26 14:59:48 KST]
+- **Author:** Claude Opus 5.5
+- **Task:** T91 (option names for choice parameters) and T92 (module writer: defects found in review); T93 and T94 added
+- **Affected Files:**
+  - `source/modules/output.d`; `source/modules/synths/{input,vorbis_player,kicker,sampler,fm_synth,spectravoice}.d`; `source/modules/effects/{amplifier,filter_pro,distortion,delay,echo,reverb,compressor,waveshaper,vocal_filter,fft_fx,loop_fx,modulator,lfo}.d`; `source/modules/control/{adsr_mod,glide,multisynth,velocity2ctl,pitch_detector,feedback,metamodule,ctl2note}.d`
+  - `source/compose/names.d` (new), `source/compose/module_writer.d`, `source/compose_main.d`
+  - `tests/unit/param_options_test.d` (new), `tests/unit/compose_module_test.d`, `tests/unit/compose_program_test.d`, `tests/unit/views_param_rack_test.d`
+  - `docs/manual.md`, `docs/todo.json`, `docs/todo.md`, `docs/changelog.md`
+- **Description:**
+  - **T91.** 35 choice parameters in 28 modules now name their values in `@Param` (with Analog Generator *Waveform*, 36 in all); the 14 count-valued discrete parameters stay numbers. The meaning of every value was checked against each module's code first. Four proposed names did not describe the code, and the owner chose code-accurate ones: Delay *Inverse* "Swap Wet L/R" (only the wet signal swaps), Sampler *Loop Mode* "One-Shot" (plays once, not "off"), LFO *Waveform* "S&H Random", FM Synth *Algorithm* "Carrier + Stacks". Kicker *Waveform* 2 is "Square" (a fixed 50% pulse). `tests/unit/param_options_test.d` checks every registered type: each discrete parameter has one name per value or is a listed count; names are distinct without case and spaces, have no `=` or quotes and do not read as numbers; the approved names, the rack's labels and the module writer's `setParamText` / `textOf` for every name. The rack now shows names (WaveShaper *Oversample* 1x, 2x, 4x; the rack test was updated). Manual: §7.2 QA note replaced, Appendix B lists the names (and the behaviours the check found: Loop ping-pong starts backwards, MetaModule note-triggered stops on any note-off, SpectraVoice Profile applies on prepare), Appendix C row 15 now lists the two module bugs below.
+  - **Found on the way (new tasks):** T93, ADSR *One-Shot* is silent and *Inverted* rests at 0; T94, SpectraVoice *Profile* and *Bandwidth* do nothing while playing.
+  - **T92.** In `ModuleWriter`:
+    - a copy constructor makes copies independent (they shared parameter values);
+    - module names follow `app.instrument_library.isValidPresetName` and must be valid UTF-8; refusals carry `suggestedName()` (cut at a character boundary, `/`, `\` and `:` become `-`, control characters, bad bytes and leading dots dropped); names from a preset or a file are repaired the same way, falling back to the type's display name; `invalidName` now reads "did you mean";
+    - `integerText()` no longer casts values of 10^15 or more to `long` (1e30 was reported as 9223372036854775807);
+    - a number too large for a float (`1e40`) is out of range with the nearest value instead of "not a number";
+    - `textOf()` writes a number when an option name reads as one, so its text always sets the same value again;
+    - a preset with an empty preset name keeps the module's own name, as `StudioSession` does (the test asserted the opposite);
+    - a loaded value outside its parameter's range, or a discrete value between steps, refuses the preset (`mismatchedPreset`), since the writer never clips;
+    - `nearestTypeName()` returns the nearer of type id and display name (`Revrb` now suggests `Reverb`).
+  - Name matching moved to `source/compose/names.d`, used by `module_writer.d` and `compose_main.d` (whose copy compared case-sensitively; `HELP` now suggests `help`). New public `findModuleType()` takes the list of types, so the "matches more than one module type" path is tested with fake types. `writeFailed` is tested through `writePresetFile()`. Weak assertions now check exact reasons, kinds and suggestions; the random sweep checks that refusals leave the writer unchanged and that every suggestion is accepted; the temporary folder name includes the process id.
+- **Verification:**
+  - `dub test --compiler=ldc2 --config=headless` → `41 modules passed unittests`
+  - `dub test --compiler=ldc2 --config=app` → `4 modules passed unittests`
+  - `DFLAGS="-w" dub build --compiler=ldc2 --config=compose --force` and `--config=app --build=debug --force` → linked, no warnings
+  - `ldc2 -w -unittest -c -o- <headless import paths and versions>` on the 28 module files and the 7 compose and test files → no output, exit 0
+  - `grep -n '//'` on the new and changed compose and test files → no matches
+  - Mutation check (a single-module build of `compose_module_test.d`): each of the nine code fixes put back one at a time makes a test fail (lines 918, 951, 541, 998, 1008, 1027, 804, 1066, 219); removing Echo's names makes `param_options_test.d:167` fail.
+  - `python3 tools/todo.py check` → `ok: 94 tasks (17 open, 77 done), 4 features, 23 changelog entries`
+  - Not run: GUI self-tests (the rack change is covered by the headless rack test).
+
+---
+
 ## [2026-11-26 14:39:58 KST]
 - **Author:** Claude Fable 5.2
 - **Task:** Review of GLM-5.4's T74 and unfinished T72; T72 finished; task list moved to `docs/todo.json` and `tools/todo.py`

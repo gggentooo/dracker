@@ -54,7 +54,8 @@ struct VocalFilter {
     @Param("Bandwidth", 0.2f, 3.0f, 1.0f, "x", ParamScale.logarithmic)
     float bandwidth = 1.0f;
 
-    @Param("Voice Type", 0.0f, 3.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Voice Type", 0.0f, 3.0f, 0.0f, "", ParamScale.discrete,
+        ["Soprano", "Alto", "Tenor", "Bass"])
     float voiceType = 0.0f;
 
     @Param("Mix", 0.0f, 1.0f, 1.0f, "", ParamScale.linear)

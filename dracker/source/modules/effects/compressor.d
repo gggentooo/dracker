@@ -60,7 +60,8 @@ struct Compressor {
     @Param("Makeup", -12.0f, 24.0f, 0.0f, "dB", ParamScale.linear)
     float makeupDb = 0.0f;
 
-    @Param("Mode", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Mode", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete,
+        ["Peak", "RMS"])
     float mode = 0.0f;
 
     private ParamSmoother makeupSmoother_;

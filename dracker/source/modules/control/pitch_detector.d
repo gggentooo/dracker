@@ -47,7 +47,8 @@ struct PitchDetector {
         PortDescriptor("out", "Events Out", PortKind.event, PortDirection.output)
     ];
 
-    @Param("Algorithm", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Algorithm", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete,
+        ["Autocorrelation", "Zero-Crossing"])
     float algorithm = 0.0f;
 
     @Param("Threshold", 0.001f, 0.5f, 0.02f, "", ParamScale.logarithmic)

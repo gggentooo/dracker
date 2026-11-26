@@ -52,7 +52,8 @@ struct LoopFx {
     @Param("Length", 1.0f, 32.0f, 4.0f, "ticks", ParamScale.discrete)
     float lengthTicks = 4.0f;
 
-    @Param("Mode", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Mode", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete,
+        ["Forward", "Ping-Pong"])
     float mode = 0.0f;
 
     @Param("Mix", 0.0f, 1.0f, 1.0f, "", ParamScale.linear)

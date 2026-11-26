@@ -43,7 +43,8 @@ struct Kicker {
         PortDescriptor("out", "Audio Out", PortKind.audioStereo, PortDirection.output)
     ];
 
-    @Param("Waveform", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Waveform", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete,
+        ["Sine", "Triangle", "Square"])
     float waveform = 0.0f;
 
     @Param("Pitch Start", 40.0f, 2000.0f, 220.0f, "Hz", ParamScale.logarithmic)

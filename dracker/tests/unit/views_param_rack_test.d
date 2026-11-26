@@ -630,7 +630,8 @@ version (unittest) {
         assert(cast(RackSlider) view.paramControl(0) !is null);
         assert((cast(RackSlider) view.paramControl(0)).range.usesLog());
         assert(cast(Toggle) view.paramControl(2) !is null);
-        assert((cast(Dropdown) view.paramControl(3)).items == ["0", "1", "2"]);
+        assert((cast(Dropdown) view.paramControl(3)).items == ["1x", "2x", "4x"]);
+        assert(view.paramValueText(3) == "1x" && view.paramValueText(2) == "On");
         assert(view.paramValueText(0) == "1.000 x");
         assert(view.hasCurveEditor() && view.editorKind() == RackEditorKind.waveshaper);
         foreach (i; 0 .. 4) {
@@ -716,8 +717,8 @@ version (unittest) {
         assert(os.isOpen());
         rig.click(os.popup().itemRect(2).center());
         assert(!os.isOpen());
-        assert(near(docParam(s, ws, 3), 2.0f) && view.paramValueText(3) == "2");
-        assert(s.undo() && view.paramValueText(3) == "0" && (cast(Dropdown) view.paramControl(3)).selectedIndex == 0);
+        assert(near(docParam(s, ws, 3), 2.0f) && view.paramValueText(3) == "4x");
+        assert(s.undo() && view.paramValueText(3) == "1x" && (cast(Dropdown) view.paramControl(3)).selectedIndex == 0);
 
         immutable RectF mixRow = view.paramRowRect(1);
         s.history().breakCoalesce();

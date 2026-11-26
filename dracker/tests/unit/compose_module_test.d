@@ -30,7 +30,7 @@
  *   - version(unittest) suites
  *
  * See_Also:
- *   docs/todo.md (T70, T74), source/compose/module_writer.d
+ *   docs/todo.md (T70, T74, T91, T92), source/compose/module_writer.d
  */
 module tests.unit.compose_module_test;
 
@@ -39,6 +39,7 @@ version (unittest) {
     import std.conv : to;
     import std.file : exists, mkdirRecurse, rmdirRecurse, tempDir;
     import std.path : buildPath;
+    import std.process : thisProcessID;
 
     import app.factory_presets : FACTORY_PRESETS, factoryModule, findFactoryPreset;
     import app.instrument_library : InstrumentLibrary, bundledPresetDirectories;
@@ -213,7 +214,9 @@ version (unittest) {
         ModuleWriterResult far = ModuleWriter.fromType("zzz");
         assert(!far.ok && far.problem.suggestion == "" && far.problem.reason == "unknown module type 'zzz'");
         ModuleWriterResult empty = ModuleWriter.fromType("");
-        assert(!empty.ok && empty.problem.suggestion == "" && empty.problem.reason.length > 0);
+        assert(!empty.ok && empty.problem.suggestion == "" && empty.problem.reason == "unknown module type ''");
+        ModuleWriterResult revrb = ModuleWriter.fromType("Revrb");
+        assert(!revrb.ok && revrb.problem.suggestion == "Reverb", revrb.problem.suggestion);
         ModuleWriterResult blank = ModuleWriter.fromType("   ");
         assert(!blank.ok && blank.problem.subject == "");
     }
@@ -368,7 +371,8 @@ version (unittest) {
                 ".", "e5", "1e", "1e5x", "--5", "1.2.3", "5.f", "+.", "1e+", "0x1p3"]) {
             immutable ModuleEditResult r = w.setParamText("Cutoff", bad);
             assert(!r.ok && r.problem.kind == ModuleProblemKind.notANumber, "'" ~ bad ~ "' " ~ r.problem.text());
-            assert(r.problem.reason.length > 0);
+            assert(r.problem.reason == "the value of 'Cutoff' must be a number from 40 to 18000 Hz; '" ~ bad
+                ~ "' is not a number", r.problem.reason);
         }
         assert(w.valueOf("Cutoff").value == 900.0f);
         assert(w.paramValues == [2.0f, 1.0f, 0.15f, 900.0f, 0.5f, 0.005f, 0.2f, 0.7f, 0.25f]);
@@ -452,12 +456,15 @@ version (unittest) {
         assert(w.valueOf("Unison").value == 2.0f);
 
         ModuleWriter fp = writerOf("fx.filter_pro");
-        assert(fp.setParamText("Mode", "3").ok && fp.textOf("Mode").text == "3");
+        assert(fp.setParamText("Mode", "3").ok && fp.textOf("Mode").text == "Notch");
         assert(fp.setParamText("Mode", "7").ok && fp.setParamText("Mode", "0").ok);
         immutable ModuleEditResult filter = fp.setParamText("Mode", "zzz");
-        assert(!filter.ok && filter.problem.reason.length > 0);
+        assert(!filter.ok && filter.problem.kind == ModuleProblemKind.unknownOption);
+        assert(filter.problem.reason == "unknown value 'zzz' for 'Mode'" && filter.problem.suggestion == "");
+        immutable ModuleEditResult shelf = fp.setParamText("Mode", "lowshelf");
+        assert(shelf.ok && fp.valueOf("Mode").value == 6.0f && fp.textOf("Mode").text == "Low Shelf");
         immutable ModuleEditResult filterNine = fp.setParamText("Mode", "9");
-        assert(!filterNine.ok && filterNine.problem.suggestion == "7");
+        assert(!filterNine.ok && filterNine.problem.suggestion == "High Shelf");
         assert(fp.setParamText("Slope", "4").ok && fp.textOf("Slope").text == "4");
     }
 
@@ -531,7 +538,9 @@ version (unittest) {
         assert(empty.problem.text == "a module name cannot be empty");
         assert(!w.setName("   ").ok && w.name == "Lead");
         immutable ModuleEditResult control = w.setName("Lead\n2");
-        assert(!control.ok && control.problem.text == "a module name cannot contain control characters");
+        assert(!control.ok && control.problem.text
+            == "a module name cannot contain '/', '\\', ':' or control characters; did you mean 'Lead2'?",
+            control.problem.text);
         assert(!w.setName("Lead\t2").ok && w.name == "Lead");
         assert(w.setName(times('x', 64)).ok && w.name.length == 64);
         immutable ModuleEditResult tooLong = w.setName(times('x', 65));
@@ -669,7 +678,7 @@ version (unittest) {
     }
 
     unittest {
-        immutable string root = buildPath(tempDir(), "dracker-compose-module-test");
+        immutable string root = buildPath(tempDir(), "dracker-compose-module-test-" ~ to!string(thisProcessID()));
         scope (failure) {
             rmdirRecurse(root);
         }
@@ -745,7 +754,7 @@ version (unittest) {
         assert(!haunted.ok && !haunted.writer.loaded());
         assert(haunted.problem.kind == ModuleProblemKind.unknownModuleType);
         assert(haunted.problem.subject == "synth.ghost");
-        assert(haunted.problem.suggestion.length > 0);
+        assert(haunted.problem.suggestion == "synth.input", haunted.problem.suggestion);
         assert(writerOf(haunted.problem.suggestion).typeId == haunted.problem.suggestion);
 
         LoadedPreset odd;
@@ -792,8 +801,12 @@ version (unittest) {
         ubyte[] bareBytes;
         assert(serializePreset(bare, bareBytes, err), err);
         ModuleWriterResult named = ModuleWriter.fromPresetBytes(bareBytes, "Fallback");
-        assert(named.ok && named.writer.name == "Fallback");
-        assert(named.writer.loadedPreset().presetName == "Fallback");
+        assert(named.ok && named.writer.name == "Inside", named.writer.name);
+        assert(named.writer.loadedPreset().presetName == "Inside");
+        bare.mod.name = "";
+        assert(serializePreset(bare, bareBytes, err), err);
+        ModuleWriterResult unnamed = ModuleWriter.fromPresetBytes(bareBytes, "Fallback");
+        assert(unnamed.ok && unnamed.writer.name == "Fallback");
 
         LoadedProject child;
         child.title = "Child";
@@ -832,7 +845,7 @@ version (unittest) {
     }
 
     unittest {
-        immutable string ALPHABET = "019.eE+-abcXYZ_ /%\t'Saw Cutof";
+        immutable string ALPHABET = "019.eE+-abcXYZ_ /%\t'Saw Cutof:\xC3\xA9\xFF";
         InstrumentLibrary library = new InstrumentLibrary(bundledPresetDirectories(), "");
         uint state = 777u;
         ModuleWriter w = writerOf("synth.analog_gen");
@@ -843,25 +856,222 @@ version (unittest) {
             foreach (k; 0 .. length) {
                 text ~= ALPHABET[next(state) % ALPHABET.length];
             }
+            immutable float[] before = w.paramValues.dup;
+            immutable string nameBefore = w.name;
             immutable ModuleEditResult value = w.setParamText("Waveform", text);
-            immutable ModuleEditResult number = w.setParamText("Cutoff", text);
-            immutable ModuleEditResult name = w.setParamText(text, "1");
-            ModuleWriterResult type = ModuleWriter.fromType(text);
-            ModuleWriterResult preset = ModuleWriter.fromPreset(library, text);
-            immutable ModuleEditResult renamed = w.setName(text);
-            assert(value.ok || value.problem.reason.length > 0);
-            assert(number.ok || number.problem.reason.length > 0);
-            assert(name.ok || name.problem.reason.length > 0);
-            assert(type.ok || type.problem.reason.length > 0);
-            assert(preset.ok || preset.problem.reason.length > 0);
-            assert(renamed.ok || renamed.problem.reason.length > 0);
-            if (value.ok) {
+            if (!value.ok) {
+                assert(w.paramValues == before);
+                assert(value.problem.kind == ModuleProblemKind.notANumber
+                    || value.problem.kind == ModuleProblemKind.outOfRange
+                    || value.problem.kind == ModuleProblemKind.notAWholeNumber
+                    || value.problem.kind == ModuleProblemKind.unknownOption, value.problem.text());
+                if (value.problem.suggestion.length > 0) {
+                    ModuleWriter probe = w;
+                    assert(probe.setParamText("Waveform", value.problem.suggestion).ok, value.problem.suggestion);
+                }
+            } else {
                 accepted++;
+                assert(w.setParamText("Waveform", w.textOf("Waveform").text).ok);
+            }
+            immutable ModuleEditResult number = w.setParamText("Cutoff", text);
+            if (!number.ok) {
+                assert(number.problem.kind == ModuleProblemKind.notANumber
+                    || number.problem.kind == ModuleProblemKind.outOfRange, number.problem.text());
+                if (number.problem.suggestion.length > 0) {
+                    ModuleWriter probe = w;
+                    assert(probe.setParamText("Cutoff", number.problem.suggestion).ok, number.problem.suggestion);
+                }
+            }
+            immutable ModuleEditResult name = w.setParamText(text, "1");
+            if (!name.ok && name.problem.kind == ModuleProblemKind.unknownParameter && name.problem.suggestion.length > 0) {
+                assert(w.valueOf(name.problem.suggestion).ok, name.problem.suggestion);
+            }
+            ModuleWriterResult type = ModuleWriter.fromType(text);
+            if (!type.ok) {
+                assert(type.problem.kind == ModuleProblemKind.unknownModuleType);
+                if (type.problem.suggestion.length > 0) {
+                    assert(ModuleWriter.fromType(type.problem.suggestion).ok, type.problem.suggestion);
+                }
+            }
+            ModuleWriterResult preset = ModuleWriter.fromPreset(library, text);
+            assert(preset.ok || preset.problem.kind == ModuleProblemKind.unknownPreset
+                || preset.problem.kind == ModuleProblemKind.ambiguousPreset, preset.problem.text());
+            immutable ModuleEditResult renamed = w.setName(text);
+            if (!renamed.ok) {
+                assert(renamed.problem.kind == ModuleProblemKind.invalidName && w.name == nameBefore);
+                if (renamed.problem.suggestion.length > 0) {
+                    ModuleWriter probe = w;
+                    assert(probe.setName(renamed.problem.suggestion).ok, renamed.problem.suggestion);
+                }
             }
         }
         assert(accepted > 0);
         assert(w.loaded() && w.paramCount == 9);
         assert(w.valueOf("Cutoff").value >= 40.0f && w.valueOf("Cutoff").value <= 18000.0f);
         assert(w.setParamText("Waveform", "Saw").ok && w.setParamText("Cutoff", "900").ok);
+    }
+
+    unittest {
+        ModuleWriter original = writerOf("synth.analog_gen");
+        ModuleWriter copy = original;
+        assert(copy.setParamValue("Cutoff", 900.0f).ok && copy.setName("Copy").ok);
+        assert(original.valueOf("Cutoff").value == 4000.0f && original.name == "Analog Generator");
+        assert(copy.valueOf("Cutoff").value == 900.0f && copy.name == "Copy");
+        ModuleWriterResult made = ModuleWriter.fromType("fx.amplifier");
+        ModuleWriter taken = made.writer;
+        assert(taken.setParamValue("Volume", 2.0f).ok);
+        assert(made.writer.valueOf("Volume").value != 2.0f);
+        const ModuleWriter frozen = original;
+        ModuleWriter thawed = frozen;
+        assert(thawed.setParamValue("Cutoff", 100.0f).ok && frozen.valueOf("Cutoff").value == 4000.0f);
+
+        immutable ubyte[] EXTRA = [7, 8, 9];
+        LoadedPreset withExtra = writerOf("fx.amplifier").loadedPreset();
+        withExtra.presetName = "Extra";
+        withExtra.mod.extraBlob = EXTRA.dup;
+        ubyte[] bytes;
+        string err;
+        assert(serializePreset(withExtra, bytes, err), err);
+        ModuleWriter first = ModuleWriter.fromPresetBytes(bytes).writer;
+        ModuleWriter second = first;
+        assert(second.paramValues.ptr !is first.paramValues.ptr);
+        assert(second.savedModule().extraBlob == EXTRA && first.savedModule().extraBlob == EXTRA);
+    }
+
+    unittest {
+        ModuleWriter w = writerOf("fx.amplifier");
+        string hangul = "";
+        foreach (k; 0 .. 22) {
+            hangul ~= "\uAC00";
+        }
+        assert(hangul.length == 66);
+        immutable ModuleEditResult tooLong = w.setName(hangul);
+        assert(!tooLong.ok && tooLong.problem.kind == ModuleProblemKind.invalidName);
+        assert(tooLong.problem.reason == "a module name has at most 64 bytes");
+        assert(tooLong.problem.suggestion == hangul[0 .. 63], tooLong.problem.suggestion);
+        assert(w.setName(tooLong.problem.suggestion).ok && w.name.length == 63);
+
+        immutable string[2][] CASES = [
+            ["Keys/Lead", "Keys-Lead"], [".hidden", "hidden"], ["a:b", "a-b"], ["a\\b", "a-b"],
+            ["a\tb", "ab"], ["ab\xFFcd", "abcd"], ["...", ""], ["\x01\x02", ""], ["/", "-"]
+        ];
+        immutable string[2][] REASONS = [
+            ["Keys/Lead", "a module name cannot contain '/', '\\', ':' or control characters"],
+            [".hidden", "a module name cannot start with '.'"],
+            ["ab\xFFcd", "a module name must be valid UTF-8 text"]
+        ];
+        foreach (ref c; CASES) {
+            immutable ModuleEditResult r = w.setName(c[0]);
+            assert(!r.ok && r.problem.kind == ModuleProblemKind.invalidName, c[0]);
+            assert(r.problem.suggestion == c[1], c[0] ~ " -> " ~ r.problem.suggestion);
+            assert(suggestedName(c[0]) == c[1]);
+            if (c[1].length > 0) {
+                ModuleWriter probe = w;
+                assert(probe.setName(c[1]).ok, c[1]);
+                assert(probe.setPresetName(c[1]).ok, c[1]);
+            }
+            assert(!w.setPresetName(c[0]).ok, c[0]);
+        }
+        foreach (ref c; REASONS) {
+            assert(w.setName(c[0]).problem.reason == c[1], w.setName(c[0]).problem.reason);
+        }
+        assert(suggestedName("Fine Name") == "Fine Name" && suggestedName("") == "");
+
+        LoadedPreset slashed = writerOf("fx.amplifier").loadedPreset();
+        slashed.presetName = "Keys/Lead";
+        ubyte[] bytes;
+        string err;
+        assert(serializePreset(slashed, bytes, err), err);
+        ModuleWriterResult adopted = ModuleWriter.fromPresetBytes(bytes, "Fallback");
+        assert(adopted.ok && adopted.writer.name == "Keys-Lead", adopted.writer.name);
+        assert(adopted.writer.loadedPreset().presetName == "Keys-Lead");
+        slashed.presetName = "\x01\x02";
+        assert(serializePreset(slashed, bytes, err), err);
+        ModuleWriterResult control = ModuleWriter.fromPresetBytes(bytes, "Fallback");
+        assert(control.ok && control.writer.name == "Amplifier", control.writer.name);
+    }
+
+    unittest {
+        ModuleWriter w = writerOf("synth.analog_gen");
+        immutable ModuleEditResult huge = w.setParamValue("Unison", 1.0e30f);
+        assert(!huge.ok && huge.problem.kind == ModuleProblemKind.outOfRange);
+        assert(huge.problem.reason == "'1e+30' is outside the range of 'Unison' (a whole number from 1 to 4)",
+            huge.problem.reason);
+        assert(huge.problem.suggestion == "4");
+        immutable ModuleEditResult negative = w.setParamValue("Unison", -1.0e30f);
+        assert(!negative.ok && negative.problem.subject == "-1e+30" && negative.problem.suggestion == "1");
+        assert(parameterValueText(paramOf("synth.analog_gen", 1), 3.0e20f) == "3e+20");
+
+        foreach (row; [["Cutoff", "1e40", "18000"], ["Cutoff", "-1e40", "40"], ["Unison", "1e40", "4"],
+                ["Cutoff", "3.5e38", "18000"], ["Cutoff", "1e-50", "40"]]) {
+            immutable ModuleEditResult r = w.setParamText(row[0], row[1]);
+            assert(!r.ok && r.problem.kind == ModuleProblemKind.outOfRange, row[1] ~ " " ~ r.problem.text());
+            assert(r.problem.suggestion == row[2], row[1] ~ " -> " ~ r.problem.suggestion);
+            assert(r.problem.reason.startsWith("'" ~ row[1] ~ "' is outside the range of '" ~ row[0] ~ "'"));
+        }
+        assert(w.paramValues == ANALOG_DEFAULTS);
+    }
+
+    unittest {
+        ModuleDescriptor d;
+        d.typeId = "test.numbers";
+        d.displayName = "Numbers";
+        immutable ParamDescriptor[1] params = [
+            ParamDescriptor(0, "f0", "Size", 0.0f, 3.0f, 0.0f, "", ParamScale.discrete, ["1", "2", "4", "8"])
+        ];
+        d.params = params[];
+        ModuleWriter w = ModuleWriter.fromDescriptor(&d, "N").writer;
+        foreach (value; 0 .. 4) {
+            assert(w.setParamValue("Size", cast(float) value).ok);
+            immutable string text = w.textOf("Size").text;
+            assert(text == to!string(value), text);
+            ModuleWriter probe = w;
+            assert(probe.setParamText("Size", text).ok && probe.valueOf("Size").value == cast(float) value);
+        }
+    }
+
+    unittest {
+        immutable ModuleDescriptor[3] FAKE = [
+            ModuleDescriptor("a.one", "Same Name"),
+            ModuleDescriptor("b.two", "same name"),
+            ModuleDescriptor("c.three", "Third")
+        ];
+        const(ModuleDescriptor)* found;
+        ModuleProblem problem;
+        assert(!findModuleType(FAKE[], "Same Name", found, problem) && found is null);
+        assert(problem.kind == ModuleProblemKind.unknownModuleType && problem.suggestion == "a.one");
+        assert(problem.reason == "'Same Name' matches more than one module type");
+        assert(findModuleType(FAKE[], "b.two", found, problem) && found.typeId == "b.two");
+        assert(findModuleType(FAKE[], " THIRD ", found, problem) && found.typeId == "c.three");
+        assert(!findModuleType(FAKE[], "Thrid", found, problem) && problem.suggestion == "Third");
+        assert(!findModuleType(FAKE[], "c.thre", found, problem) && problem.suggestion == "c.three");
+
+        ModuleWriter w = writerOf("fx.amplifier");
+        immutable string blocked = buildPath(tempDir(), "dracker-no-such-folder-" ~ to!string(thisProcessID()),
+            "x.msym");
+        immutable ModuleEditResult failed = w.writePresetFile(blocked);
+        assert(!failed.ok && failed.problem.kind == ModuleProblemKind.writeFailed);
+        assert(failed.problem.subject == blocked && failed.problem.reason.startsWith("could not write the preset: "));
+        assert(!exists(blocked));
+    }
+
+    unittest {
+        LoadedPreset loud = writerOf("synth.analog_gen").loadedPreset();
+        loud.presetName = "Loud";
+        loud.mod.paramValues[3] = 99999.0f;
+        ubyte[] bytes;
+        string err;
+        assert(serializePreset(loud, bytes, err), err);
+        ModuleWriterResult r = ModuleWriter.fromPresetBytes(bytes);
+        assert(!r.ok && r.problem.kind == ModuleProblemKind.mismatchedPreset && r.problem.subject == "Cutoff");
+        assert(r.problem.reason == "the preset does not match its module type 'Analog Generator': '99999' is outside "
+            ~ "the range of 'Cutoff' (a number from 40 to 18000 Hz)", r.problem.reason);
+        loud.mod.paramValues[3] = 4000.0f;
+        loud.mod.paramValues[0] = 2.5f;
+        assert(serializePreset(loud, bytes, err), err);
+        ModuleWriterResult half = ModuleWriter.fromPresetBytes(bytes);
+        assert(!half.ok && half.problem.kind == ModuleProblemKind.mismatchedPreset && half.problem.subject == "Waveform");
+        assert(half.problem.reason == "the preset does not match its module type 'Analog Generator': '2.5' is not a "
+            ~ "whole number; 'Waveform' takes a whole number from 0 to 5, or one of its names", half.problem.reason);
     }
 }

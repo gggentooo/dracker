@@ -48,10 +48,12 @@ struct Glide {
     @Param("Response", 0.1f, 500.0f, 35.0f, "ms", ParamScale.logarithmic)
     float responseRate = 35.0f;
 
-    @Param("Polyphonic", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Polyphonic", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete,
+        ["Off", "On"])
     float polyphonic = 0.0f;
 
-    @Param("Reset On First", 0.0f, 1.0f, 1.0f, "", ParamScale.discrete)
+    @Param("Reset On First", 0.0f, 1.0f, 1.0f, "", ParamScale.discrete,
+        ["Off", "On"])
     float resetOnFirstNote = 1.0f;
 
     private struct GlideVoiceState {

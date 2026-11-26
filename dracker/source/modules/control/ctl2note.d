@@ -54,7 +54,8 @@ struct Ctl2Note {
     @Param("Range Notes", 1.0f, 96.0f, 48.0f, "st", ParamScale.discrete)
     float rangeNotes = 48.0f;
 
-    @Param("Trigger Mode", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Trigger Mode", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete,
+        ["Retrigger", "Legato", "Gate"])
     float triggerMode = 0.0f;
 
     private NoteId currentNoteId_ = NoteId.none;

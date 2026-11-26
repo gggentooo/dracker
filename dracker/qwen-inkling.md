@@ -85,9 +85,9 @@ Sign every entry with the exact model name the owner gave you in your prompt, fo
 
 ### Gate 7 — The task list is changed only with `tools/todo.py`
 
-`docs/todo.json` is the task list. `docs/todo.md` is written from it by `tools/todo.py` (`agents.md` Rule 6).
+`docs/todo.json` is the task list. `docs/todo.md` and `docs/todo-guides.md` are written from it by `tools/todo.py` (`agents.md` Rule 6).
 
-- **Never edit `docs/todo.md`.** Not with an editor, not with `sed`, not with a script of your own.
+- **Never edit `docs/todo.md` or `docs/todo-guides.md`.** Not with an editor, not with `sed`, not with a script of your own.
 - **Never edit `docs/todo.json` by hand, and never write your own script to change it.** Use the commands in section 5.
 - After your last change, run:
 
@@ -130,13 +130,17 @@ The task stays open. An honest "not done" is always better than a false "done".
 
 Do these steps in order. Do not skip any.
 
-1. **Read the task** (`python3 tools/todo.py show <id>`): its **Files**, **Task** and **Needs**. Every task in **Needs** must be in *Done*. If one is not, stop and tell the owner.
-2. **Read the decisions** the task depends on, which are the *Done* entries of the tasks in **Needs**. The code must follow them word for word.
+1. **Get the brief:** `python3 tools/todo.py brief <id>`. It prints the task (**Files**, **Task**, **Needs**), the finished tasks it rests on, the **guide**, and the finishing steps. Read all of it before you write anything.
+   - If the brief says **Do not start yet**, stop and tell the owner.
+   - If it says **No guide has been written**, stop and tell the owner. Do not invent a guide.
+2. **Follow the decisions** under *What it rests on* word for word. **Follow the guide** in its order: read the files under **Read first**, use the functions under **Existing code to use** exactly as they are declared, write what **Write** names, and do the **Steps** one at a time, compiling after each.
+   - Before you use a signature from the guide, open the file and check that it is still the same. If a function the guide names is missing or different, or a row of the guide's **Acceptance table** cannot be made to pass, **stop and tell the owner**. The guide may be out of date; do not work around it and do not change the guide.
+   - Do nothing the guide lists under **Do not**.
 3. **Read the existing code** you will use. For each function you call, read its DDoc and its body, and write down:
    - what it returns when something is **not found** or **fails**. It might be `-1`, `text.length`, `0`, `null`, `false` or an `ok` flag;
    - whether it takes `ref` or `out` parameters. An `out` parameter is **reset** when the call starts, so never pass the same variable as both the input and the `out` argument.
 4. **Look for constants that already exist** before you add one. Use `grep -rn "NAME" source/`. For example, `io.project_format` already has `DEFAULT_TIME_SIG_NUMERATOR`, `MAX_LINES` and `MAX_TIME_SIG_NUMERATOR`, and `StudioSession` has `LINES_PER_WHOLE_NOTE`. Import a constant; do not declare a second copy. Name a constant for what it really is: 16 lines is a **whole note**, not a quarter note.
-5. **Write the acceptance table first**, before any code. List the inputs and the expected outputs, and work out each output by hand with the arithmetic written out in your notes:
+5. **Write the acceptance table first**, before any code. Start from the guide's **Acceptance table** and check every row yourself; add rows for cases it does not cover. List the inputs and the expected outputs, and work out each output by hand with the arithmetic written out in your notes:
 
    | Input | Working | Expected |
    | --- | --- | --- |
@@ -185,9 +189,12 @@ All commands run from inside `dracker/`. Every command that changes something ne
 1. **Find and read tasks.**
 
    ```zsh
-   python3 tools/todo.py list --stage 0        # tasks that can start now
-   python3 tools/todo.py show T76              # one task in full
+   python3 tools/todo.py list --stage 0        # tasks that can start now (the column after the type says `guide` when one exists)
+   python3 tools/todo.py brief T76             # one task with everything needed to build it
+   python3 tools/todo.py show T76              # only the task itself
    ```
+
+   You do not write or change guides (`guide --text`). If a guide is wrong, tell the owner.
 
 2. **Finish a Build task** (only after Gates 1–6 pass):
 

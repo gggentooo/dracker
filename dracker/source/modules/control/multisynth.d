@@ -97,7 +97,8 @@ struct MultiSynth {
     @Param("Velocity Scale", 0.0f, 2.0f, 1.0f, "", ParamScale.linear)
     float velocityScale = 1.0f;
 
-    @Param("Curve Mode", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Curve Mode", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete,
+        ["Off", "Velocity", "Velocity + Pitch"])
     float curveMode = 0.0f;
 
     private FixedArray!(ModEvent, 64) pendingOut_;

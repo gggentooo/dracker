@@ -15,6 +15,7 @@
 6. **New open questions** found during work become tasks here.
 7. **Concise language.** Write in brief, clear English.
 8. **Changelog.** The script adds an entry for every change, with the time from the clock and the author it was given. It covers this list only; code changes are logged in `docs/changelog.md` (`agents.md` Rule 4).
+9. **Guides.** A task may carry a guide: detailed instructions on what to write and how, for whoever builds it. The guides of the open tasks are in `docs/todo-guides.md` (also generated). `python3 tools/todo.py brief T00` prints everything needed to build one task: the task, the decisions it rests on, its guide and the finishing steps.
 
 ---
 
@@ -88,7 +89,7 @@ Facts about the current code that the tasks rely on:
 
 ## Feature: Composition helper (`dracker-compose`)
 
-A second program, built from the same source tree, that writes Dracker project files (`.msv`) and module preset files (`.msym`) without the app. It exists so that an agent can compose music for Dracker; no human-oriented mode is planned now, but the design leaves room for one. It has two main parts: the **module writer** (choose a base module, set its parameters, save a `.msym`) and the **project writer** (project properties, modules made with the module writer, wires, patterns, parts, chords, arrangement, save a `.msv`).
+A second program, built from the same source tree, that writes Dracker project files (`.msv`) and module preset files (`.msym`) without the app. It exists so that an agent can compose music for Dracker. The same script language is also offered to the user inside the app, in a **Script** tab of the pattern editor (decided 2026-11-26, T108; tasks T109–T114). It has two main parts: the **module writer** (choose a base module, set its parameters, save a `.msym`) and the **project writer** (project properties, modules made with the module writer, wires, patterns, parts, chords, arrangement, save a `.msv`).
 
 Decided by the owner on 2026-11-26:
 
@@ -98,60 +99,28 @@ Decided by the owner on 2026-11-26:
 - **Parts first, tracker level available.** Music is mainly written for a named part (an instrument) at bar and beat positions with note lengths; the helper picks tracker tracks. Exact track and line placement stays available.
 - **Proposals accepted.** All proposals of T66–T71 were approved as written by the owner on 2026-11-26 (see *Done*); they are recorded in the *Done* entries until T89 moves them into `docs/manual.md` and `../architecture.md`.
 
-Architecture (so that a human mode can be added later without changing the core):
+Architecture (the core knows nothing about its front ends, so the command line and the app's Script tab share it):
 
 | Layer | Where | Role |
 | --- | --- | --- |
 | Core library | `source/compose/` (new) | Module writer, project writer, parts, chords, drums, arrangement. Works on documents in memory; knows nothing about scripts, files of commands, or the terminal. Every problem is returned as data (what, where, a suggestion), never printed. |
 | Command interpreter | `source/compose/script/` (new) | Turns one command at a time into core calls and keeps the state between commands (the project being built, named modules and parts). It takes commands from any source, so a script file is just one way to feed it. |
 | Program | `source/compose_main.d` (new) | The `dracker-compose` command line: run or check a script, catalog, describe, render. Reads files, prints results, sets the exit code. |
-| Future human mode | not planned | An interactive prompt or a panel in the app would be another front end feeding the same interpreter, or calling the core library directly. |
+| Script tab in the app | `source/gui/views/script_view.d` (new) | A fourth tab of the pattern editor: the user types script lines and clicks Apply. Another front end feeding the same interpreter, started from a copy of the open project; the result is swapped in as one undo step, or nothing changes when a line fails (T108). |
 
 Facts about the current code that the tasks rely on:
 
-- Reusable as they are: `io.project_format` (documents, `.msv` / `.msym` reading and writing, validation), `graph.registry` (module types, ports, parameters with names, ranges and defaults; option names only where a module declares them, today for one parameter, see T91), `app.music_theory` (keys, scales, note names), `app.chord_progression` (chord and progression parser, chord notes, preset progressions), `app.pattern_notes` (placing notes on tracker tracks without collisions), `app.factory_presets` and `app.instrument_library` (bundled and user presets), `app.session` (trial activation of a document, offline render).
+- Reusable as they are: `io.project_format` (documents, `.msv` / `.msym` reading and writing, validation), `graph.registry` (module types, ports, parameters with names, ranges and defaults; option names for every choice parameter (T91); parameters whose values are counts have none), `app.music_theory` (keys, scales, note names), `app.chord_progression` (chord and progression parser, chord notes, preset progressions), `app.pattern_notes` (placing notes on tracker tracks without collisions), `app.factory_presets` and `app.instrument_library` (bundled and user presets), `app.session` (trial activation of a document, offline render).
 - A pattern track plays one note at a time; a note ends at the next note or note-off on its track; each cell names its module. `app.pattern_notes` already hides this for the piano roll.
 - Drum patterns are a pattern kind with a lane table (name, module, note per track).
 - A project's time signature fixes lines per beat and per bar (a line is a sixteenth note); the key is stored with the project.
 - `dub.json` has three configurations: `app` and `headless` share `source/main.d`; `compose` builds `dracker-compose` (T72). Its entry point is in `source/compose_main.d` under `version (ComposeProgram)`. A file named as `mainSourceFile` of one configuration is left out of the others, so the `compose` configuration names none and excludes `source/main.d` instead; that keeps `compose_main.d` in the headless tests.
 - Samples (Sampler), drawn curves and MetaModule child projects are stored inside a module's extra data; the app builds them through `StudioSession` (`doLoadSample`, `setMetaModuleChildProject`).
-- Available building blocks for the helper: `compose.timing` (positions `bar`/`bar.beat`/`bar.beat.sixteenth` counted from 1 inside one pattern (see T90), lengths in beats, bars (`2b`) and lines (`3l`), and conversion to and from lines for a time signature; T73). `compose.module_writer` (`ModuleWriter`: a module from a type, a preset or a `.msym`; parameters set by name or option name and checked against the range; a `SavedModule`, .msym` bytes and files; every refusal as data with the nearest valid name; T74).
+- Available building blocks for the helper: `compose.timing` (positions `bar`/`bar.beat`/`bar.beat.sixteenth` counted from 1 inside one pattern (see T90), lengths in beats, bars (`2b`) and lines (`3l`), and conversion to and from lines for a time signature; T73). `compose.module_writer` (`ModuleWriter`: a module from a type, a preset or a `.msym`; parameters set by name or option name and checked against the range; a `SavedModule`, .msym` bytes and files; every refusal as data with the nearest valid name; copies independent; names follow the instrument library rule; T74, T92). `compose.names` (name matching without regard to case or spaces and the nearest-name suggestion, shared by the whole helper; T92).
 
 ---
 
 ## Stage 0 — Ready now
-
-#### [Modules] Option names for choice parameters · T91 · Build
-
-- **Files:** `source/modules/output.d`, `source/modules/synths/{input,vorbis_player,kicker,sampler,fm_synth,spectravoice}.d`, `source/modules/effects/{amplifier,filter_pro,distortion,delay,echo,reverb,compressor,waveshaper,vocal_filter,fft_fx,loop_fx,modulator,lfo}.d`, `source/modules/control/{adsr_mod,glide,multisynth,velocity2ctl,pitch_detector,feedback,metamodule,ctl2note}.d`, `tests/unit/param_options_test.d` (new), `tests/unit/views_param_rack_test.d`, `docs/manual.md` (§4 QA note, Appendix B, Appendix C row 15), `docs/changelog.md`
-- **Task:** Name the values of every discrete parameter that is a choice: add the list of names as the last argument of its `@Param` (as `AnalogGen.waveform` has), one name per value from `minVal` upwards, so `ParamDescriptor.options` is filled. Found while building T74: `Waveform=Saw` (T70), the catalog (T85), `describe` (T87) and the rack's labels all read these lists, and today only Analog Generator *Waveform* has one. Tests: for every registered module type, each discrete parameter has one name per value or is one of the integer-valued parameters listed below, so a new choice parameter without names fails; names are distinct after case and spaces are removed; the rack shows a name where it showed a number. Then update the manual: the QA note in §4, the first sentence of Appendix B, and Appendix C row 15.
-  - 21 parameters whose names Appendix B gives: Input *Channel Route*; Kicker *Waveform*; Sampler *Loop Mode*, *Quality*; FM Synth *Algorithm*; LFO *Waveform*, *Sync Unit*; WaveShaper *Oversample*; Modulator *Mod Type*; Loop *Mode*; Compressor *Mode*; Delay *Unit*; Distortion *Mode*; Filter Pro *Mode*; Echo *Stereo Mode*; MultiSynth *Curve Mode*; Velocity2Ctl *NoteOff Action*; Feedback *Channels*; MetaModule *Play Patterns*; ADSR *Mode*; Pitch Detector *Algorithm*.
-  - 10 switches that get *Off* and *On*: Master Output *Limiter*; Vorbis Player *Loop*; Input *Mute*; WaveShaper *DC Block*; Amplifier *Invert*; FFT FX *Freeze*; Reverb *Freeze*; Glide *Polyphonic*, *Reset On First*; MetaModule *BPM Sync*.
-  - 4 whose values neither Appendix B nor the module names today. The names below are **(proposed)** for the owner to confirm or rename; they are then written into Appendix B. Delay *Inverse* (*Normal*, *Swap L/R*; Appendix B says only "swap L/R"). SpectraVoice *Profile* (*Organ*, *Brass*, *Choir*, *Bell*; the module's own comment). Vocal Filter *Voice Type* (*Soprano*, *Alto*, *Tenor*, *Bass*; the code only scales the formants by 1.18, 1.02, 0.88 and 0.76, so the names are a guess at the voice ranges). Ctl2Note *Trigger Mode* (*Retrigger*, *Legato*, *Gate*: a new note at each change, the pitch of the held note changes, a note-off when the control returns to 0).
-  - 14 integer-valued discrete parameters stay unnamed, so numbers stay numbers: Analog Generator *Unison*; Loop *Repeats*, *Length*; Feedback *Fixed Delay*; Distortion *SR Div*; FFT FX *FFT Size*, *Bin Shift*; Filter Pro *Slope*; MetaModule *Input Module*; MultiCtl *Quantization*; Pitch2Ctl *First Note*, *Semitones*; Ctl2Note *First Note*, *Range Notes*.
-  - A name may contain spaces (`Low Shelf`), which the script language writes in double quotes (T67), but no `=` or quote characters. Appendix B then uses the same words as the names (it says *pulse* where the option is *Square*).
-- **Needs:** —
-
-#### [Compose] Module writer: defects found in review · T92 · Build
-
-- **Files:** `source/compose/module_writer.d`, `source/compose_main.d`, `source/compose/names.d` (new), `tests/unit/compose_module_test.d`
-- **Task:** Fix the defects a review of T74 found in `ModuleWriter`, each with a test that fails first. Until then T75 and T76 would build on them.
-  - A copy of a writer shares its parameter values with the original (`auto c = w; c.setParamValue(…)` changes `w`): give the struct a copy constructor that copies the values, and test that copies are independent.
-  - A too-long name is cut in the middle of a character, and the suggested name (invalid UTF-8) is then accepted by `setName()`: cut at a character boundary.
-  - `setName()` accepts names the instrument library refuses (`Keys/Lead`, `.hidden`, `a:b`): use `app.instrument_library.isValidPresetName` instead of the second copy of the rule. Names taken from a preset or a file name pass the same check.
-  - A huge value on a discrete parameter (`setParamValue("…", 1e30f)`) is reported as `9223372036854775807` through an undefined cast: guard the conversion as the continuous path does.
-  - A number too large for a float (`1e40`) is reported as "not a number" without a suggestion: report it as out of range with the nearest value.
-  - `textOf()` must always give text `setParamText()` accepts, also when an option name looks like a number (T91 adds many option names): write the number in that case, and test it.
-  - A preset with an empty preset name is not named as the app names it (the app keeps the module's own name), and the test asserts the wrong behaviour.
-  - Values loaded from a preset are not checked against the parameter's range: report them or document why not.
-  - `nearestTypeName()` prefers any type id over a closer display name, against its own description.
-  - The edit distance and nearest-name helpers exist twice (`compose/module_writer.d`, `compose_main.d`): move them to one shared module in `source/compose/`.
-  - Tests to tighten: the assertions that only check that a reason or a suggestion exists; the unused "matches more than one type" and `writeFailed` paths; a unique temporary folder name.
-- **Needs:** —
-
----
-
-## Stage 1
 
 #### [Compose] Module writer: Sampler samples · T75 · Build
 
@@ -159,43 +128,102 @@ Facts about the current code that the tasks rely on:
 - **Task:** Load audio files (the formats the app's sample import accepts) into Sampler slots with root note and key range, producing the same stored data as the app, so the preset plays identically there. Tests compare against a preset saved through `StudioSession`.
 - **Needs:** T74, T92
 
-#### [Compose] Project writer: properties, modules, wires, saving · T76 · Build
+#### [Compose] Project writer: properties, modules, saving · T76 · Build
 
 - **Files:** `source/compose/project_writer.d` (new), `tests/unit/compose_project_test.d` (new)
-- **Task:** `ProjectWriter`: title, tempo, ticks per line, time signature, key; modules added from a `ModuleWriter` under a handle name (the Master Output exists from the start as `out`), renamed, repositioned (automatic layout when no position is given) and removed; wires by handle and port name with sensible defaults (a module's first audio output to the target's first audio input) and gain; validation through the app's own checks plus a trial activation, so a saved file always opens; write a `.msv`. Problems come back as data. Tests: properties round-trip; wiring errors (unknown port, incompatible kinds, feedback loops as the graph compiler reports them); a written file opens in `StudioSession` and renders.
+- **Task:** `ProjectWriter`, first part: title, tempo, ticks per line, time signature, key; modules added from a `ModuleWriter` under a handle name (the Master Output exists from the start as `out`), renamed, repositioned (automatic layout when no position is given) and removed; validation through the app's own checks (`validateProjectForSave`); the document as a `LoadedProject`, as `.msv` bytes and as a file. Problems come back as data with the nearest valid handle. No wires yet (T96). Tests: properties round-trip through a file; every refusal (duplicate or unknown handle, invalid handle name, bad tempo, signature or key); a written file with modules opens in `StudioSession`.
 - **Needs:** T74, T92
+
+#### [Compose/script] Script language: note notation · T84 · Build
+
+- **Files:** `source/compose/script/notation.d` (new), `tests/unit/compose_notation_test.d` (new)
+- **Task:** The note notation of T67 as pure functions, independent of the interpreter: `<pitch>[:<length>][@<velocity>]`, `-` for a rest (with a length), `[C4 E4 G4]:2` for notes together, pitches spelled as in the app (`app.music_theory`, C4 = middle C), lengths through `compose.timing`. The result is a list of events (offset in lines, length in lines, pitches, velocity); a note without a length takes the length of the note before it (the first: one beat). Every problem is data with the offset of the offending note inside the text and the nearest valid spelling. Tests: every form in 4/4 and 6/8; every refusal with its offset; all three-token sequences from a small alphabet never crash.
+- **Needs:** T67, T73
+
+#### [Modules] ADSR One-Shot and Inverted modes · T93 · Build
+
+- **Files:** `source/modules/control/adsr_mod.d`, `source/dsp/envelope.d`, `tests/unit/modules_test.d`, `docs/manual.md` (Appendix C row 15)
+- **Task:** Found while checking the option names of T91. *One-Shot* (Mode 1) is silent: `trigger()` sets the level to 0 when Attack > 0 (always, its minimum is 0.5 ms) and `releaseNote()` follows at once, so the release starts from 0 (`dsp/envelope.d:125-158`). *Inverted* (Mode 2) outputs 1 − envelope while it runs but 0 when idle, so the level jumps at the start and end of every note (`adsr_mod.d:140-146`). Make One-Shot run attack and decay to the end and then release, and Inverted rest at 1. Tests for the shape of all three modes; then remove the ADSR sentence from Appendix C row 15.
+- **Needs:** —
+
+#### [Modules] SpectraVoice: Profile and Bandwidth have no effect · T94 · Build
+
+- **Files:** `source/modules/synths/spectravoice.d`, `tests/unit/modules_test.d`, `source/main.d` (preset sound check), `docs/manual.md` (Appendix B, Appendix C row 15)
+- **Task:** Found while checking the option names of T91, and wider than first recorded: every SpectraVoice always plays Organ at Bandwidth 0.35. Its table is built once in `prepare()` with the default parameters, before the saved ones are set, and that table is then stored with the module; so *Profile* and *Bandwidth* do nothing in the rack, from automation or MIDI, or after reopening, and the bundled `Strings` preset (Brass, 0.6) plays Organ. Fix decided by the owner on 2026-11-26: `prepare()` builds all 172 tables (4 profiles × 43 harmonic counts, about 1.4 MB per module) off the audio thread and `process()` picks one from the current parameters; stored tables without a new mark are ignored. Existing projects with another Profile and the `Strings` preset then sound as their parameters say: render `Strings` again for the owner. Tests that Profile and Bandwidth change the rendered sound while a note plays and after loading; then remove the SpectraVoice notes from Appendix B and Appendix C row 15.
+- **Needs:** —
+
+#### [GUI/views] Timeline: selecting a clip opens its pattern in the pattern editor · T95 · Build
+
+- **Files:** `source/gui/views/timeline_view.d`, `source/gui/views/studio_context.d` (`selectPattern`), `tests/unit/views_timeline_test.d`, `tests/unit/views_studio_root_test.d`, `docs/manual.md` (§9.3)
+- **Task:** Asked for by the owner on 2026-11-26. Today a single click on a clip only selects it; the pattern editor follows only after a double-click on the clip body (`timeline_view.d`, mouse-down handler: `ctx.selectPattern(c.patternId)` under `clickCount >= 2`). Make every way of selecting a clip show its pattern in the pattern editor: a single click, `selectClip()`, and selection by keyboard if there is one.
+  - Selecting is not an edit: no undo step, and the editor keeps the view (tracker, piano roll, drumpad) remembered for that pattern.
+  - A click that starts a move, resize or clone drag also opens the pattern; the drag itself is unchanged. A double-click on the clip name still renames; a double-click on empty space still places the current pattern, which is now the one last selected.
+  - Clicking empty space clears the selection and leaves the editor on the pattern it shows.
+  - Tests: click a clip of another pattern and check `ctx.currentPattern()` and what the pattern editor shows; a clone clip opens the shared pattern; a drag still moves the clip; the undo count is unchanged by selecting. Update the manual.
+- **Needs:** —
+
+#### [Project] Script tab: project access, file commands, undo, and errors · T109 · Decision
+
+- **Files:** `source/gui/views/script_view.d` (new), `source/compose/script/interpreter.d`
+- **Task:** Decide the remaining behaviour of the script tab (T108). **(proposed)**
+  - The script works on the open project: its modules, parts and sections are reachable by the handles `open` would derive (T82, T100), which the tab lists next to the input.
+  - Commands that replace the project or touch files are refused in the tab with a one-line reason: `project` (would discard the open project; title, tempo, signature and key have their own commands), `open` and `save` (use the File menu). `savemodule` and `sample` are allowed and take paths; a relative path is relative to the project file's folder.
+  - Apply is one undo step ("Apply script"), so ⌘Z takes the whole script back.
+  - Apply is allowed while the song plays; playback continues with the new content.
+  - Errors are listed under the input with line, column, reason and suggestion; the first offending line is marked and the caret moves to it.
+  - The tab is offered for every pattern, normal or drum, and does not depend on which pattern is selected. Its text is kept while the app runs (switching tabs or patterns does not clear it) and is not saved in the project.
+  - ⌘Return applies. No history of earlier scripts in the first version.
+- **Needs:** —
+
+#### [GUI/widgets] Multi-line text editor widget · T110 · Build
+
+- **Files:** `source/gui/widgets.d`, `tests/unit/widgets_textarea_test.d` (new; uses the `Harness` of `tests/unit/gui_test.d`), `source/app/gui_gallery.d` (compiled in the `app` configuration only)
+- **Task:** A `TextArea` widget for the script tab (T112); the toolkit has only the single-line `TextField`, which has no selection, word movement or clipboard. Monospace text of many lines; caret movement by character, word, line, page and to the ends; selection by keyboard and mouse (drag, double-click a word); typing, Return, Tab as spaces, Backspace and Delete; cut, copy, paste and select all through two clipboard delegates (T112 connects them to the app clipboard); vertical scrolling that follows the caret; line numbers in a gutter; one line can be marked (for an error) with an outline, not color alone; committed IME text is accepted as `TextField` accepts it. Colors come from theme tokens only. Tests for every editing operation, scrolling, the marked line, and that sizes follow the theme; a gallery entry.
+- **Needs:** —
+
+#### [App] Session: replace the document as one undo step · T111 · Build
+
+- **Files:** `source/app/session.d`, `source/app/history.d`, `tests/unit/session_test.d` (new)
+- **Task:** An undoable `StudioSession.doReplaceDocument(LoadedProject, label)` for the script tab (T113): activate the new document as `openProjectFromMemory()` does, but as one history command whose undo restores the document before it, without clearing the history, the file path or the modified flag logic. If the new document cannot be activated, the old one stays and the reason is returned. Playback continues where the timeline allows it. Tests: replace, undo, redo give identical documents and identical renders; a document that fails activation changes nothing; the undo count grows by one; a replace while playing keeps the transport running.
+- **Needs:** —
+
+---
+
+## Stage 1
+
+#### [Compose] Sections, parts, and their patterns · T77 · Build
+
+- **Files:** `source/compose/part_writer.d` (new), `source/app/pattern_notes.d`, `tests/unit/compose_part_test.d` (new)
+- **Task:** Sections and parts per T68, without notes yet: a section has a name and a length in bars; a part is a name bound to one module handle of the project writer; each part gets one pattern per section it plays in, named "*part* · *section*", created on first use and sized from the section length and the time signature; the implicit section for scripts that name none. Lookups by name without regard to case or spaces, with the nearest name in every refusal. Tests: pattern names, sizes in 4/4, 3/4 and 6/8; two parts never share a pattern; a section longer than a pattern can hold is refused; unknown and duplicate names.
+- **Needs:** T68, T76
+
+#### [Compose/script] Script language: lexer, interpreter core, project commands · T83 · Build
+
+- **Files:** `source/compose/script/lexer.d`, `source/compose/script/interpreter.d`, `source/compose/script/commands.d` (all new), `tests/unit/compose_script_test.d` (new), `tests/fuzz/compose_script_fuzz.d` (new)
+- **Task:** The interpreter per T67, first part. Lexer: one command per line, `//` comments (not inside quotes), `\` line continuation, double-quoted text, `name=value` options, with line and column for every token. Interpreter: a command table with typed arguments and named options, the state between commands (a project writer), and problems as data (line, column, what was expected, the nearest valid name). It takes one command at a time from any source and never prints (the seam for the app's script tab, T112). Commands of this task: `project`, `tempo`, `signature`, `key`, `save`. Tests for every token rule, every command and every error; a fuzz test that no input crashes the lexer or the interpreter.
+- **Needs:** T67, T76
+
+#### [Compose] Project writer: wires and trial activation · T96 · Build
+
+- **Files:** `source/compose/project_writer.d`, `tests/unit/compose_project_test.d`
+- **Task:** Split from T76. Wires by handle and port name, with defaults (a module's first audio output to the target's first audio input) and gain; removing a wire; removing a module removes its wires. Before saving, a trial activation in a `StudioSession` so a saved file always opens and plays. Tests: wiring errors as data (unknown handle, unknown port with the nearest name, incompatible port kinds, an input used as a source, a duplicate wire, feedback loops as the graph compiler reports them); a written file opens in `StudioSession` and its render is not silent.
+- **Needs:** T76
+
+#### [Modules] SpectraVoice: crossfade when the table changes · T115 · Build
+
+- **Files:** `source/modules/synths/spectravoice.d`, `tests/unit/modules_test.d`
+- **Task:** After T94 a change of *Profile* or *Bandwidth* switches the table at a block boundary, which can click on a held note. Crossfade from the old table to the new one over a few milliseconds, without allocating on the audio thread. Tests: the largest sample-to-sample step during a change on a held note stays below a stated bound; no allocation (`rt_malloc_trap`).
+- **Needs:** T94
 
 ---
 
 ## Stage 2
 
-#### [Compose] Parts, sections, and notes · T77 · Build
-
-- **Files:** `source/compose/part_writer.d` (new), `source/app/pattern_notes.d`, `tests/unit/compose_part_test.d` (new)
-- **Task:** Sections and parts per T68. Writing notes for a part at positions with lengths and velocities, chords of simultaneous notes and rests, using `app.pattern_notes` for track choice so nothing collides; patterns are created and sized from the section length; the arrangement places clips (clones for repeated sections) and sets the loop. Tests: notes land on the right lines in several time signatures; polyphony adds tracks; two parts never share a pattern; arrangement and clone clips; a render has sound from each part.
-- **Needs:** T68, T73, T76, T90
-
-#### [Compose/script] Script language: core, project and module commands · T83 · Build
-
-- **Files:** `source/compose/script/lexer.d`, `source/compose/script/interpreter.d`, `source/compose/script/commands.d` (all new), `tests/unit/compose_script_test.d` (new), `tests/fuzz/compose_script_fuzz.d` (new)
-- **Task:** The interpreter per T67: line and token rules, a command table with typed arguments and named options, state between commands, and error reports with line, column, expectation and nearest valid name. Commands for project properties, modules (through the module writer), parameters, presets, samples, wires, `open` and `save`. The interpreter accepts one command at a time from any source and returns results as data (this is the seam for a later human mode). Tests for every command and error; a fuzz test that no input crashes it.
-- **Needs:** T67, T72, T76
-
 #### [Compose/program] Render and report · T86 · Build
 
 - **Files:** `source/compose/render.d` (new), `source/compose_main.d`, `source/main.d` (`renderProjectToWav`, to share), `tests/unit/compose_render_test.d` (new)
 - **Task:** `render`: play a project offline from the start to the end of the arrangement (plus a tail) and write a WAV. The report gives length, peak and average level overall and per bar, bars that are silent, whether the output limiter was reached, and per module whether it produced sound. Text and `--json` forms. Shares the offline render code with the app's sound check.
-- **Needs:** T66, T72, T76
-
----
-
-## Stage 3
-
-#### [Compose] Chords for parts · T78 · Build
-
-- **Files:** `source/compose/chord_writer.d` (new), `source/app/chord_progression.d`, `tests/unit/compose_chord_test.d` (new)
-- **Task:** Writing a progression into a part per T69: chord lengths, the playing styles, rhythm strings, octave, number of voices, root-position and close voicing, and preset progressions by name; Roman numerals follow the project key. Tests: note-by-note results for each style in a major and a minor key and in 3/4; close voicing never moves a voice more than the root-position version would; a bass part and a keys part written from the same progression agree.
-- **Needs:** T69, T77
+- **Needs:** T66, T72, T96
 
 #### [Compose] Drum parts · T79 · Build
 
@@ -203,23 +231,11 @@ Facts about the current code that the tasks rely on:
 - **Task:** Drum parts as drum patterns: lanes by name bound to a module and note (with the default kit names for a DrumSynth), hits written as step strings per lane (`kick: x---x---x---x---`, with accents) or at positions, velocities, and fills over a range of bars. Tests: the result opens in the app's drumpad model (`patternKind`, `patternLanes`, `drumHitAt`) with the expected hits.
 - **Needs:** T77
 
-#### [Compose] Tracker-level writing · T80 · Build
-
-- **Files:** `source/compose/part_writer.d`, `tests/unit/compose_part_test.d`
-- **Task:** The exact level for cases the part level cannot express: write a cell at a given track and line of a pattern (note, velocity, module, effect command and value, note-off and other note commands), read cells back, and mix both levels in one pattern without the part level overwriting hand-placed cells.
-- **Needs:** T77
-
-#### [Compose] Phrase editing · T81 · Build
-
-- **Files:** `source/compose/part_writer.d`, `tests/unit/compose_part_test.d`
-- **Task:** Operations an agent needs to work economically: copy a range of a part to another position or section, repeat a range a number of times, transpose a range (by semitones, or by scale steps in the project key), scale velocities, and clear a range. Tests for each, including ranges that cross the end of a section.
-- **Needs:** T77
-
-#### [Compose] Opening existing files · T82 · Build
+#### [Compose] Opening existing files: modules, wires, and everything kept · T82 · Build
 
 - **Files:** `source/compose/project_writer.d`, `source/compose/module_writer.d`, `tests/unit/compose_project_test.d`
-- **Task:** Load a `.msv` into the project writer and a `.msym` into the module writer per T71: handles are derived from module and pattern names (made unique), existing patterns become parts and sections where possible, and everything not understood is preserved untouched through to the saved file. Tests: open and save without changes gives a file that plays identically (the sample projects and a project with a MetaModule, a sample and MIDI mappings); open, add a part, save, open in `StudioSession`.
-- **Needs:** T71, T76, T77
+- **Task:** Load a `.msv` into the project writer per T71, first part: properties, modules and wires get handles derived from the module names (made unique and reported), and everything the writer does not understand or change (patterns, clips, MIDI mappings, drum lanes, module extra data, MetaModule children, unknown future data the reader keeps) is preserved untouched through to the saved file. (`.msym` files already load through `ModuleWriter.fromPresetFile()`.) Tests: open and save without changes gives a file that plays identically, for the sample projects and for a project with a MetaModule, a sample and MIDI mappings; open, change a parameter and add a module, save, open in `StudioSession`.
+- **Needs:** T71, T96
 
 #### [Compose/program] Catalog · T85 · Build
 
@@ -227,39 +243,143 @@ Facts about the current code that the tasks rely on:
 - **Task:** `catalog`: list module types by category; for one type its ports and its parameters with range, default, unit and option names; bundled and user presets by group; chord syntax and qualities; preset progressions; keys; and the script commands with their arguments (generated from the command table, so it cannot go out of date). Text and `--json` forms. Tests: every registered module and every command appears; the JSON parses.
 - **Needs:** T66, T83
 
+#### [Compose] Writing notes for a part · T97 · Build
+
+- **Files:** `source/compose/part_writer.d`, `source/app/pattern_notes.d`, `tests/unit/compose_part_test.d`
+- **Task:** Split from T77. Write notes into a part's section pattern at positions (`compose.timing`, counted from the start of the section, T90) with lengths and velocities; several notes at once and rests; a note that ends writes its note-off as the piano roll does; tracks are chosen with `app.pattern_notes` so nothing collides, and added when needed. Read the notes of a part back. Tests: notes land on the right lines in 4/4, 3/4 and 6/8; polyphony adds tracks; overlapping notes of the same pitch are refused; a note past the end of the section is refused with the last position that fits; a render has sound from the part.
+- **Needs:** T77, T73, T90
+
+#### [Compose] Arrangement: clips, lanes, and the loop · T98 · Build
+
+- **Files:** `source/compose/part_writer.d`, `tests/unit/compose_part_test.d`
+- **Task:** Split from T77. `arrange` per T68: the sections in order; each part gets its own timeline lane; a section that appears twice reuses the same pattern as a clone clip; the loop covers the whole arrangement unless set otherwise; a part that does not play in a section leaves a gap. The implicit section is arranged once. Tests: clip positions and lengths in lines; clone clips share the pattern; the loop range; arranging twice replaces the first arrangement; the saved file opens in `StudioSession` and each part sounds in its sections only.
+- **Needs:** T77
+
+#### [Compose/script] Script language: module and wire commands · T101 · Build
+
+- **Files:** `source/compose/script/commands.d`, `tests/unit/compose_script_test.d`, `tests/fuzz/compose_script_fuzz.d`
+- **Task:** Split from T83. The commands `module` (from a type, `preset=`, or `file=`), `set`, `preset`, `sample` (T75), `savemodule`, `connect` (with `gain=`), `disconnect` and `remove`, through the module writer and the project writer. Errors keep the module writer's reason and suggestion and add the line and column of the offending word. Tests for every command and error; the fuzz test covers the new commands.
+- **Needs:** T83, T75, T96
+
+#### [Compose/program] The run and check subcommands · T102 · Build
+
+- **Files:** `source/compose_main.d`, `tests/unit/compose_program_test.d`, `ci/macos.yml`
+- **Task:** Split from T83. `dracker-compose run <script> [-o <file>]` and `check <script>` (T66) run the file through the interpreter: `check` writes nothing; a failed `run` writes no file; errors are printed with line and column as text or as `--json`; exit codes 0 and 1. Remove the "not available in this build yet" answer for the two (`builtBy`), and make the CI step expect success. Tests through `runProgram()` with the file delegates, and one real file on disk.
+- **Needs:** T72, T83
+
+#### [GUI/views] Script tab: the view · T112 · Build
+
+- **Files:** `source/gui/views/script_view.d` (new), `source/gui/views/pattern_editor.d`, `tests/unit/views_script_test.d` (new)
+- **Task:** The fourth tab of the pattern editor's view bar, **Script** (T108): registered like the other views and offered for every pattern; it holds the `TextArea` (T110), an **Apply** button, a list of the project's handles, and a message area. Apply hands the lines to a hook; this task ends with the hook connected to a check-only run of the interpreter (T83), which lists the problems with line and column and marks the first line, or says how many commands are valid. Nothing is changed in the project yet (T113). Tests: the tab appears and keeps its text when the tab or the pattern changes; Apply with a wrong command shows the problem and keeps the text; keyboard focus and ⌘Return.
+- **Needs:** T110, T83, T108
+
+---
+
+## Stage 3
+
+#### [Compose] Chords for parts: timing, basic styles, voicing in root position · T78 · Build
+
+- **Files:** `source/compose/chord_writer.d` (new), `source/app/chord_progression.d`, `tests/unit/compose_chord_test.d` (new)
+- **Task:** Writing a progression into a part per T69, first part: chord lengths (one bar by default, `Dm7:2`, `Dm7:1/2`, `|` between bars); the styles `hold`, `pulse` (with `every=`), `root` and `root5`; `octave=` and `voices=3|4` in root position; preset progressions by name; Roman numerals follow the project key. Uses `app.chord_progression` for parsing and chord notes. Tests: note-by-note results for each style in a major and a minor key and in 3/4; a bass part (`root`) and a keys part (`hold`) written from the same progression agree on the roots.
+- **Needs:** T69, T97
+
+#### [Compose] Tracker-level writing · T80 · Build
+
+- **Files:** `source/compose/part_writer.d`, `tests/unit/compose_part_test.d`
+- **Task:** The exact level for cases the part level cannot express: write a cell at a given track and line of a pattern (note, velocity, module, effect command and value, note-off and other note commands), read cells back, and mix both levels in one pattern without the part level overwriting hand-placed cells.
+- **Needs:** T97
+
+#### [Compose] Phrase editing · T81 · Build
+
+- **Files:** `source/compose/part_writer.d`, `tests/unit/compose_part_test.d`
+- **Task:** Operations an agent needs to work economically: copy a range of a part to another position or section, repeat a range a number of times, transpose a range (by semitones, or by scale steps in the project key), scale velocities, and clear a range. Tests for each, including ranges that cross the end of a section.
+- **Needs:** T97
+
+#### [Compose] Opening existing files: parts, sections, and the arrangement · T100 · Build
+
+- **Files:** `source/compose/project_writer.d`, `source/compose/part_writer.d`, `tests/unit/compose_project_test.d`
+- **Task:** Split from T82. After a `.msv` is opened, its patterns become parts and sections where possible (T71): a pattern whose cells all name one module becomes that module's part in a section named after the pattern; drum patterns become drum parts; names are invented from the pattern and module names and reported. Patterns that fit no part stay reachable at the tracker level (T80). The existing clips become the arrangement when they are what `arrange` would produce; otherwise they are kept as they are until the script arranges again. Tests: a helper-written project opens with the same parts, sections and arrangement it was written with; the sample projects open and save with identical playback; open, add a part with notes, save, open in `StudioSession`.
+- **Needs:** T82, T97, T98, T79
+
+#### [Compose/script] Script language: the open command · T103 · Build
+
+- **Files:** `source/compose/script/commands.d`, `tests/unit/compose_script_test.d`
+- **Task:** Split from T83. `open "file.msv"` starts the script from an existing project (T82) instead of an empty one; the handles it derives are usable by the following commands; `open` after other commands is refused. The interpreter can also be started from a document in memory, which is what the app's script tab uses (T113). Tests: open, change, save; the refusals; starting from a document.
+- **Needs:** T83, T82
+
+#### [Compose/script] Script language: section, part, notes, arrange, loop · T104 · Build
+
+- **Files:** `source/compose/script/commands.d`, `tests/unit/compose_script_test.d`, `tests/fuzz/compose_script_fuzz.d`
+- **Task:** Split from T84. The commands `section` (`bars=`), `part` (`module=`), `notes <part> [<section>] [at=<position>]: <notation>`, `arrange` and `loop`, on top of T77, T97, T98 and the notation of T84. An error inside the notation points at the offending note in the line. Tests for every command and error; a script with two sections and two parts runs, saves and renders with sound.
+- **Needs:** T83, T84, T97, T98
+
 ---
 
 ## Stage 4
 
-#### [Compose/script] Script language: music commands · T84 · Build
+#### [Compose/script] Describe: modules, properties, and wires · T87 · Build
 
-- **Files:** `source/compose/script/commands.d`, `source/compose/script/notation.d` (new), `tests/unit/compose_script_test.d`, `tests/fuzz/compose_script_fuzz.d`
-- **Task:** The note notation of T67 and the commands for sections, parts, notes, chords, drums, cells, copy, repeat, transpose, clear, arrange and loop, on top of T77–T81. Errors point at the offending note or chord inside the line. Tests for every command; the example of T67 runs and renders.
-- **Needs:** T78, T79, T80, T81, T83
+- **Files:** `source/compose/script/describe.d` (new), `source/compose_main.d`, `tests/unit/compose_describe_test.d` (new)
+- **Task:** `describe` per T71, first part: print a `.msym` as `module` and `set` commands, and the properties, modules and wires of a `.msv` as a script, with `keep` references for module data the language cannot express (extra data, MetaModule children). The `describe` subcommand answers for `.msym` files and for projects without patterns. Tests: a helper-written project without music describes to a script that writes a byte-identical file; every bundled preset describes and runs back to the same parameter values.
+- **Needs:** T71, T101, T103
+
+#### [Compose] Chords for parts: arpeggio, rhythm strings, close voicing · T99 · Build
+
+- **Files:** `source/compose/chord_writer.d`, `tests/unit/compose_chord_test.d`
+- **Task:** Split from T78. The rest of T69: `arp` (`dir=up|down|updown`, `every=`), `rhythm="x-x-x---"` combined with `hold`, `root` or `pulse`, and `voicing=close` (keep notes near the previous chord, choosing the inversion with the least movement). Tests: note-by-note results; a rhythm string of the wrong length for the bar is refused; close voicing never moves a voice further than the root-position version would.
+- **Needs:** T78
+
+#### [Compose/script] Script language: cells and phrase commands · T106 · Build
+
+- **Files:** `source/compose/script/commands.d`, `tests/unit/compose_script_test.d`, `tests/fuzz/compose_script_fuzz.d`
+- **Task:** Split from T84. The commands `cells` (tracker-level writing, T80) and `copy`, `repeat`, `transpose` (`by=` semitones or `steps=` in the key), `clear` (T81). Tests for every command and error.
+- **Needs:** T104, T80, T81
 
 ---
 
 ## Stage 5
 
-#### [Compose/script] Describe · T87 · Build
+#### [Compose/script] Script language: chords and drums · T105 · Build
 
-- **Files:** `source/compose/script/describe.d` (new), `source/compose_main.d`, `tests/unit/compose_describe_test.d` (new)
-- **Task:** `describe` per T71: print a `.msv` or `.msym` as a script, choosing part-level commands where the cells allow it and tracker-level commands otherwise, with `keep` references for module data the language cannot express. Tests enforce the guarantee of T71 on helper-written projects (byte-identical) and on the sample projects (identical playback).
-- **Needs:** T71, T82, T84
+- **Files:** `source/compose/script/commands.d`, `tests/unit/compose_script_test.d`, `tests/fuzz/compose_script_fuzz.d`
+- **Task:** Split from T84. The commands `chords <part> [<section>]: <progression> [style= octave= voices= voicing= every= dir= rhythm= preset=]` (T78, T99) and `drums <part> [<section>] <lane>: <steps>` with drum parts and lanes (T79). An error inside a progression or a step string points at the offending chord or step. Tests for every option and error; **the example script of T67 runs unchanged, saves and renders with sound**.
+- **Needs:** T104, T78, T99, T79
 
 ---
 
 ## Stage 6
 
-#### [Tests] End-to-end check of the composition helper · T88 · Build
+#### [Compose/script] Describe: music · T107 · Build
 
-- **Files:** `tests/unit/compose_end_to_end_test.d` (new), `sample-projects/` (a helper-written example with its script), `ci/macos.yml`
-- **Task:** A complete song written only as a script (several sections, bass, keys, lead, drums, an effect chain, a custom module saved as `.msym` and reused): `check`, `run`, `render` with a clean report, then open the result in `StudioSession` and compare with the script's intent; `describe` it and run the description again. Run the built program itself, not only the library. **Open until the owner has opened a helper-written project in the app** and confirmed it looks and sounds right, and until an agent has written a piece using only `docs/composer.md` and the catalog.
-- **Needs:** T84, T85, T86, T87
+- **Files:** `source/compose/script/describe.d`, `source/compose_main.d`, `tests/unit/compose_describe_test.d`
+- **Task:** Split from T87. Print the patterns and the arrangement of a `.msv`: part-level `notes` commands where the cells are exactly what they would write, `drums` for drum patterns, and tracker-level `cells` otherwise, so nothing is lost; then `arrange` and `loop`. Tests enforce the guarantee of T71: helper-written projects describe to a script that writes a byte-identical file; the sample projects describe to a script whose result plays identically.
+- **Needs:** T87, T100, T105, T106
+
+#### [GUI/views] Script tab: applying a script to the open project · T113 · Build
+
+- **Files:** `source/gui/views/script_view.d`, `source/gui/views/studio_root.d`, `source/compose/script/interpreter.d`, `tests/unit/views_script_test.d`
+- **Task:** Apply per T108 and T109: start an interpreter from a copy of the open document (T103), run every line, and when no line failed swap the result in as one undo step (T111) and clear the input; when any line failed, change nothing and keep the input with the problems shown. The commands T109 refuses in the app are refused here. Tests: a script that adds a module, a part and notes changes the project and one undo restores it exactly; a script with an error in its last line changes nothing and keeps the text; applying while playing keeps the transport running; refused commands.
+- **Needs:** T112, T111, T109, T103, T100, T101, T105, T106
 
 ---
 
 ## Stage 7
+
+#### [Tests] End-to-end check of the composition helper · T88 · Build
+
+- **Files:** `tests/unit/compose_end_to_end_test.d` (new), `sample-projects/` (a helper-written example with its script), `ci/macos.yml`
+- **Task:** A complete song written only as a script (several sections, bass, keys, lead, drums, an effect chain, a custom module saved as `.msym` and reused): `check`, `run`, `render` with a clean report, then open the result in `StudioSession` and compare with the script's intent; `describe` it and run the description again. Run the built program itself, not only the library. **Open until the owner has opened a helper-written project in the app** and confirmed it looks and sounds right, and until an agent has written a piece using only `docs/composer.md` and the catalog.
+- **Needs:** T85, T86, T107, T102
+
+#### [Docs] Script tab: end-to-end check, manual, and architecture · T114 · Build
+
+- **Files:** `tests/unit/views_studio_root_test.d`, `source/app/studio_app.d` (`--studio-gui-selftest`), `docs/manual.md`, `../architecture.md` (§10), `agents.md` (package map)
+- **Task:** A headless end-to-end test (type the example script of T67 without its `project` and `save` lines into the tab, Apply, check the document, undo, redo, render) and a GUI self-test step. A manual section for the Script tab with the commands refused there, and the decisions T108 and T109 moved into the manual and the architecture document. **Open until the owner has applied a script by hand** in the running app.
+- **Needs:** T113
+
+---
+
+## Stage 8
 
 #### [Docs] Composition helper: reference and guides · T89 · Build
 
@@ -270,6 +390,24 @@ Facts about the current code that the tasks rely on:
 ---
 
 ## Done
+
+#### [Project] Script tab in the pattern editor · T108 · Decision
+
+- **Files:** `source/gui/views/pattern_editor.d`, `source/compose/script/`
+- **Done:** 2026-11-26 (decided by the owner on 2026-11-26). The app gets a built-in `dracker-compose` script parser. It is a fourth tab, **Script**, in the pattern editor's view bar: the user types lines of script and clicks **Apply**, which parses the input and makes the changes to the open project. When the script was parsed and applied, the input is cleared. When the script has an error, the input is **not** cleared, so it can be corrected, and **nothing is applied**: either every line takes effect or none does. This replaces the earlier decision that no human-oriented mode is planned. Recorded here until the manual section is written (T114).
+- **Needs:** —
+
+#### [Compose] Module writer: defects found in review · T92 · Build
+
+- **Files:** `source/compose/module_writer.d`, `source/compose_main.d`, `source/compose/names.d` (new), `tests/unit/compose_module_test.d`
+- **Done:** 2026-11-26. All ten defects fixed, each with a test; putting each fix back makes a test fail. A copy of a `ModuleWriter` is independent (copy constructor). Names follow `isValidPresetName` and must be valid UTF-8; a refused name comes with `suggestedName()` (cut at a character boundary, `/ \\ :` → `-`), and a name from a preset or a file that breaks the rule is replaced the same way. Huge discrete values and numbers too large for a float are out of range with the nearest value. `textOf()` writes a number when an option name reads as one. A preset with an empty preset name keeps the module's own name, as the app does. Loaded values outside a parameter's range refuse the preset (mismatchedPreset). `nearestTypeName()` takes the nearer of type id and display name. `source/compose/names.d` holds the shared matching rules; `compose_main.d` uses them, so `HELP` now suggests `help`. `findModuleType()` makes the "more than one type" path testable; `writeFailed` is tested through `writePresetFile()` (a valid writer cannot make `presetBytes()` fail). Recorded in `docs/changelog.md` (2026-11-26 14:59:48 KST).
+- **Needs:** —
+
+#### [Modules] Option names for choice parameters · T91 · Build
+
+- **Files:** `source/modules/output.d`, `source/modules/synths/{input,vorbis_player,kicker,sampler,fm_synth,spectravoice}.d`, `source/modules/effects/{amplifier,filter_pro,distortion,delay,echo,reverb,compressor,waveshaper,vocal_filter,fft_fx,loop_fx,modulator,lfo}.d`, `source/modules/control/{adsr_mod,glide,multisynth,velocity2ctl,pitch_detector,feedback,metamodule,ctl2note}.d`, `tests/unit/param_options_test.d` (new), `tests/unit/views_param_rack_test.d`, `docs/manual.md` (§4 QA note, Appendix B, Appendix C row 15), `docs/changelog.md`
+- **Done:** 2026-11-26 (owner accepted the proposed defaults; four names refined to match the code on the owner's choice). Every discrete parameter that is a choice names its values in its `@Param` (35 parameters in 28 modules, plus Analog Generator *Waveform*); the 14 count-valued parameters stay numbers. Names as proposed, except where checking each module's code showed the proposal did not describe it and the owner chose code-accurate names: Delay *Inverse* Normal / Swap Wet L/R; Sampler *Loop Mode* One-Shot / Forward / Ping-Pong; LFO *Waveform* … / S&H Random; FM Synth *Algorithm* … / Carrier + Stacks /…; Kicker *Waveform* 2 is Square (a fixed 50% pulse). Other names: Input Channel Route Stereo, Left, Right, Mono Mix; Sampler Quality Nearest, Linear, Cubic; FM Algorithm Serial, Split Branches, Two Stacks, Four Into One, Carrier + Stacks, Additive; SpectraVoice Profile Organ, Brass, Choir, Bell; LFO Sync Unit Hz, Beats/Cycle; WaveShaper Oversample 1x, 2x, 4x; Modulator AM, Ring, Phase; Loop and Echo Forward/Stereo, Ping-Pong; Compressor Peak, RMS; Delay Unit ms, Hz, Lines/100; Distortion Soft Clip, Hard Clip, Sine Fold, Asymmetric; Filter Pro Lowpass … High Shelf; Vocal Filter Soprano, Alto, Tenor, Bass; Velocity2Ctl Keep, Go To Min, Go To 0; MultiSynth Off, Velocity, Velocity + Pitch; ADSR Gated, One-Shot, Inverted; MetaModule Play Patterns Off, Follow Parent, Note Triggered; Pitch Detector Autocorrelation, Zero-Crossing; Feedback Stereo, Mono; Ctl2Note Retrigger, Legato, Gate; the ten switches Off, On. `tests/unit/param_options_test.d` fails for a new choice parameter without names. The rack shows the names. Recorded in `docs/manual.md` (§7.2 note, Appendix B, Appendix C row 15) and `docs/changelog.md` (2026-11-26 14:59:48 KST). Bugs found on the way: T93, T94.
+- **Needs:** —
 
 #### [Build] Second executable `dracker-compose` · T72 · Build
 
@@ -305,7 +443,7 @@ Facts about the current code that the tasks rely on:
 #### [Project] Composition helper: script language · T67 · Decision
 
 - **Files:** `source/compose/script/` (new), `docs/composer.md` (new)
-- **Done:** 2026-11-26 (owner accepted the proposal). Recorded here until T89 moves it into `docs/manual.md` and `../architecture.md`. One command per line: a command word, then arguments; `#` starts a comment; a line ending in `\` continues on the next line; text with spaces goes in double quotes; `name=value` sets a named option; names of modules, parts, patterns and sections are chosen by the script and used as handles afterwards. Positions are `bar`, `bar.beat` or `bar.beat.sixteenth`, counted from 1 (`3.2` = bar 3, beat 2). Lengths are in beats (`1`, `1/2`, `2`), bars (`2b`) or lines (`3l`). Notes are `<pitch>[:<length>][@<velocity>]` (`C4:1 E4:1/2 G4:1/2@0.6`), `-` is a rest, `[C4 E4 G4]:2` plays notes together, pitches are spelled as in the app (C4 = middle C). Command groups: Project (`project`, `tempo`, `signature`, `key`, `open`, `save`), Modules (`module`, `set`, `preset`, `sample`, `savemodule`, `connect`, `disconnect`, `remove`), Music (`section`, `part`, `notes`, `chords`, `drums`, `cells`, `copy`, `repeat`, `transpose`, `clear`, `arrange`, `loop`). The exact command list is settled while building T83 and T84.
+- **Done:** 2026-11-26 (owner accepted the proposal). Recorded here until T89 moves it into `docs/manual.md` and `../architecture.md`. One command per line: a command word, then arguments; `//` starts a comment (changed by the owner on 2026-11-26 from `#`, which is the sharp sign in notes and keys such as `C#4` and `F# minor`; inside double quotes `//` is text); a line ending in `\` continues on the next line; text with spaces goes in double quotes; `name=value` sets a named option; names of modules, parts, patterns and sections are chosen by the script and used as handles afterwards. Positions are `bar`, `bar.beat` or `bar.beat.sixteenth`, counted from 1 (`3.2` = bar 3, beat 2). Lengths are in beats (`1`, `1/2`, `2`), bars (`2b`) or lines (`3l`). Notes are `<pitch>[:<length>][@<velocity>]` (`C4:1 E4:1/2 G4:1/2@0.6`), `-` is a rest, `[C4 E4 G4]:2` plays notes together, pitches are spelled as in the app (C4 = middle C). Command groups: Project (`project`, `tempo`, `signature`, `key`, `open`, `save`), Modules (`module`, `set`, `preset`, `sample`, `savemodule`, `connect`, `disconnect`, `remove`), Music (`section`, `part`, `notes`, `chords`, `drums`, `cells`, `copy`, `repeat`, `transpose`, `clear`, `arrange`, `loop`). The exact command list is settled while building T83 and T84.
   - Example:
 
     ```
@@ -953,3 +1091,82 @@ Facts about the current code that the tasks rely on:
 - Note: Repairs during the move: the T74 *Done* entry had lost its Files line and kept its Task line after the Done line; T53, T54, T55, T63 and T65 were in *Done* with a Status line instead of a Done line (the Status text is now their Done text); a missing blank line before the 14:17:59 changelog heading.
 - Note: T72 was left unfinished by GLM-5.4 (usage limit): its test file did not compile and the build configuration, CI step and documentation were missing. Finished by Claude Fable 5.2.
 - Note: T92 holds the defects a review found in the T74 module writer; T75 and T76 now need it.
+
+### 2026-11-26T14:59:10+09:00 — Claude Opus 5.5, T91 and T92 done; T93 and T94 added
+
+- Added: T93 ([Modules] ADSR One-Shot and Inverted modes, Build) in Stage 0.
+- Added: T94 ([Modules] SpectraVoice Profile and Bandwidth while playing, Build) in Stage 0.
+- Modified: Feature section "Composition helper (`dracker-compose`)" (F4): text replaced.
+- Modified: Feature section "Composition helper (`dracker-compose`)" (F4): text replaced.
+- Modified: T91 moved to *Done* (owner accepted the proposed defaults; four names refined to match the code on the owner's choice).
+- Modified: T92 moved to *Done*.
+- Modified: Stages recomputed: T75 Stage 1 → 0; T76 Stage 1 → 0; T77 Stage 2 → 1; T83 Stage 2 → 1; T86 Stage 2 → 1; T78 Stage 3 → 2; T79 Stage 3 → 2; T80 Stage 3 → 2; T81 Stage 3 → 2; T82 Stage 3 → 2; T85 Stage 3 → 2; T84 Stage 4 → 3; T87 Stage 5 → 4; T88 Stage 6 → 5; T89 Stage 7 → 6.
+- Note: The owner chose code-accurate names for four T91 options (Swap Wet L/R, One-Shot, S&H Random, Carrier + Stacks) after a check of each module's code.
+
+### 2026-11-26T16:33:07+09:00 — Claude Fable 5.2, Guides and briefs; large tasks split; script tab tasks T108–T114; T95, T115
+
+- Added: T95 ([GUI/views] Timeline: selecting a clip opens its pattern in the pattern editor, Build) in Stage 0.
+- Modified: T76 title, task changed.
+- Added: T96 ([Compose] Project writer: wires and trial activation, Build) in Stage 1.
+- Modified: T77 title, task, needs changed.
+- Added: T97 ([Compose] Writing notes for a part, Build) in Stage 2.
+- Added: T98 ([Compose] Arrangement: clips, lanes, and the loop, Build) in Stage 2.
+- Modified: T78 title, task, needs changed.
+- Modified: T78 moved from Stage 2 to Stage 3.
+- Modified: Stages recomputed: T84 Stage 3 → 4; T87 Stage 4 → 5; T88 Stage 5 → 6; T89 Stage 6 → 7.
+- Added: T99 ([Compose] Chords for parts: arpeggio, rhythm strings, close voicing, Build) in Stage 4.
+- Modified: T80 needs changed.
+- Modified: T80 moved from Stage 2 to Stage 3.
+- Modified: T81 needs changed.
+- Modified: T81 moved from Stage 2 to Stage 3.
+- Modified: T82 title, task, needs changed.
+- Added: T100 ([Compose] Opening existing files: parts, sections, and the arrangement, Build) in Stage 3.
+- Modified: T83 title, files, task, needs changed.
+- Added: T101 ([Compose/script] Script language: module and wire commands, Build) in Stage 2.
+- Added: T102 ([Compose/program] The run and check subcommands, Build) in Stage 2.
+- Added: T103 ([Compose/script] Script language: the open command, Build) in Stage 3.
+- Modified: T84 title, files, task, needs changed.
+- Modified: T84 moved from Stage 4 to Stage 0.
+- Modified: Stages recomputed: T87 Stage 5 → 3; T88 Stage 6 → 4; T89 Stage 7 → 5.
+- Added: T104 ([Compose/script] Script language: section, part, notes, arrange, loop, Build) in Stage 3.
+- Added: T105 ([Compose/script] Script language: chords and drums, Build) in Stage 5.
+- Added: T106 ([Compose/script] Script language: cells and phrase commands, Build) in Stage 4.
+- Modified: T86 needs changed.
+- Modified: T86 moved from Stage 1 to Stage 2.
+- Modified: T87 title, task, needs changed.
+- Modified: T87 moved from Stage 3 to Stage 4.
+- Modified: Stages recomputed: T88 Stage 4 → 5; T89 Stage 5 → 6.
+- Added: T107 ([Compose/script] Describe: music, Build) in Stage 6.
+- Modified: T88 needs changed.
+- Modified: T88 moved from Stage 5 to Stage 7.
+- Modified: Stages recomputed: T89 Stage 6 → 8.
+- Added: T108 ([Project] Script tab in the pattern editor, Decision) in Stage 0.
+- Modified: T108 moved to *Done* (decided by the owner on 2026-11-26).
+- Added: T109 ([Project] Script tab: project access, file commands, undo, and errors, Decision) in Stage 0.
+- Added: T110 ([GUI/widgets] Multi-line text editor widget, Build) in Stage 0.
+- Added: T111 ([App] Session: replace the document as one undo step, Build) in Stage 0.
+- Added: T112 ([GUI/views] Script tab: the view, Build) in Stage 2.
+- Added: T113 ([GUI/views] Script tab: applying a script to the open project, Build) in Stage 6.
+- Added: T114 ([Docs] Script tab: end-to-end check, manual, and architecture, Build) in Stage 7.
+- Modified: Feature section "Composition helper (`dracker-compose`)" (F4): text replaced.
+- Modified: Feature section "Composition helper (`dracker-compose`)" (F4): text replaced.
+- Modified: Feature section "Composition helper (`dracker-compose`)" (F4): text replaced.
+- Modified: T110 files, task changed.
+- Modified: T67 done text changed.
+- Modified: T83 task changed.
+- Modified: T94 title, files, task changed.
+- Added: T115 ([Modules] SpectraVoice: crossfade when the table changes, Build) in Stage 1.
+- Modified: T111 files changed.
+- Added: The guide of T75.
+- Added: The guide of T76.
+- Added: The guide of T84.
+- Added: The guide of T93.
+- Added: The guide of T94.
+- Added: The guide of T95.
+- Added: The guide of T110.
+- Added: The guide of T111.
+- Note: New in `tools/todo.py`: a guide per task (`guide`), `brief`, `list --no-guide`, and the generated `docs/todo-guides.md`.
+- Note: Split: T76 (wires → T96); T77 (notes → T97, arrangement → T98); T78 (arpeggio, rhythm, close voicing → T99); T82 (parts and sections → T100); T83 (module and wire commands → T101, `run` / `check` → T102, `open` → T103); T84 is now the note notation only (commands → T104, T105, T106); T87 (music → T107). Needs of the tasks around them were updated.
+- Note: Owner decisions of 2026-11-26: the Script tab (T108, with the feature text changed: the earlier "no human-oriented mode" is replaced); comments start with `//` instead of `#` (T67 and T83 changed); a module is shown under its handle (T76 guide); SpectraVoice gets prebuilt tables and old stored tables are ignored (T94 rewritten: the bug is wider than first recorded); the smaller proposals in the guides are recorded as proposed.
+- Note: Guides written for the eight Build tasks that can start now: T75, T76, T84, T93, T94, T95, T110, T111. Later tasks get theirs when the tasks they need are built.
+- Note: T110 and T111 file lists corrected: `tests/unit/widgets_test.d` and `tests/unit/session_test.d` do not exist.

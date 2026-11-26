@@ -63,7 +63,8 @@ struct Reverb {
     @Param("Pre-Delay", 0.0f, 200.0f, 12.0f, "ms", ParamScale.linear)
     float preDelayMs = 12.0f;
 
-    @Param("Freeze", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Freeze", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete,
+        ["Off", "On"])
     float freeze = 0.0f;
 
     private static immutable size_t[NUM_LINES] BASE_DELAYS_44K = [

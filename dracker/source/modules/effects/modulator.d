@@ -46,7 +46,8 @@ struct Modulator {
         PortDescriptor("out", "Output", PortKind.audioStereo, PortDirection.output)
     ];
 
-    @Param("Mod Type", 0.0f, 2.0f, 1.0f, "", ParamScale.discrete)
+    @Param("Mod Type", 0.0f, 2.0f, 1.0f, "", ParamScale.discrete,
+        ["AM", "Ring", "Phase"])
     float modType = 1.0f;
 
     @Param("Mix", 0.0f, 1.0f, 1.0f, "", ParamScale.linear)

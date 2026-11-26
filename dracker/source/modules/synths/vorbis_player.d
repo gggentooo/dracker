@@ -53,7 +53,8 @@ struct VorbisPlayer {
     @Param("Transpose", -24.0f, 24.0f, 0.0f, "st", ParamScale.linear)
     float transposeSemitones = 0.0f;
 
-    @Param("Loop", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Loop", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete,
+        ["Off", "On"])
     float loopEnable = 0.0f;
 
     private StreamAudioRing* ring_ = null;

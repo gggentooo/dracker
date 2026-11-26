@@ -46,7 +46,8 @@ struct FilterPro {
         PortDescriptor("out", "Output", PortKind.audioStereo, PortDirection.output)
     ];
 
-    @Param("Mode", 0.0f, 7.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Mode", 0.0f, 7.0f, 0.0f, "", ParamScale.discrete,
+        ["Lowpass", "Highpass", "Bandpass", "Notch", "Allpass", "Peaking", "Low Shelf", "High Shelf"])
     float mode = 0.0f;
 
     @Param("Slope", 1.0f, 4.0f, 2.0f, "st", ParamScale.discrete)

@@ -327,7 +327,8 @@ struct SpectraVoice {
         PortDescriptor("out", "Audio Out", PortKind.audioStereo, PortDirection.output)
     ];
 
-    @Param("Profile", 0.0f, 3.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Profile", 0.0f, 3.0f, 0.0f, "", ParamScale.discrete,
+        ["Organ", "Brass", "Choir", "Bell"])
     float harmonicProfile = 0.0f;
 
     @Param("Bandwidth", 0.05f, 1.0f, 0.35f, "", ParamScale.linear)

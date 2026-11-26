@@ -50,7 +50,8 @@ struct Velocity2Ctl {
     @Param("Out Max", 0.0f, 1.0f, 1.0f, "", ParamScale.linear)
     float outMax = 1.0f;
 
-    @Param("NoteOff Action", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete)
+    @Param("NoteOff Action", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete,
+        ["Keep", "Go To Min", "Go To 0"])
     float noteOffAction = 0.0f;
 
     private float currentValue_ = 0.0f;

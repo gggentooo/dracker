@@ -57,7 +57,8 @@ struct FftFx {
     @Param("Bin Shift", -64.0f, 64.0f, 0.0f, "bins", ParamScale.discrete)
     float binShift = 0.0f;
 
-    @Param("Freeze", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Freeze", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete,
+        ["Off", "On"])
     float freeze = 0.0f;
 
     @Param("Mix", 0.0f, 1.0f, 1.0f, "", ParamScale.linear)

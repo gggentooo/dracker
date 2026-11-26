@@ -57,7 +57,8 @@ struct AdsrMod {
     @Param("Release", 1.0f, 10_000.0f, 250.0f, "ms", ParamScale.logarithmic)
     float releaseMs = 250.0f;
 
-    @Param("Mode", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Mode", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete,
+        ["Gated", "One-Shot", "Inverted"])
     float stateMode = 0.0f;
 
     private AdsrEnvelope env_;

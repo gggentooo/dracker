@@ -13,7 +13,12 @@
  *   as numbers or as the text that sets them again (the shortest decimal that reads back to the same float), so
  *   a preset can be printed as a script. The writer ends as a SavedModule for a project or as a .msym preset,
  *   written through the app's own serializer. What a loaded preset carries and this writer does not edit
- *   (extra data, a MetaModule child project, macro bindings) is kept as it is.
+ *   (extra data, a MetaModule child project, macro bindings) is kept as it is. A loaded preset must hold
+ *   values its type accepts: a value outside a parameter's range, or a discrete value that is not a whole
+ *   step, refuses the preset (mismatchedPreset), because the writer never clips. Module names follow the
+ *   instrument library's rule (isValidPresetName, valid UTF-8), so any module can be saved to the library; a
+ *   name taken from a preset or a file that breaks the rule is replaced by the nearest name that keeps it.
+ *   A copy of a writer is independent of the original: the copy constructor copies the module's arrays.
  *   Every problem is returned as data: ModuleProblem says what kind of problem it is, the text it is about, a
  *   one-sentence reason, and the nearest valid name or value when there is one. Nothing is printed or thrown.
  *
@@ -27,11 +32,12 @@
  *   fromPresetFile() and writePresetFile().
  *
  * Dependencies:
- *   Internal: app.instrument_library (InstrumentLibrary, LibraryEntry, MAX_PRESET_NAME), graph.module_api
- *             (ModuleDescriptor, ParamDescriptor, ParamScale), graph.registry (ModuleRegistry),
- *             io.project_format (LoadedPreset, SavedModule, loadPreset, serializePreset)
+ *   Internal: app.instrument_library (InstrumentLibrary, isValidPresetName, LibraryEntry, MAX_PRESET_NAME),
+ *             compose.names (name matching and suggestions), graph.module_api (ModuleDescriptor,
+ *             ParamDescriptor, ParamScale), graph.registry (ModuleRegistry), io.project_format (LoadedPreset,
+ *             SavedModule, loadPreset, loadPresetFile, serializePreset, savePreset)
  *   External: std.conv (to), std.format (format), std.math (floor, isFinite), std.path (baseName,
- *             stripExtension)
+ *             stripExtension), std.utf (validate)
  *
  * Planned API (Types, Functions & Hooks):
  *   - enum PRESET_MODULE_ID; enum ModuleProblemKind
@@ -41,10 +47,10 @@
  *     setPresetName(), valueOf(), textOf(), setParamText(), setParamValue(), resetToDefaults(), savedModule(),
  *     loadedPreset(), presetBytes(), writePresetFile()
  *   - static ModuleWriter.fromType(), fromDescriptor(), fromPreset(), fromPresetFile(), fromPresetBytes()
- *   - parameterRangeText(), parameterValueText()
+ *   - findModuleType(); parameterRangeText(), parameterValueText(); suggestedName()
  *
  * See_Also:
- *   docs/todo.md (T70, T74, T75, T76), source/graph/module_api.d (ParamDescriptor),
+ *   docs/todo.md (T70, T74, T75, T76, T91, T92), source/graph/module_api.d (ParamDescriptor),
  *   source/io/project_format.d (serializePreset, loadPreset)
  */
 module compose.module_writer;
@@ -53,8 +59,10 @@ import std.conv : to;
 import std.format : format;
 import std.math : floor, isFinite;
 import std.path : baseName, stripExtension;
+import std.utf : validate;
 
-import app.instrument_library : InstrumentLibrary, LibraryEntry, MAX_PRESET_NAME;
+import app.instrument_library : InstrumentLibrary, isValidPresetName, LibraryEntry, MAX_PRESET_NAME;
+import compose.names : namesMatch, NameMatch, nearestMatch, nearestName, trim;
 import graph.module_api : ModuleDescriptor, ParamDescriptor, ParamScale;
 import graph.registry : ModuleRegistry;
 import io.project_format : LoadedPreset, SavedModule, loadPreset, loadPresetFile, serializePreset, savePreset;
@@ -165,6 +173,19 @@ struct ModuleWriter {
     private string presetName_ = "";
 
     /**
+     * Copies a writer. The parameter values, the extra data and the child project are copied too, so a change
+     * to the copy never changes the original.
+     *
+     * Params:
+     *   other = The writer to copy.
+     */
+    this(ref return scope const ModuleWriter other) @safe pure nothrow {
+        desc_ = other.desc_;
+        mod_ = copyModule(other.mod_);
+        presetName_ = other.presetName_;
+    }
+
+    /**
      * Starts a writer from a module type at its defaults, named after the type.
      *
      * Params:
@@ -175,25 +196,10 @@ struct ModuleWriter {
      *   The writer, or unknownModuleType with the nearest type id.
      */
     static ModuleWriterResult fromType(string typeText) @safe pure nothrow {
-        immutable(ModuleDescriptor)[] descs = registeredDescriptors();
-        immutable string bare = trim(typeText);
-        const(ModuleDescriptor)* found = registeredType(bare);
-        if (found is null) {
-            foreach (i; 0 .. descs.length) {
-                if (namesMatch(descs[i].typeId, bare) || namesMatch(descs[i].displayName, bare)) {
-                    if (found !is null) {
-                        return ModuleWriterResult(ModuleWriter.init, false,
-                            ModuleProblem(ModuleProblemKind.unknownModuleType, bare,
-                                "'" ~ bare ~ "' matches more than one module type", found.typeId));
-                    }
-                    found = &descs[i];
-                }
-            }
-        }
-        if (found is null) {
-            return ModuleWriterResult(ModuleWriter.init, false,
-                ModuleProblem(ModuleProblemKind.unknownModuleType, bare,
-                    "unknown module type '" ~ bare ~ "'", nearestTypeName(bare)));
+        const(ModuleDescriptor)* found;
+        ModuleProblem problem;
+        if (!findModuleType(registeredDescriptors(), typeText, found, problem)) {
+            return ModuleWriterResult(ModuleWriter.init, false, problem);
         }
         return fromDescriptor(found, found.displayName);
     }
@@ -396,14 +402,15 @@ struct ModuleWriter {
     }
 
     /**
-     * Sets the module name. Surrounding spaces are dropped. The name is 1 to MAX_PRESET_NAME bytes and holds
-     * no control characters, so it can also become a preset in the instrument library.
+     * Sets the module name. Surrounding spaces are dropped. The name must be one the instrument library takes
+     * (app.instrument_library.isValidPresetName: 1 to MAX_PRESET_NAME bytes, no '/', '\\', ':' or control
+     * characters, not starting with '.') and valid UTF-8, so the module can also become a preset.
      *
      * Params:
      *   text = The name.
      *
      * Returns:
-     *   ok, or invalidName.
+     *   ok, or invalidName with the nearest valid name (suggestedName()) when there is one.
      */
     ModuleEditResult setName(string text) @safe pure nothrow {
         if (desc_ is null) {
@@ -627,15 +634,17 @@ struct ModuleWriter {
     }
 
     /**
-     * Takes over a loaded preset: checks its module type and parameter count, and names the module as the app
-     * does when it loads the preset.
+     * Takes over a loaded preset: checks its module type, its parameter count and every value against its
+     * parameter, and names the module as the app does when it loads the preset (the preset name, else the
+     * module's own name, else fallbackName). A name the library would refuse becomes suggestedName() of it, or
+     * the type's display name when nothing of it can be kept.
      *
      * Params:
      *   preset = The preset as the app's loader read it.
      *   fallbackName = Module name when the preset carries none.
      *
      * Returns:
-     *   The writer, or unknownModuleType, or mismatchedPreset.
+     *   The writer, or unknownModuleType, or mismatchedPreset (also for a value the parameter does not take).
      */
     private static ModuleWriterResult adoptPreset(const ref LoadedPreset preset, string fallbackName)
             @safe pure nothrow {
@@ -644,7 +653,7 @@ struct ModuleWriter {
             return ModuleWriterResult(ModuleWriter.init, false,
                 ModuleProblem(ModuleProblemKind.unknownModuleType, preset.mod.typeId,
                     "the preset holds a module type that is not registered: '" ~ preset.mod.typeId ~ "'",
-                    nearestTypeName(preset.mod.typeId)));
+                    nearestTypeName(registeredDescriptors(), preset.mod.typeId)));
         }
         if (preset.mod.paramValues.length != d.params.length) {
             return ModuleWriterResult(ModuleWriter.init, false,
@@ -653,14 +662,27 @@ struct ModuleWriter {
                     ~ to!string(preset.mod.paramValues.length) ~ " parameter values, the type has "
                     ~ to!string(d.params.length), ""));
         }
+        foreach (i, ref p; d.params) {
+            ModuleProblem valueProblem;
+            immutable float value = preset.mod.paramValues[i];
+            if (!checkValue(p, value, valueTextForMessage(p, value), valueProblem)) {
+                return ModuleWriterResult(ModuleWriter.init, false,
+                    ModuleProblem(ModuleProblemKind.mismatchedPreset, p.name,
+                        "the preset does not match its module type '" ~ d.displayName ~ "': " ~ valueProblem.reason,
+                        ""));
+            }
+        }
         ModuleWriter w;
         w.desc_ = d;
         w.mod_ = copyModule(preset.mod);
         if (w.mod_.id == 0) {
             w.mod_.id = PRESET_MODULE_ID;
         }
-        w.mod_.name = preset.presetName.length > 0 ? preset.presetName : fallbackName;
-        w.presetName_ = preset.presetName;
+        immutable string given = trim(preset.presetName.length > 0 ? preset.presetName
+            : (preset.mod.name.length > 0 ? preset.mod.name : fallbackName));
+        w.mod_.name = usableName(given, d.displayName);
+        immutable string presetName = trim(preset.presetName);
+        w.presetName_ = presetName.length == 0 ? "" : usableName(presetName, w.mod_.name);
         return ModuleWriterResult(w, true);
     }
 
@@ -738,8 +760,9 @@ string parameterRangeText(ParamDescriptor p) @safe pure nothrow {
 }
 
 /**
- * Writes a parameter value as the text that sets it again: the option name of a named discrete value, a whole
- * number, or the shortest decimal that reads back to the same value.
+ * Writes a parameter value as the text that sets it again: the option name of a named discrete value (unless
+ * the name reads as a number, which setParamText() would take as a number), a whole number, or the shortest
+ * decimal that reads back to the same value.
  *
  * Params:
  *   p = Parameter descriptor.
@@ -752,7 +775,8 @@ string parameterValueText(ParamDescriptor p, float value) @safe pure nothrow {
     if (p.scale == ParamScale.discrete && isFinite(value)) {
         immutable float step = value - p.minVal;
         if (step == floor(step)) {
-            if (p.options.length > 0 && step >= 0.0f && step < cast(float) p.options.length) {
+            if (p.options.length > 0 && step >= 0.0f && step < cast(float) p.options.length
+                    && !isDecimalNumber(trim(p.options[cast(size_t) step]))) {
                 return p.options[cast(size_t) step];
             }
             return integerText(value);
@@ -768,7 +792,8 @@ string parameterValueText(ParamDescriptor p, float value) @safe pure nothrow {
  *   kind = The kind of problem.
  *
  * Returns:
- *   True for unknown and ambiguous names of types, presets, parameters and options.
+ *   True for unknown and ambiguous names of types, presets, parameters and options, and for invalid module
+ *   names (whose suggestion is the nearest valid name).
  */
 private bool isNameProblem(ModuleProblemKind kind) @safe pure nothrow @nogc {
     final switch (kind) {
@@ -778,13 +803,13 @@ private bool isNameProblem(ModuleProblemKind kind) @safe pure nothrow @nogc {
         case ModuleProblemKind.unknownParameter:
         case ModuleProblemKind.ambiguousParameter:
         case ModuleProblemKind.unknownOption:
+        case ModuleProblemKind.invalidName:
             return true;
         case ModuleProblemKind.unreadablePreset:
         case ModuleProblemKind.mismatchedPreset:
         case ModuleProblemKind.notANumber:
         case ModuleProblemKind.outOfRange:
         case ModuleProblemKind.notAWholeNumber:
-        case ModuleProblemKind.invalidName:
         case ModuleProblemKind.notLoaded:
         case ModuleProblemKind.writeFailed:
             return false;
@@ -842,9 +867,10 @@ private bool parseValueText(ParamDescriptor p, string text, out float value, out
     }
     float parsed;
     if (!tryParseFloat(bare, parsed) || !isFinite(parsed)) {
-        problem = ModuleProblem(ModuleProblemKind.notANumber, bare,
-            "the value of '" ~ p.name ~ "' must be " ~ parameterRangeText(p) ~ "; '" ~ bare
-            ~ "' is not a finite number", "");
+        immutable bool negative = bare[0] == '-';
+        problem = ModuleProblem(ModuleProblemKind.outOfRange, bare,
+            "'" ~ bare ~ "' is outside the range of '" ~ p.name ~ "' (" ~ parameterRangeText(p) ~ ")",
+            parameterValueText(p, negative ? p.minVal : p.maxVal));
         return false;
     }
     if (!checkValue(p, parsed, bare, problem)) {
@@ -909,34 +935,152 @@ private string valueTextForMessage(ParamDescriptor p, float value) @safe pure no
 }
 
 /**
- * Checks a module name: 1 to MAX_PRESET_NAME bytes and no control characters.
+ * Checks a module name: one the instrument library takes as a preset name (isValidPresetName) and valid UTF-8.
  *
  * Params:
  *   name = The name, already without surrounding spaces.
- *   problem = Receives invalidName.
+ *   problem = Receives invalidName, with suggestedName() of the name as the suggestion.
  *
  * Returns:
  *   True when the name can be used.
  */
 private bool checkName(string name, out ModuleProblem problem) @safe pure nothrow {
     problem = ModuleProblem.init;
+    if (isUsableName(name)) {
+        return true;
+    }
+    string reason;
     if (name.length == 0) {
-        problem = ModuleProblem(ModuleProblemKind.invalidName, name, "a module name cannot be empty", "");
-        return false;
+        reason = "a module name cannot be empty";
+    } else if (!isValidUtf8(name)) {
+        reason = "a module name must be valid UTF-8 text";
+    } else if (name.length > MAX_PRESET_NAME) {
+        reason = "a module name has at most " ~ to!string(MAX_PRESET_NAME) ~ " bytes";
+    } else if (name[0] == '.') {
+        reason = "a module name cannot start with '.'";
+    } else {
+        reason = "a module name cannot contain '/', '\\', ':' or control characters";
     }
-    if (name.length > MAX_PRESET_NAME) {
-        problem = ModuleProblem(ModuleProblemKind.invalidName, name,
-            "a module name has at most " ~ to!string(MAX_PRESET_NAME) ~ " bytes", name[0 .. MAX_PRESET_NAME]);
-        return false;
-    }
-    foreach (c; name) {
-        if (c < 0x20 || c == 0x7F) {
-            problem = ModuleProblem(ModuleProblemKind.invalidName, name,
-                "a module name cannot contain control characters", "");
-            return false;
+    problem = ModuleProblem(ModuleProblemKind.invalidName, name, reason, suggestedName(name));
+    return false;
+}
+
+/**
+ * Reports whether a name can be a module name: valid UTF-8 and a name the instrument library takes.
+ *
+ * Params:
+ *   name = The name.
+ *
+ * Returns:
+ *   True when the name is usable.
+ */
+private bool isUsableName(string name) @safe pure nothrow {
+    return isValidUtf8(name) && isValidPresetName(name);
+}
+
+/**
+ * The nearest name the module writer accepts: '/', '\\' and ':' become '-', control characters and bytes that
+ * are not UTF-8 are dropped, leading dots and surrounding spaces are cut, and the name is cut to
+ * MAX_PRESET_NAME bytes at a character boundary.
+ *
+ * Params:
+ *   name = The name.
+ *
+ * Returns:
+ *   The nearest usable name (the name itself when it is usable), or "" when nothing of it can be kept.
+ */
+string suggestedName(string name) @safe pure nothrow {
+    char[] buffer;
+    size_t i = 0;
+    while (i < name.length) {
+        immutable size_t length = utf8SequenceLength(name, i);
+        if (length == 0) {
+            i++;
+            continue;
         }
+        immutable char c = name[i];
+        if (length == 1 && (c < 0x20 || c == 0x7F)) {
+            i++;
+            continue;
+        }
+        if (length == 1 && (c == '/' || c == '\\' || c == ':')) {
+            buffer ~= '-';
+        } else {
+            buffer ~= name[i .. i + length];
+        }
+        i += length;
     }
-    return true;
+    string text = trim(buffer.idup);
+    size_t start = 0;
+    while (start < text.length && text[start] == '.') {
+        start++;
+    }
+    text = trim(text[start .. $]);
+    if (text.length > MAX_PRESET_NAME) {
+        size_t cut = MAX_PRESET_NAME;
+        while (cut > 0 && (text[cut] & 0xC0) == 0x80) {
+            cut--;
+        }
+        text = trim(text[0 .. cut]);
+    }
+    return isUsableName(text) ? text : "";
+}
+
+/**
+ * The name to give a module whose name came from a preset or a file: the name when it is usable, else
+ * suggestedName() of it, else a fallback.
+ *
+ * Params:
+ *   name = The name as the preset or the file gives it.
+ *   fallback = The name to use when nothing of it can be kept; must be usable.
+ *
+ * Returns:
+ *   A usable name.
+ */
+private string usableName(string name, string fallback) @safe pure nothrow {
+    if (isUsableName(name)) {
+        return name;
+    }
+    immutable string suggestion = suggestedName(name);
+    return suggestion.length > 0 ? suggestion : fallback;
+}
+
+/**
+ * Reports whether a text is valid UTF-8.
+ *
+ * Params:
+ *   text = The text.
+ *
+ * Returns:
+ *   True when every byte belongs to a well-formed UTF-8 sequence.
+ */
+private bool isValidUtf8(string text) @safe pure nothrow {
+    try {
+        validate(text);
+        return true;
+    } catch (Exception) {
+        return false;
+    }
+}
+
+/**
+ * The length of the well-formed UTF-8 sequence that starts at a position.
+ *
+ * Params:
+ *   text = The text.
+ *   start = The position.
+ *
+ * Returns:
+ *   1 to 4, or 0 when the bytes there are not a well-formed sequence.
+ */
+private size_t utf8SequenceLength(string text, size_t start) @safe pure nothrow {
+    immutable ubyte lead = cast(ubyte) text[start];
+    immutable size_t length = lead < 0x80 ? 1 : (lead >= 0xC2 && lead < 0xE0 ? 2
+        : (lead >= 0xE0 && lead < 0xF0 ? 3 : (lead >= 0xF0 && lead < 0xF5 ? 4 : 0)));
+    if (length == 0 || start + length > text.length) {
+        return 0;
+    }
+    return isValidUtf8(text[start .. start + length]) ? length : 0;
 }
 
 /**
@@ -1024,60 +1168,76 @@ private ModuleProblem notLoadedProblem() @safe pure nothrow {
     return ModuleProblem(ModuleProblemKind.notLoaded, "", "the module writer holds no module", "");
 }
 
+
 /**
- * Reports whether two names are the same without regard to case or spaces.
+ * Finds a module type by what a script writes for it: the exact type id first, else the only type whose type id
+ * or display name matches without regard to case or spaces. The registry is passed in so the rule can be
+ * checked with any list of types.
  *
  * Params:
- *   a = One name.
- *   b = The other name.
+ *   descs = The module types to search, for example ModuleRegistry.descriptors().
+ *   typeText = The type id ("synth.analog_gen") or the display name ("Analog Generator") as written.
+ *   found = Receives the type, or null.
+ *   problem = Receives unknownModuleType, with the nearest type id or display name, or for a text that
+ *     matches more than one type, the type id of the first.
  *
  * Returns:
- *   True when, without spaces and in lower case, both read the same.
+ *   True when exactly one type was found.
  */
-private bool namesMatch(string a, string b) @safe pure nothrow @nogc {
-    size_t i = 0;
-    size_t j = 0;
-    while (true) {
-        while (i < a.length && isSpaceChar(a[i])) {
-            i++;
+bool findModuleType(scope const(ModuleDescriptor)[] descs, string typeText, out const(ModuleDescriptor)* found,
+        out ModuleProblem problem) @safe pure nothrow {
+    found = null;
+    problem = ModuleProblem.init;
+    immutable string bare = trim(typeText);
+    foreach (i; 0 .. descs.length) {
+        if (descs[i].typeId == bare) {
+            found = &descs[i];
+            return true;
         }
-        while (j < b.length && isSpaceChar(b[j])) {
-            j++;
-        }
-        if (i == a.length || j == b.length) {
-            return i == a.length && j == b.length;
-        }
-        if (lowerAscii(a[i]) != lowerAscii(b[j])) {
-            return false;
-        }
-        i++;
-        j++;
     }
+    foreach (i; 0 .. descs.length) {
+        if (namesMatch(descs[i].typeId, bare) || namesMatch(descs[i].displayName, bare)) {
+            if (found !is null) {
+                problem = ModuleProblem(ModuleProblemKind.unknownModuleType, bare,
+                    "'" ~ bare ~ "' matches more than one module type", found.typeId);
+                found = null;
+                return false;
+            }
+            found = &descs[i];
+        }
+    }
+    if (found is null) {
+        problem = ModuleProblem(ModuleProblemKind.unknownModuleType, bare, "unknown module type '" ~ bare ~ "'",
+            nearestTypeName(descs, bare));
+        return false;
+    }
+    return true;
 }
 
 /**
- * The registered type nearest to a text: its type id when a type id is the nearest, else its display name. Both
- * are spellings fromType() takes.
+ * The type nearest to a text, as its type id or its display name, whichever of the two is nearer (the type id
+ * when both are as near). Both are spellings fromType() takes.
  *
  * Params:
+ *   descs = The module types.
  *   text = The type id or display name as written.
  *
  * Returns:
  *   The nearest type id or display name, or "" when none is near enough.
  */
-private string nearestTypeName(string text) @safe pure nothrow {
-    immutable(ModuleDescriptor)[] descs = registeredDescriptors();
+private string nearestTypeName(scope const(ModuleDescriptor)[] descs, string text) @safe pure nothrow {
     string[] ids;
     string[] displayNames;
     foreach (i; 0 .. descs.length) {
         ids ~= descs[i].typeId;
         displayNames ~= descs[i].displayName;
     }
-    immutable ptrdiff_t bestId = nearestMatch(text, ids);
-    immutable string byId = bestId < 0 ? "" : ids[cast(size_t) bestId];
-    immutable ptrdiff_t bestName = nearestMatch(text, displayNames);
-    immutable string byName = bestName < 0 ? "" : displayNames[cast(size_t) bestName];
-    return byId.length > 0 ? byId : byName;
+    immutable NameMatch byId = nearestMatch(text, ids);
+    immutable NameMatch byName = nearestMatch(text, displayNames);
+    if (byId.index >= 0 && (byName.index < 0 || byId.distance <= byName.distance)) {
+        return ids[cast(size_t) byId.index];
+    }
+    return byName.index < 0 ? "" : displayNames[cast(size_t) byName.index];
 }
 
 /**
@@ -1149,8 +1309,8 @@ private ptrdiff_t nearestPresetIndex(scope const(LibraryEntry)[] entries, string
             indices ~= i;
         }
     }
-    immutable ptrdiff_t best = nearestMatch(bare, names);
-    return best < 0 ? -1 : cast(ptrdiff_t) indices[cast(size_t) best];
+    immutable NameMatch best = nearestMatch(bare, names);
+    return best.index < 0 ? -1 : cast(ptrdiff_t) indices[cast(size_t) best.index];
 }
 
 /**
@@ -1175,146 +1335,11 @@ private size_t countMatches(scope const(LibraryEntry)[] entries, string group, s
     return count;
 }
 
-/**
- * Finds the candidate nearest to a text.
- *
- * Params:
- *   text = The text as written.
- *   candidates = The valid names.
- *
- * Returns:
- *   The index of the nearest candidate, or -1 when none is near enough: at most half the length of the longer
- *   of the two apart, rounded down. A candidate that starts with the text counts as one step apart.
- */
-private ptrdiff_t nearestMatch(string text, scope const(string)[] candidates) @safe pure nothrow {
-    immutable string needle = normalize(text);
-    if (needle.length == 0) {
-        return -1;
-    }
-    ptrdiff_t best = -1;
-    size_t bestDistance = size_t.max;
-    foreach (i, ref candidate; candidates) {
-        immutable string hay = normalize(candidate);
-        if (hay.length == 0) {
-            continue;
-        }
-        immutable size_t longer = needle.length > hay.length ? needle.length : hay.length;
-        immutable size_t distance = hay == needle ? 0 : (hasPrefix(hay, needle) ? 1 : editDistance(needle, hay));
-        if (distance * 2 <= longer && distance < bestDistance) {
-            bestDistance = distance;
-            best = cast(ptrdiff_t) i;
-        }
-    }
-    return best;
-}
 
-/**
- * The name nearest to a parameter or option name that was not found.
- *
- * Params:
- *   text = The name as written.
- *   candidates = The valid names.
- *
- * Returns:
- *   The nearest name, or "" when none is near enough.
- */
-private string nearestName(string text, scope const(string)[] candidates) @safe pure nothrow {
-    immutable ptrdiff_t best = nearestMatch(text, candidates);
-    return best < 0 ? "" : candidates[cast(size_t) best];
-}
 
-/**
- * The edit distance (Levenshtein) between two texts: the smallest number of single-character insertions,
- * deletions and substitutions that turn one into the other.
- *
- * Params:
- *   a = One text.
- *   b = The other text.
- *
- * Returns:
- *   The distance.
- */
-private size_t editDistance(string a, string b) @safe pure nothrow {
-    size_t[] previous = new size_t[b.length + 1];
-    size_t[] current = new size_t[b.length + 1];
-    foreach (j; 0 .. b.length + 1) {
-        previous[j] = j;
-    }
-    foreach (i; 1 .. a.length + 1) {
-        current[0] = i;
-        foreach (j; 1 .. b.length + 1) {
-            immutable size_t substitutionCost = a[i - 1] == b[j - 1] ? 0 : 1;
-            size_t best = previous[j - 1] + substitutionCost;
-            if (previous[j] + 1 < best) {
-                best = previous[j] + 1;
-            }
-            if (current[j - 1] + 1 < best) {
-                best = current[j - 1] + 1;
-            }
-            current[j] = best;
-        }
-        size_t[] swap = previous;
-        previous = current;
-        current = swap;
-    }
-    return previous[b.length];
-}
 
-/**
- * Lowers a name and drops its spaces, for comparing without regard to case or spaces.
- *
- * Params:
- *   text = The name.
- *
- * Returns:
- *   The normalized name.
- */
-private string normalize(string text) @safe pure nothrow {
-    char[] buffer = new char[text.length];
-    size_t count = 0;
-    foreach (c; text) {
-        if (!isSpaceChar(c)) {
-            buffer[count] = lowerAscii(c);
-            count++;
-        }
-    }
-    return buffer[0 .. count].idup;
-}
 
-/**
- * Reports whether a text starts with another.
- *
- * Params:
- *   text = The text.
- *   prefix = The start to look for.
- *
- * Returns:
- *   True when the first bytes of text are prefix.
- */
-private bool hasPrefix(string text, string prefix) @safe pure nothrow @nogc {
-    return text.length >= prefix.length && text[0 .. prefix.length] == prefix;
-}
 
-/**
- * Cuts the spaces from both ends of a text.
- *
- * Params:
- *   text = The text.
- *
- * Returns:
- *   The text without leading and trailing spaces.
- */
-private string trim(string text) @safe pure nothrow @nogc {
-    size_t start = 0;
-    size_t end = text.length;
-    while (start < end && isSpaceChar(text[start])) {
-        start++;
-    }
-    while (end > start && isSpaceChar(text[end - 1])) {
-        end--;
-    }
-    return text[start .. end];
-}
 
 /**
  * The position of the last slash in a text.
@@ -1427,17 +1452,21 @@ private string numberText(float value) @safe pure nothrow {
 }
 
 /**
- * Writes a whole number, keeping the sign of a negative zero so that the text reads back to the same bits.
+ * Writes a whole number, keeping the sign of a negative zero so that the text reads back to the same bits. A
+ * number of 10^15 or more in size, which a long cannot always hold, is written as the shortest decimal.
  *
  * Params:
  *   value = A whole number.
  *
  * Returns:
- *   The number without decimals.
+ *   The number without decimals, or its shortest decimal.
  */
 private string integerText(float value) @safe pure nothrow {
     if (value == 0.0f) {
         return 1.0f / value < 0.0f ? "-0" : "0";
+    }
+    if (!isFinite(value) || !absLessThan(value, 1.0e15f)) {
+        return shortestFloatText(value);
     }
     return to!string(cast(long) value);
 }
@@ -1515,31 +1544,7 @@ private bool absLessThan(float value, float bound) @safe pure nothrow @nogc {
     return value > -bound && value < bound;
 }
 
-/**
- * Reports whether a character is an ASCII space character.
- *
- * Params:
- *   c = The character.
- *
- * Returns:
- *   True for space, tab, newline, carriage return, vertical tab and form feed.
- */
-private bool isSpaceChar(char c) @safe pure nothrow @nogc {
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
-}
 
-/**
- * Lowers an ASCII letter.
- *
- * Params:
- *   c = The character.
- *
- * Returns:
- *   The lower-case letter; other characters unchanged.
- */
-private char lowerAscii(char c) @safe pure nothrow @nogc {
-    return c >= 'A' && c <= 'Z' ? cast(char) (c + ('a' - 'A')) : c;
-}
 
 /**
  * The registered module descriptors. ModuleRegistry.descriptors() is not marked @safe although it only returns

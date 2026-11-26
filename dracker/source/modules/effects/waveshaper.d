@@ -110,10 +110,12 @@ struct WaveShaper {
     @Param("Mix", 0.0f, 1.0f, 1.0f, "", ParamScale.linear)
     float mix = 1.0f;
 
-    @Param("DC Block", 0.0f, 1.0f, 1.0f, "", ParamScale.discrete)
+    @Param("DC Block", 0.0f, 1.0f, 1.0f, "", ParamScale.discrete,
+        ["Off", "On"])
     float dcBlock = 1.0f;
 
-    @Param("Oversample", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Oversample", 0.0f, 2.0f, 0.0f, "", ParamScale.discrete,
+        ["1x", "2x", "4x"])
     float oversampleMode = 0.0f;
 
     private WaveShaperCurveAsset* curveAsset_ = null;

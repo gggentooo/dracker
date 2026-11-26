@@ -24,7 +24,8 @@
  *   write to the standard streams. No audio, GUI or session code.
  *
  * Dependencies:
- *   Internal: none
+ *   Internal: compose.names (nearestName: the same suggestion rule as the rest of the helper, without regard
+ *             to case or spaces)
  *   External: std.file (read), std.stdio (stderr, stdout)
  *
  * Planned API (Types, Functions & Hooks):
@@ -44,6 +45,8 @@ module compose_main;
 
 import std.file : read;
 import std.stdio : stderr, stdout;
+
+import compose.names : nearestName;
 
 /**
  * The name the program is called by.
@@ -830,85 +833,8 @@ private ptrdiff_t indexOfName(string name) @safe pure nothrow {
     return -1;
 }
 
-/**
- * The name nearest to one that was not found.
- *
- * Params:
- *   text = The name as written.
- *   candidates = The valid names.
- *
- * Returns:
- *   The nearest name, or "" when none is near enough (at most half the length of the longer of the two apart,
- *   rounded down; a name that starts with the text counts as one step apart).
- */
-private string nearestName(string text, scope const(string)[] candidates) @safe pure nothrow {
-    if (text.length == 0) {
-        return "";
-    }
-    ptrdiff_t best = -1;
-    size_t bestDistance = size_t.max;
-    foreach (i, ref candidate; candidates) {
-        immutable size_t longer = text.length > candidate.length ? text.length : candidate.length;
-        immutable size_t distance = candidate == text ? 0
-            : (hasPrefix(candidate, text) ? 1 : editDistance(text, candidate));
-        if (distance * 2 <= longer && distance < bestDistance) {
-            bestDistance = distance;
-            best = cast(ptrdiff_t) i;
-        }
-    }
-    return best < 0 ? "" : candidates[cast(size_t) best];
-}
 
-/**
- * Reports whether a text starts with another.
- *
- * Params:
- *   text = The text.
- *   prefix = The start to look for.
- *
- * Returns:
- *   True when the first bytes of text are prefix.
- */
-private bool hasPrefix(string text, string prefix) @safe pure nothrow @nogc {
-    return text.length >= prefix.length && text[0 .. prefix.length] == prefix;
-}
 
-/**
- * The edit distance (Levenshtein) between two texts.
- *
- * Params:
- *   a = One text.
- *   b = The other text.
- *
- * Returns:
- *   The smallest number of single-character insertions, deletions and substitutions that turn one into the
- *   other.
- */
-private size_t editDistance(string a, string b) @safe pure nothrow {
-    size_t[] previous = new size_t[b.length + 1];
-    size_t[] current = new size_t[b.length + 1];
-    foreach (j; 0 .. b.length + 1) {
-        previous[j] = j;
-    }
-    foreach (i; 1 .. a.length + 1) {
-        current[0] = i;
-        foreach (j; 1 .. b.length + 1) {
-            immutable size_t substitutionCost = a[i - 1] == b[j - 1] ? 0 : 1;
-            size_t best = previous[j - 1] + substitutionCost;
-            if (previous[j] + 1 < best) {
-                best = previous[j] + 1;
-            }
-            if (current[j - 1] + 1 < best) {
-                best = current[j - 1] + 1;
-            }
-            current[j] = best;
-        }
-        size_t[] swap = previous;
-        previous = current;
-        current = swap;
-    }
-    return previous[b.length];
-}
 
 /**
  * A whole number as decimal text.

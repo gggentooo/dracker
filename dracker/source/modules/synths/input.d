@@ -44,10 +44,12 @@ struct AudioInput {
     @Param("Input Gain", 0.0f, 4.0f, 1.0f, "x", ParamScale.linear)
     float inputGain = 1.0f;
 
-    @Param("Channel Route", 0.0f, 3.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Channel Route", 0.0f, 3.0f, 0.0f, "", ParamScale.discrete,
+        ["Stereo", "Left", "Right", "Mono Mix"])
     float channelRoute = 0.0f;
 
-    @Param("Mute", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Mute", 0.0f, 1.0f, 0.0f, "", ParamScale.discrete,
+        ["Off", "On"])
     float monitorMute = 0.0f;
 
     private ParamSmoother gainSmoother_;

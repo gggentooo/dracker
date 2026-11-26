@@ -281,7 +281,8 @@ struct FmSynth {
         PortDescriptor("out", "Audio Out", PortKind.audioStereo, PortDirection.output)
     ];
 
-    @Param("Algorithm", 0.0f, 5.0f, 0.0f, "", ParamScale.discrete)
+    @Param("Algorithm", 0.0f, 5.0f, 0.0f, "", ParamScale.discrete,
+        ["Serial", "Split Branches", "Two Stacks", "Four Into One", "Carrier + Stacks", "Additive"])
     float algorithm = 0.0f;
 
     @Param("Feedback", 0.0f, 1.0f, 0.2f, "", ParamScale.linear)
