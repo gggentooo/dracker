@@ -10,6 +10,34 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
 
 ---
 
+## [2026-11-26 18:45:58 KST]
+- **Author:** Qwen3.8 Flash Next
+- **Task:** T95 (Timeline: selecting a clip opens its pattern in the pattern editor)
+- **Affected Files:**
+  - `source/gui/views/timeline_view.d`
+  - `tests/unit/views_timeline_test.d`
+  - `tests/unit/views_studio_root_test.d`
+  - `docs/manual.md` (§9.2, §9.3)
+  - `docs/todo.json`, `docs/todo.md`, `docs/todo-guides.md` (through `tools/todo.py`)
+  - `docs/changelog.md`
+- **Description:**
+  - Added the private method `TimelineView.selectAndOpen(uint clipId)`, directly below `selectClip`: it makes the clip the selected one and calls `ctx.selectPattern(c.patternId)` when `findPattern` finds that pattern in the document; `0` or a clip id that is not in the document clears the selection and leaves the pattern editor where it was. It calls no `ctx.session.do…` method and records no undo step, so selecting is not an edit. `findClip` and `findPattern` return `null`, so both are compared with `is null`.
+  - `selectClip`, `onMouseDown` (clip-body press, so a move, resize or ⌥-clone drag opens the pattern at mouse-down), `onMouseUp` (⌥-clone result), `buildContextMenu` (right-click), `makeUnique` and `addClipLine` now select through `selectAndOpen`; `timeline_view.d` calls `ctx.selectPattern` in exactly one place. The `else { ctx.selectPattern(c.patternId); }` branch of the double-click path was deleted because the first click of the double-click already opens the pattern; a double-click on the clip's name label still opens the rename `TextField`, drag, snap and menu code were not changed, and no keyboard selection was added. `studio_context.d` and `pattern_editor.d` were not edited — the pattern editor looks its view up in `viewByPattern_[ctx.currentPattern()]`, so the view remembered for that pattern returns by itself.
+  - `docs/manual.md` §9.2: a double-click on an empty spot now places the *current* pattern, "which is the pattern of the clip you selected last". §9.3: the "Select" and "Open its pattern in the pattern editor" rows were replaced by one row for a click (the pattern editor shows the clip's pattern in the Tracker, Piano roll or Drumpad last used for that pattern; a right-click selects the same way), and a new bullet says clicking an empty spot clears the selection while the pattern editor keeps showing the same pattern.
+  - Tests: one new unittest in `tests/unit/views_timeline_test.d` walks the guide's acceptance rows in order — click clip 2 (`sel == 2`, `cur == 2`), click clip 1 (`sel == 1`, `cur == 1`), click the clone clip (`sel == 3`, `cur == 2`), click an empty spot in lane 0 (`sel == 0`, `cur == 2`), `selectClip(1)`/`selectClip(0)`/`selectClip(9999)`, undo count `u0` and `documentRevision()` unchanged, a move drag of 96 points (`96 / 6 = 16` lines, `16 + 16 → startLine == 32`, `laneY == 1`, `cur == 2`, `u0 + 1`), a double-click on an empty spot (`clip 4`, `patternId == 2`, `startLine == 100`, `u0 + 2`), right-click labels (6 labels, `sel == 1`, `cur == 1`) and "Add Clip: Bass" (`patternId == 2`, `cur == 2`, `u0 + 3`). One new unittest in `tests/unit/views_studio_root_test.d` checks `"02 Bass"` with the tracker, then `"01 Pattern 01"` with the remembered piano roll, and `undoCount()` unchanged.
+  - Lines 991 and 997 of `tests/unit/views_timeline_test.d` now expect `p1` instead of `p2`: the first click of the double-click on a pattern-1 clip's name label opens pattern 1, so the rename field belongs to the pattern the editor now shows. This is the wanted new behaviour, not a hidden failure; no expectation was weakened.
+  - Mutation check: putting `selected_ = c.clipId;` back in `onMouseDown` made two asserts fail — `tests/unit/views_timeline_test.d(627)` and `tests/unit/views_studio_root_test.d(1337)` — then the fix was restored and the suite passes again.
+- **Verification:**
+  - `dub test --compiler=ldc2 --config=headless` → `41 modules passed unittests`
+  - `ldc2 -w -unittest -c -o- $I -Itests $V source/gui/views/timeline_view.d tests/unit/views_timeline_test.d tests/unit/views_studio_root_test.d` → no output, `exit 0`
+  - `grep -n '//' source/gui/views/timeline_view.d tests/unit/views_timeline_test.d tests/unit/views_studio_root_test.d` → no matches, and no `/* ... */` comment outside the DDoc blocks
+  - `grep -n "ctx.selectPattern" source/gui/views/timeline_view.d` → `537:            ctx.selectPattern(c.patternId);` (one call site)
+  - `grep -n "selected_ = " source/gui/views/timeline_view.d` → five lines: `183` (field), `532` and `535` (`selectAndOpen`), `926` and `1278` (`selected_ = 0;`)
+  - Mutation check run: `dub test --compiler=ldc2 --config=headless` → `2/41 modules FAILED unittests`, with `core.exception.AssertError@tests/unit/views_timeline_test.d(627): Assertion failure` and `core.exception.AssertError@tests/unit/views_studio_root_test.d(1337): Assertion failure`
+  - Not run: `dub build --compiler=ldc2 --config=compose` (nothing in `source/compose/` or `source/compose_main.d` changed), `dub build --compiler=ldc2 --config=app --build=debug` (only `source/gui/views/timeline_view.d` changed, not `source/app/gui_gallery.d`), `dub test --compiler=ldc2 --config=app` (nothing under `source/platform/`, `source/app/studio_app.d`, `source/app/gui_shell.d` or `source/app/audio_host.d` changed), and the `--sound-check-presets` check (that belongs to T94).
+
+---
+
 ## [2026-11-26 18:13:35 KST]
 - **Author:** Gemini 4 Neon
 - **Task:** T93 owner decision recorded (`Audio Out` rests at 1.0 in Inverted mode)

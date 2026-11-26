@@ -1315,4 +1315,36 @@ version (unittest) {
         r.press(53);
         assert(r.root.skeletonPanel() is null);
     }
+
+    unittest {
+        import gui.views.pattern_editor : PatternViewKind;
+
+        Rig r = makeRig();
+        scope (exit) r.session.dispose();
+        immutable uint p2 = r.session.doAddPattern(4, 32, "Bass");
+        immutable uint b = r.session.doAddClip(p2, 0, 32, 1);
+        assert(p2 == 2 && b == 2);
+        r.frame();
+        assert(r.ctx.currentPattern() == 1);
+        r.click(r.root.pattern.viewButtons[PatternViewKind.pianoRoll].bounds.center());
+        assert(r.root.pattern.currentView() == PatternViewKind.pianoRoll);
+        immutable size_t u0 = r.session.history().undoCount();
+
+        immutable RectF cb = r.root.timeline.clipRect(b);
+        immutable Point2F pb = Point2F(cb.x + 10.0f, cb.y + cb.h * 0.5f);
+        assert(r.root.timeline.contentRect().contains(pb));
+        r.click(pb);
+        assert(r.root.timeline.selectedClip() == b && r.ctx.currentPattern() == p2);
+        assert(r.root.pattern.patternSelect.selectedText() == "02 Bass");
+        assert(r.root.pattern.currentView() == PatternViewKind.tracker);
+
+        immutable RectF ca = r.root.timeline.clipRect(1);
+        immutable Point2F pa = Point2F(ca.x + 10.0f, ca.y + ca.h * 0.5f);
+        assert(r.root.timeline.contentRect().contains(pa));
+        r.click(pa);
+        assert(r.root.timeline.selectedClip() == 1 && r.ctx.currentPattern() == 1);
+        assert(r.root.pattern.patternSelect.selectedText() == "01 Pattern 01");
+        assert(r.root.pattern.currentView() == PatternViewKind.pianoRoll);
+        assert(r.session.history().undoCount() == u0);
+    }
 }

@@ -152,16 +152,6 @@ Facts about the current code that the tasks rely on:
 - **Task:** Found while checking the option names of T91, and wider than first recorded: every SpectraVoice always plays Organ at Bandwidth 0.35. Its table is built once in `prepare()` with the default parameters, before the saved ones are set, and that table is then stored with the module; so *Profile* and *Bandwidth* do nothing in the rack, from automation or MIDI, or after reopening, and the bundled `Strings` preset (Brass, 0.6) plays Organ. Fix decided by the owner on 2026-11-26: `prepare()` builds all 172 tables (4 profiles × 43 harmonic counts, about 1.4 MB per module) off the audio thread and `process()` picks one from the current parameters; stored tables without a new mark are ignored. Existing projects with another Profile and the `Strings` preset then sound as their parameters say: render `Strings` again for the owner. Tests that Profile and Bandwidth change the rendered sound while a note plays and after loading; then remove the SpectraVoice notes from Appendix B and Appendix C row 15.
 - **Needs:** —
 
-#### [GUI/views] Timeline: selecting a clip opens its pattern in the pattern editor · T95 · Build
-
-- **Files:** `source/gui/views/timeline_view.d`, `source/gui/views/studio_context.d` (`selectPattern`), `tests/unit/views_timeline_test.d`, `tests/unit/views_studio_root_test.d`, `docs/manual.md` (§9.3)
-- **Task:** Asked for by the owner on 2026-11-26. Today a single click on a clip only selects it; the pattern editor follows only after a double-click on the clip body (`timeline_view.d`, mouse-down handler: `ctx.selectPattern(c.patternId)` under `clickCount >= 2`). Make every way of selecting a clip show its pattern in the pattern editor: a single click, `selectClip()`, and selection by keyboard if there is one.
-  - Selecting is not an edit: no undo step, and the editor keeps the view (tracker, piano roll, drumpad) remembered for that pattern.
-  - A click that starts a move, resize or clone drag also opens the pattern; the drag itself is unchanged. A double-click on the clip name still renames; a double-click on empty space still places the current pattern, which is now the one last selected.
-  - Clicking empty space clears the selection and leaves the editor on the pattern it shows.
-  - Tests: click a clip of another pattern and check `ctx.currentPattern()` and what the pattern editor shows; a clone clip opens the shared pattern; a drag still moves the clip; the undo count is unchanged by selecting. Update the manual.
-- **Needs:** —
-
 #### [GUI/widgets] Multi-line text editor widget · T110 · Build
 
 - **Files:** `source/gui/widgets.d`, `tests/unit/widgets_textarea_test.d` (new; uses the `Harness` of `tests/unit/gui_test.d`), `source/app/gui_gallery.d` (compiled in the `app` configuration only)
@@ -377,6 +367,12 @@ Facts about the current code that the tasks rely on:
 ---
 
 ## Done
+
+#### [GUI/views] Timeline: selecting a clip opens its pattern in the pattern editor · T95 · Build
+
+- **Files:** `source/gui/views/timeline_view.d`, `source/gui/views/studio_context.d` (`selectPattern`), `tests/unit/views_timeline_test.d`, `tests/unit/views_studio_root_test.d`, `docs/manual.md` (§9.3)
+- **Done:** 2026-11-26. Every way of selecting a timeline clip now shows its pattern in the pattern editor: a new private TimelineView.selectAndOpen is used by selectClip, the clip-body mouse-down (so a move, resize or ⌥-clone drag opens the pattern at mouse-down), the clone on mouse-up, buildContextMenu, makeUnique and addClipLine, so timeline_view.d calls ctx.selectPattern in one place only. Selecting is not an edit (no undo step, no session call), the editor keeps the view remembered for that pattern, and clicking empty space clears the selection. Added unittests in tests/unit/views_timeline_test.d and tests/unit/views_studio_root_test.d, changed the two rename-test expectations from p2 to p1, and updated docs/manual.md §9.2 and §9.3. Recorded in docs/changelog.md (2026-11-26 18:45:58 KST).
+- **Needs:** —
 
 #### [Project] Script tab: project access, file commands, undo, and errors · T109 · Decision
 
@@ -1181,3 +1177,7 @@ Facts about the current code that the tasks rely on:
 - Modified: The guide of T110.
 - Modified: The guide of T93.
 - Note: Owner decided T93 Inverted mode rests at 1.0 on both CV Out and Audio Out.
+
+### 2026-11-26T18:48:31+09:00 — Qwen3.8 Flash Next, T95 done
+
+- Modified: T95 moved to *Done*.

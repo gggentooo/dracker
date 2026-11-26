@@ -704,15 +704,14 @@ The timeline (arranger) decides **when** each pattern plays. Time runs left to r
 - The **selected** clip has a thick outline. Other clips of the same pattern have a thin "family" outline.
 
 ### 9.2 Creating clips
-- **Double-click an empty spot** to place a clip of the *current* pattern (the one in the pattern editor). Its length is the pattern's length.
+- **Double-click an empty spot** to place a clip of the *current* pattern (the one in the pattern editor, which is the pattern of the clip you selected last). Its length is the pattern's length.
 - **Right-click an empty spot** and choose **Add Clip: *pattern name***.
 
 ### 9.3 Editing clips
 
 | Action | Gesture |
 |---|---|
-| Select | Click |
-| Open its pattern in the pattern editor | Double-click the clip (anywhere except its name) |
+| Select, and open its pattern in the pattern editor | Click. The pattern editor shows the clip's pattern in the view (Tracker, Piano roll or Drumpad) last used for that pattern. A right-click selects the clip in the same way. |
 | Rename its pattern | Double-click the clip's **name label**, type the new name, press Return. Every clip of that pattern shows the new name; duplicate names get a number added ([§8.1](#81-the-header-strip)). |
 | Move (in time and between lanes) | Drag the body |
 | Resize | Drag the right edge (minimum 1 line) |
@@ -721,6 +720,7 @@ The timeline (arranger) decides **when** each pattern plays. Time runs left to r
 | Delete | Delete / ⌫ |
 
 - A ghost preview shows during a drag; releasing commits one undo step.
+- Clicking an empty spot clears the selection. The pattern editor keeps showing the same pattern.
 - **Snapping:** no modifier snaps to the beat; **Shift** to 1 line; **⌘** to the bar. Beats and bars follow the time signature (in 4/4: 4 and 16 lines; in 3/4: 4 and 12; in 6/8: 2 and 12). The grid lines (bars stronger than beats) and the ruler follow it too; ruler labels are line numbers placed on beats or bars.
 
 **Clip context menu**

@@ -11,8 +11,9 @@
  *   the pattern name, with clones marked by a distinct border and a "⧉" prefix (the clone family of the selected
  *   clip is outlined), muted clips dimmed, soloed clips highlighted, and a revision-cached note miniature.
  *   Interactions: body drag moves a clip in time and lane, right-edge drag resizes it, Alt+drag clones it (each
- *   committed as one undo step on release with a ghost preview while dragging), double-click selects the clip's
- *   pattern (on the clip's name label it instead opens a TextField renaming the pattern), double-click on an empty lane adds a clip of the current pattern, right-click menus (clip: Mute,
+ *   committed as one undo step on release with a ghost preview while dragging), selecting a clip shows its pattern
+ *   in the pattern editor (double-click on the clip's name label instead opens a TextField renaming the pattern),
+ *   double-click on an empty lane adds a clip of the current pattern, right-click menus (clip: Mute,
  *   Solo, Supertrack, Make Unique, Set Loop To Clip, Delete; empty lane: Add Clip of each pattern), Delete key,
  *   horizontal scroll pans, vertical scroll moves lanes, Cmd+scroll / pinch / zoom actions zoom around a point.
  *   Snapping: no modifier snaps to beats, Shift snaps to single lines, Cmd snaps to bars. Beats and bars follow the
@@ -507,14 +508,34 @@ final class TimelineView : Widget, StudioCommandSink {
     }
 
     /**
-     * Selects a clip (0 clears).
+     * Selects a clip (0 clears) and shows its pattern in the pattern editor.
      *
      * Params:
      *   clipId = Clip id.
      */
     void selectClip(uint clipId) {
-        selected_ = clipId != 0 && findClip(clipId) !is null ? clipId : 0;
+        selectAndOpen(clipId);
         invalidate();
+    }
+
+    /**
+     * Makes a clip the selected one and shows its pattern in the pattern editor. This is not an edit: no undo
+     * step is recorded and the document is not changed.
+     *
+     * Params:
+     *   clipId = Clip id; 0 or an id that is not in the document clears the selection and leaves the pattern
+     *            editor on the pattern it shows.
+     */
+    private void selectAndOpen(uint clipId) {
+        const(TimelineClip)* c = clipId != 0 ? findClip(clipId) : null;
+        if (c is null) {
+            selected_ = 0;
+            return;
+        }
+        selected_ = c.clipId;
+        if (findPattern(c.patternId) !is null) {
+            ctx.selectPattern(c.patternId);
+        }
     }
 
     /**
@@ -909,13 +930,11 @@ final class TimelineView : Widget, StudioCommandSink {
             invalidate();
             return true;
         }
-        selected_ = c.clipId;
+        selectAndOpen(c.clipId);
         if (e.clickCount >= 2) {
             drag_ = TimelineDragMode.none;
             if (clipNameRect(c.clipId).contains(e.pos)) {
                 beginRenameClipPattern(c.clipId);
-            } else {
-                ctx.selectPattern(c.patternId);
             }
             invalidate();
             return true;
@@ -981,7 +1000,7 @@ final class TimelineView : Widget, StudioCommandSink {
         case TimelineDragMode.clone:
             immutable uint nid = ctx.session.doCloneClip(dragClip_, dragStart_, dragLane_);
             if (nid != 0) {
-                selected_ = nid;
+                selectAndOpen(nid);
             }
             break;
         case TimelineDragMode.none:
@@ -1092,7 +1111,7 @@ final class TimelineView : Widget, StudioCommandSink {
             return items;
         }
         immutable TimelineClip cv = *c;
-        selected_ = cv.clipId;
+        selectAndOpen(cv.clipId);
         invalidate();
         immutable uint cid = cv.clipId;
         items ~= MenuItem(cv.mute ? "Unmute" : "Mute", () { toggleClipFlag(cid, 0); });
@@ -1225,8 +1244,7 @@ final class TimelineView : Widget, StudioCommandSink {
         if (!ctx.session.endEditGroup() || nid == 0 || findClip(nid) is null) {
             return 0;
         }
-        selected_ = nid;
-        ctx.selectPattern(np);
+        selectAndOpen(nid);
         invalidate();
         return nid;
     }
@@ -1406,7 +1424,7 @@ final class TimelineView : Widget, StudioCommandSink {
         }
         immutable uint nid = ctx.session.doAddClip(patternId, line < 0 ? 0 : line, sp.lines, lane);
         if (nid != 0) {
-            selected_ = nid;
+            selectAndOpen(nid);
         }
         invalidate();
         return nid;

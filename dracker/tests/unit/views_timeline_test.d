@@ -988,13 +988,13 @@ version (unittest) {
         assert(v.clipNameRect(9999).isEmpty());
 
         g.dblClick(nr.center().x, nr.center().y);
-        assert(g.ui.overlays().length == 1 && g.ctx.currentPattern() == p2);
+        assert(g.ui.overlays().length == 1 && g.ctx.currentPattern() == p1);
         auto f = cast(TextField) g.ui.overlays()[0];
         assert(f !is null && f.text() == g.s.document().patterns[0].name);
         type("Drums"d);
         key(KeyCode.returnKey);
         assert(g.ui.overlays().length == 0 && g.s.document().patterns[0].name == "Drums1");
-        assert(g.ctx.status == "Renamed pattern to Drums1" && g.ctx.currentPattern() == p2);
+        assert(g.ctx.status == "Renamed pattern to Drums1" && g.ctx.currentPattern() == p1);
 
         g.dblClick(cr.right() - 12.0f, cr.bottom() - 4.0f);
         assert(g.ui.overlays().length == 0 && g.ctx.currentPattern() == p1);
@@ -1106,5 +1106,58 @@ version (unittest) {
             }
         }
         assert(sawDrumMenu);
+    }
+
+    unittest {
+        auto g = new Rig();
+        scope (exit) g.dispose();
+        TimelineView v = g.view;
+        immutable uint p2 = g.s.doAddPattern(4, 32, "Bass");
+        immutable uint b = g.s.doAddClip(p2, 16, 32, 1);
+        immutable uint cl = g.s.doCloneClip(b, 64, 2);
+        assert(p2 == 2 && b == 2 && cl == 3);
+        immutable size_t u0 = g.s.history().undoCount();
+        immutable ulong rev0 = g.ctx.documentRevision();
+        assert(g.ctx.currentPattern() == 1 && v.selectedClip() == 0);
+
+        g.click(g.bodyOf(b).x, g.bodyOf(b).y);
+        assert(v.selectedClip() == b && g.ctx.currentPattern() == p2);
+        g.click(g.bodyOf(1).x, g.bodyOf(1).y);
+        assert(v.selectedClip() == 1 && g.ctx.currentPattern() == 1);
+
+        g.click(g.bodyOf(cl).x, g.bodyOf(cl).y);
+        assert(v.selectedClip() == cl && g.ctx.currentPattern() == p2);
+
+        g.click(v.lineToX(120), v.laneToY(0) + 20.0f);
+        assert(v.selectedClip() == 0 && g.ctx.currentPattern() == p2);
+
+        v.selectClip(1);
+        assert(v.selectedClip() == 1 && g.ctx.currentPattern() == 1);
+        v.selectClip(0);
+        assert(v.selectedClip() == 0 && g.ctx.currentPattern() == 1);
+        v.selectClip(9999);
+        assert(v.selectedClip() == 0 && g.ctx.currentPattern() == 1);
+        assert(g.s.history().undoCount() == u0 && g.ctx.documentRevision() == rev0);
+
+        g.ctx.selectPattern(1);
+        immutable Point2F pb = g.bodyOf(b);
+        g.drag(pb.x, pb.y, pb.x + 96.0f, pb.y);
+        immutable TimelineClip moved = g.clip(b);
+        assert(moved.startLine == 32 && moved.laneY == 1);
+        assert(v.selectedClip() == b && g.ctx.currentPattern() == p2);
+        assert(g.s.history().undoCount() == u0 + 1);
+
+        g.dblClick(v.lineToX(102) + 1.0f, v.laneToY(3) + 20.0f);
+        immutable uint placed = v.selectedClip();
+        assert(placed == 4 && g.clip(placed).patternId == p2 && g.clip(placed).startLine == 100);
+        assert(g.ctx.currentPattern() == p2 && g.s.history().undoCount() == u0 + 2);
+
+        string[] labels = g.menuLabels(g.bodyOf(1).x, g.bodyOf(1).y);
+        assert(labels.length == 6 && v.selectedClip() == 1 && g.ctx.currentPattern() == 1);
+
+        assert(g.menu(v.lineToX(110), v.laneToY(4) + 20.0f, "Add Clip: Bass"));
+        immutable uint added = v.selectedClip();
+        assert(g.clip(added).patternId == p2 && g.ctx.currentPattern() == p2);
+        assert(g.s.history().undoCount() == u0 + 3);
     }
 }
