@@ -1,7 +1,7 @@
 /**
  * File:         tests/unit/compose_module_test.d
  * Module:       tests.unit.compose_module_test
- * Phase:        Composition helper (dracker-compose) — T74 (Module writer)
+ * Phase:        Composition helper (dracker-compose) — T74 (Module writer), T75 (Sampler samples)
  *
  * Purpose:
  *   Verifies compose.module_writer. Starting a writer from a type (every one of the 39 registered types, by
@@ -14,7 +14,12 @@
  *   negative first value. Reading values back as numbers and as text that sets the same value again, including
  *   the shortest decimal that round-trips. Every registered type round-trips through a .msym file, loads in the
  *   app's own loader (loadPreset and StudioSession), and extra data of a preset is kept. A sweep of random
- *   texts that must never throw.
+ *   texts that must never throw. Sampler sample loading (T75): loadSampleBytes() and loadSampleFile() store
+ *   byte-identical extra data to StudioSession.doLoadSample for one slot, for slots loaded in either order,
+ *   and for a WAV holding one float.nan sample (both sanitize it to zero); preset round-trips keep the extra
+ *   data; the serialized blob's bytes and lengths match the worked-out layout; every refusal (bad slot, bad
+ *   notes, low above high, a non-Sampler type, undecodable and empty bytes, a missing file, an empty writer,
+ *   the size limit) leaves the extra data unchanged; a copy of a writer loads independently.
  *
  * Real-Time & Safety Contract:
  *   Off-RT. Reads resources/presets relative to the package folder, which is the working directory of dub
@@ -36,8 +41,10 @@ module tests.unit.compose_module_test;
 
 version (unittest) {
     import std.algorithm : endsWith, startsWith;
+    import std.bitmanip : littleEndianToNative;
     import std.conv : to;
-    import std.file : exists, mkdirRecurse, rmdirRecurse, tempDir;
+    import std.file : exists, mkdirRecurse, rmdirRecurse, tempDir, write;
+    import std.math : isFinite, PI, sin;
     import std.path : buildPath;
     import std.process : thisProcessID;
 
@@ -47,6 +54,7 @@ version (unittest) {
     import compose.module_writer;
     import graph.module_api : ModuleDescriptor, ParamDescriptor, ParamScale;
     import graph.registry : ModuleRegistry;
+    import io.audio_io : writeWavMemory;
     import io.project_format : LoadedPreset, LoadedProject, SavedModule, loadPreset, loadPresetFile,
         serializePreset, serializeProject, validateModuleForSave;
 
@@ -1073,5 +1081,272 @@ version (unittest) {
         assert(!half.ok && half.problem.kind == ModuleProblemKind.mismatchedPreset && half.problem.subject == "Waveform");
         assert(half.problem.reason == "the preset does not match its module type 'Analog Generator': '2.5' is not a "
             ~ "whole number; 'Waveform' takes a whole number from 0 to 5, or one of its names", half.problem.reason);
+    }
+
+    /**
+     * A mono 44,100 Hz WAV of a sine, copied from tests/unit/studio_backend_test.d.
+     *
+     * Params:
+     *   frames = Frame count.
+     *   amp = Peak amplitude.
+     *
+     * Returns:
+     *   The WAV bytes.
+     */
+    private ubyte[] sineWav(size_t frames, float amp) {
+        float[] pcm = new float[frames];
+        foreach (i; 0 .. frames) {
+            pcm[i] = amp * cast(float) sin(2.0 * PI * 440.0 * cast(float) i / 44_100.0);
+        }
+        const(float)[][1] chs = [pcm];
+        ubyte[] bytes;
+        string err;
+        assert(writeWavMemory(chs[], 44_100, bytes, err));
+        return bytes;
+    }
+
+    /**
+     * A mono sine WAV whose sample at index nanAt is float.nan, for the non-finite sanitizer check.
+     *
+     * Params:
+     *   frames = Frame count.
+     *   nanAt = Index of the NaN sample.
+     *
+     * Returns:
+     *   The WAV bytes.
+     */
+    private ubyte[] nanWav(size_t frames, size_t nanAt) {
+        float[] pcm = new float[frames];
+        foreach (i; 0 .. frames) {
+            pcm[i] = 0.4f * cast(float) sin(2.0 * PI * 440.0 * cast(float) i / 44_100.0);
+        }
+        pcm[nanAt] = float.nan;
+        const(float)[][1] chs = [pcm];
+        ubyte[] bytes;
+        string err;
+        assert(writeWavMemory(chs[], 44_100, bytes, err));
+        return bytes;
+    }
+
+    /**
+     * The little-endian float stored in a blob at a byte offset.
+     *
+     * Params:
+     *   blob = Serialized extra data.
+     *   at = Byte offset of the float.
+     *
+     * Returns:
+     *   The stored value.
+     */
+    private float floatAt(const(ubyte)[] blob, size_t at) {
+        ubyte[4] raw = blob[at .. at + 4];
+        return littleEndianToNative!float(raw);
+    }
+
+    /**
+     * Checks that a single-slot extra blob stores only finite sample floats.
+     *
+     * Params:
+     *   blob = Serialized extra data of one slot with no envelopes.
+     *   frames = Frame count of that slot.
+     */
+    private void assertFiniteSamples(const(ubyte)[] blob, size_t frames) {
+        assert(blob.length == 68 + 8 * frames);
+        foreach (i; 0 .. frames) {
+            assert(isFinite(floatAt(blob, 68 + 8 * i)));
+            assert(isFinite(floatAt(blob, 72 + 8 * i)));
+        }
+    }
+
+    unittest {
+        StudioSession session = new StudioSession();
+        assert(session.initialize(44_100.0f));
+        scope (exit) session.shutdown();
+        ubyte[] wav = sineWav(4410, 0.7f);
+        uint id = session.doAddModule("synth.sampler", "Drums");
+        assert(id != 0);
+        string err;
+        assert(session.doLoadSample(id, 2, wav, 69, 60, 80, err), err);
+        ubyte[] appBytes;
+        assert(session.saveModulePresetToBytes(id, "Drums", appBytes, err), err);
+        LoadedPreset back;
+        assert(loadPreset(appBytes, back, err), err);
+        assert(back.mod.extraBlob.length == 35348);
+
+        ModuleWriter w = writerOf("synth.sampler");
+        assert(w.setName("Drums").ok);
+        ModuleEditResult loaded = w.loadSampleBytes(2, wav, 69, 60, 80);
+        assert(loaded.ok, loaded.problem.text());
+        assert(w.savedModule().extraBlob == back.mod.extraBlob);
+    }
+
+    unittest {
+        StudioSession session = new StudioSession();
+        assert(session.initialize(44_100.0f));
+        scope (exit) session.shutdown();
+        ubyte[] big = sineWav(4410, 0.7f);
+        ubyte[] small = sineWav(100, 0.5f);
+        uint id = session.doAddModule("synth.sampler", "Kit");
+        assert(id != 0);
+        string err;
+        assert(session.doLoadSample(id, 5, small, 60, 0, 127, err), err);
+        assert(session.doLoadSample(id, 2, big, 69, 60, 80, err), err);
+        ubyte[] appBytes;
+        assert(session.saveModulePresetToBytes(id, "Kit", appBytes, err), err);
+        LoadedPreset back;
+        assert(loadPreset(appBytes, back, err), err);
+        assert(back.mod.extraBlob.length == 36208);
+
+        ModuleWriter w = writerOf("synth.sampler");
+        assert(w.setName("Kit").ok);
+        assert(w.loadSampleBytes(5, small, 60, 0, 127).ok);
+        assert(w.loadSampleBytes(2, big, 69, 60, 80).ok);
+        assert(w.savedModule().extraBlob == back.mod.extraBlob);
+    }
+
+    unittest {
+        StudioSession session = new StudioSession();
+        assert(session.initialize(44_100.0f));
+        scope (exit) session.shutdown();
+        ubyte[] wav = sineWav(4410, 0.7f);
+        ModuleWriter w = writerOf("synth.sampler");
+        assert(w.setName("Round").ok);
+        assert(w.loadSampleBytes(2, wav, 69, 60, 80).ok);
+        ModuleBytesResult bytes = w.presetBytes();
+        assert(bytes.ok, bytes.problem.text());
+        string err;
+        uint newId;
+        assert(session.loadModulePresetFromBytes(bytes.bytes, 0.0f, 0.0f, newId, err), err);
+        assert(newId != 0);
+        ubyte[] again;
+        assert(session.saveModulePresetToBytes(newId, "Round", again, err), err);
+        LoadedPreset back;
+        assert(loadPreset(again, back, err), err);
+        assert(back.mod.extraBlob == w.savedModule().extraBlob);
+    }
+
+    unittest {
+        ubyte[] big = sineWav(4410, 0.7f);
+        ubyte[] small = sineWav(100, 0.5f);
+        ModuleWriter w = writerOf("synth.sampler");
+        ModuleEditResult loaded = w.loadSampleBytes(2, big, 69, 60, 80);
+        assert(loaded.ok, loaded.problem.text());
+        ubyte[] b = w.savedModule().extraBlob;
+        assert(b.length == 35348);
+        assert(b[0] == 49 && b[1] == 80 && b[2] == 77 && b[3] == 83);
+        assert(b[4] == 1 && b[5] == 0 && b[6] == 0 && b[7] == 0);
+        assert(b[8] == 2 && b[9] == 0 && b[10] == 0 && b[11] == 0);
+        assert(b[12] == 0 && b[13] == 68 && b[14] == 44 && b[15] == 71);
+        assert(b[16] == 69 && b[17] == 60 && b[18] == 80 && b[19] == 0);
+        foreach (i; 20 .. 28) {
+            assert(b[i] == 0, "loop start must be zero");
+        }
+        assert(b[28] == 58 && b[29] == 17);
+        assert(b[60] == 58 && b[61] == 17);
+
+        assert(w.loadSampleBytes(5, small, 60, 0, 127).ok);
+        ubyte[] two = w.savedModule().extraBlob;
+        assert(two.length == 36208);
+        assert(two[35348] == 5 && two[35349] == 0 && two[35350] == 0 && two[35351] == 0);
+
+        assert(w.loadSampleBytes(2, small, 60, 0, 127).ok);
+        assert(w.savedModule().extraBlob.length == 1728);
+    }
+
+    unittest {
+        ubyte[] wav = sineWav(4410, 0.7f);
+        ModuleWriter w = writerOf("synth.sampler");
+        assert(w.loadSampleBytes(2, wav, 69, 60, 80).ok);
+        ubyte[] before = w.savedModule().extraBlob;
+        assert(before.length == 35348);
+
+        ModuleEditResult tooHigh = w.loadSampleBytes(16, wav);
+        assert(!tooHigh.ok && tooHigh.problem.kind == ModuleProblemKind.outOfRange);
+        assert(tooHigh.problem.suggestion == "15");
+        ModuleEditResult negative = w.loadSampleBytes(-1, wav);
+        assert(!negative.ok && negative.problem.kind == ModuleProblemKind.outOfRange);
+        assert(negative.problem.suggestion == "0");
+        ModuleEditResult rootTooHigh = w.loadSampleBytes(2, wav, 128);
+        assert(!rootTooHigh.ok && rootTooHigh.problem.kind == ModuleProblemKind.outOfRange);
+        assert(rootTooHigh.problem.suggestion == "127");
+        ModuleEditResult crossed = w.loadSampleBytes(2, wav, 60, 61, 60);
+        assert(!crossed.ok && crossed.problem.kind == ModuleProblemKind.outOfRange);
+        assert(crossed.problem.suggestion == "60");
+        assert(w.savedModule().extraBlob == before);
+
+        ModuleEditResult wrongType = writerOf("Analog Generator").loadSampleBytes(0, wav);
+        assert(!wrongType.ok && wrongType.problem.kind == ModuleProblemKind.notASampler);
+
+        ModuleEditResult undecodable = w.loadSampleBytes(3, [1, 2, 3]);
+        assert(!undecodable.ok && undecodable.problem.kind == ModuleProblemKind.unreadableSample);
+        assert(w.savedModule().extraBlob == before);
+        ModuleEditResult empty = w.loadSampleBytes(3, null);
+        assert(!empty.ok && empty.problem.kind == ModuleProblemKind.unreadableSample);
+        assert(w.savedModule().extraBlob == before);
+
+        immutable string missing = buildPath(tempDir(), "dracker-no-such-sample-" ~ to!string(thisProcessID()) ~ ".wav");
+        ModuleEditResult noFile = w.loadSampleFile(3, missing);
+        assert(!noFile.ok && noFile.problem.kind == ModuleProblemKind.unreadableSample);
+        assert(noFile.problem.subject == missing);
+        assert(w.savedModule().extraBlob == before);
+
+        ModuleEditResult none = ModuleWriter.init.loadSampleBytes(2, wav);
+        assert(!none.ok && none.problem.kind == ModuleProblemKind.notLoaded);
+
+        assert(sampleDataFits(67108864));
+        assert(!sampleDataFits(67108865));
+    }
+
+    unittest {
+        immutable string root = buildPath(tempDir(), "dracker-compose-sample-file-" ~ to!string(thisProcessID()));
+        if (exists(root)) {
+            rmdirRecurse(root);
+        }
+        mkdirRecurse(root);
+        scope (exit) rmdirRecurse(root);
+
+        ubyte[] wav = sineWav(4410, 0.7f);
+        immutable string path = buildPath(root, "sine.wav");
+        write(path, wav);
+        ModuleWriter fromFile = writerOf("synth.sampler");
+        ModuleWriter fromBytes = writerOf("synth.sampler");
+        ModuleEditResult file = fromFile.loadSampleFile(2, path, 69, 60, 80);
+        assert(file.ok, file.problem.text());
+        assert(fromBytes.loadSampleBytes(2, wav, 69, 60, 80).ok);
+        assert(fromFile.savedModule().extraBlob == fromBytes.savedModule().extraBlob);
+        assert(fromFile.savedModule().extraBlob.length == 35348);
+    }
+
+    unittest {
+        ubyte[] wav = sineWav(100, 0.5f);
+        ModuleWriter w = writerOf("synth.sampler");
+        ModuleWriter copy = w;
+        assert(copy.loadSampleBytes(4, wav).ok);
+        assert(w.savedModule().extraBlob.length == 0);
+        assert(copy.savedModule().extraBlob.length > 0);
+        assert(w.loadSampleBytes(4, wav).ok);
+        assert(w.savedModule().extraBlob == copy.savedModule().extraBlob);
+    }
+
+    unittest {
+        StudioSession session = new StudioSession();
+        assert(session.initialize(44_100.0f));
+        scope (exit) session.shutdown();
+        ubyte[] wav = nanWav(200, 5);
+        uint id = session.doAddModule("synth.sampler", "NaN Kit");
+        assert(id != 0);
+        string err;
+        assert(session.doLoadSample(id, 2, wav, 60, 0, 127, err), err);
+        ubyte[] appBytes;
+        assert(session.saveModulePresetToBytes(id, "NaN Kit", appBytes, err), err);
+        LoadedPreset back;
+        assert(loadPreset(appBytes, back, err), err);
+
+        ModuleWriter w = writerOf("synth.sampler");
+        assert(w.loadSampleBytes(2, wav, 60, 0, 127).ok);
+        ubyte[] mine = w.savedModule().extraBlob;
+        assert(mine == back.mod.extraBlob);
+        assertFiniteSamples(mine, 200);
+        assertFiniteSamples(back.mod.extraBlob, 200);
     }
 }

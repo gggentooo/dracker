@@ -122,12 +122,6 @@ Facts about the current code that the tasks rely on:
 
 ## Stage 0 — Ready now
 
-#### [Compose] Module writer: Sampler samples · T75 · Build
-
-- **Files:** `source/compose/module_writer.d`, `source/app/session.d` (`doLoadSample`, for the stored format), `source/modules/synths/sampler.d`, `tests/unit/compose_module_test.d`
-- **Task:** Load audio files (the formats the app's sample import accepts) into Sampler slots with root note and key range, producing the same stored data as the app, so the preset plays identically there. Tests compare against a preset saved through `StudioSession`.
-- **Needs:** T74, T92
-
 #### [Compose] Project writer: properties, modules, saving · T76 · Build
 
 - **Files:** `source/compose/project_writer.d` (new), `tests/unit/compose_project_test.d` (new)
@@ -349,6 +343,12 @@ Facts about the current code that the tasks rely on:
 ---
 
 ## Done
+
+#### [Compose] Module writer: Sampler samples · T75 · Build
+
+- **Files:** `source/compose/module_writer.d`, `source/app/session.d` (`doLoadSample`, for the stored format), `source/modules/synths/sampler.d`, `tests/unit/compose_module_test.d`
+- **Done:** 2026-11-26. ModuleWriter can now load audio bytes or files into Sampler slots with a root note and key range (loadSampleBytes/loadSampleFile), producing byte-identical extra data to the app. Added samplerExtraWithSample in sampler.d, and StudioSession.doLoadSample now calls it so both paths sanitize non-finite samples, per owner decision #1. Tests cover identity for one slot, two slots and a float.nan WAV, the byte layout, every refusal, file loading, round trips and copy independence. Recorded in docs/changelog.md (2026-11-26 22:18:09 KST).
+- **Needs:** T74, T92
 
 #### [App] Session: replace the document as one undo step · T111 · Build
 
@@ -1192,6 +1192,7 @@ Facts about the current code that the tasks rely on:
 - Modified: T94 moved to *Done* (built by Qwen3.8 Flash Next; owner listened to Strings.wav and approved).
 - Modified: Stages recomputed: T115 Stage 1 → 0.
 
-### 2026-11-26T21:28:41+09:00 — Qwen3.8 Flash Next, T111 done
+### 2026-11-26T21:28:41+09:00 — Qwen3.8 Flash Next, T75 done
 
 - Modified: T111 moved to *Done*.
+- Modified: T75 moved to *Done*.

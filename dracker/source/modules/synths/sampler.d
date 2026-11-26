@@ -4,10 +4,10 @@
  * Phase:        Phase 4.4 (Tier 1) — Multi-Slot Polyphonic Sampler
  *
  * Purpose:
- *   Plays multi-slot mono/stereo PCM samples via VoicePool with nearest/linear/Catmull-Rom interpolation, one-shot/forward/ping-pong looping, multi-breakpoint volume/pan/pitch envelopes, off-RT codec decoding via io.audio_io, and lock-free SwapModuleAsset switching.
+ *   Plays multi-slot mono/stereo PCM samples via VoicePool with nearest/linear/Catmull-Rom interpolation, one-shot/forward/ping-pong looping, multi-breakpoint volume/pan/pitch envelopes, off-RT codec decoding via io.audio_io, and lock-free SwapModuleAsset switching. samplerExtraWithSample() loads a file's bytes into one slot and builds the module's stored extra data without a session, sanitizing non-finite samples (T75), so StudioSession.doLoadSample and compose.module_writer store byte-identical data.
  *
  * Real-Time & Safety Contract:
- *   @nogc nothrow on RT process(), handleEvent(), and swapAsset(); OwnedBuffer!float sample assets decode off-RT and retire cleanly.
+ *   @nogc nothrow on RT process(), handleEvent(), and swapAsset(); OwnedBuffer!float sample assets decode off-RT and retire cleanly. samplerExtraWithSample() is off-RT only: it decodes, copies and serializes on the GC heap.
  *
  * Dependencies:
  *   Internal: dsp.envelope, dsp.interp, dsp.voice_pool, foundation.math_rt, foundation.memory, foundation.types, graph.buffer, graph.context, graph.event, graph.module_api, graph.port, io.audio_io
@@ -18,6 +18,8 @@
  *   - struct Sampler (typeId = "synth.sampler", ports: event in, audioStereo in/out)
  *   - @Param volume, panning, fineTune, sampleOffset, loopMode, interpQuality
  *   - Hooks: handleEvent, process, swapAsset, serializeExtra, deserializeExtra
+ *   - samplerExtraWithSample() : session-free off-RT slot loader shared by StudioSession.doLoadSample and
+ *     compose.module_writer
  *
  * See_Also:
  *   architecture_proposal.md, dev_plan_proposal.md
@@ -943,4 +945,58 @@ struct Sampler {
         }
         return uint.max;
     }
+}
+
+/**
+ * Builds the extra data a Sampler module stores after loading an audio file into one slot, without a session:
+ * decodes the audio, sets the root note and key range, sanitizes non-finite samples to zero, merges the slot
+ * into the module's existing extra data and serializes the result. Used by StudioSession.doLoadSample and by
+ * compose.module_writer so both store byte-identical data.
+ *
+ * Params:
+ *   currentExtra = The extra data the module stores now (empty for a fresh module).
+ *   slot = Target slot index in [0..Sampler.MAX_SLOTS).
+ *   audioBytes = Complete encoded WAV/FLAC/MP3/OGG byte payload.
+ *   rootNote = Keymap unity root note (0..127).
+ *   lowNote = Lowest mapped note (0..127, never above highNote).
+ *   highNote = Highest mapped note (0..127).
+ *   blob = Receives the serialized extra data on success; reset when the call starts.
+ *   err = Receives the reason on failure; reset when the call starts.
+ *
+ * Returns:
+ *   True when the slot was merged into a copy of the existing data and serialized.
+ */
+bool samplerExtraWithSample(const(ubyte)[] currentExtra, uint slot, const(ubyte)[] audioBytes,
+        ubyte rootNote, ubyte lowNote, ubyte highNote, out ubyte[] blob, out string err) {
+    if (slot >= Sampler.MAX_SLOTS || lowNote > highNote || highNote > 127 || rootNote > 127) {
+        err = "Target is not a Sampler slot";
+        return false;
+    }
+    SamplerSlotAsset* asset = createSamplerAssetFromMemory(audioBytes, err, rootNote);
+    if (asset is null) {
+        return false;
+    }
+    asset.lowNote = lowNote;
+    asset.highNote = highNote;
+    foreach (i; 0 .. asset.left.length) {
+        asset.left[i] = isFinite(asset.left[i]) ? asset.left[i] : 0.0f;
+        immutable float rSample = (i < asset.right.length) ? asset.right[i] : asset.left[i];
+        asset.right[i] = isFinite(rSample) ? rSample : 0.0f;
+    }
+    Sampler temp;
+    if (currentExtra.length > 0 && !temp.deserializeExtra(currentExtra, 44_100.0f)) {
+        SamplerSlotAsset.destroyErased(asset);
+        err = "Existing sampler data could not be decoded";
+        return false;
+    }
+    void* old = null;
+    temp.swapAsset(slot, asset, old);
+    if (old !is null) {
+        SamplerSlotAsset.destroyErased(old);
+    }
+    if (!temp.serializeExtra(blob)) {
+        err = "Sampler data could not be serialized";
+        return false;
+    }
+    return true;
 }

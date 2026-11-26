@@ -1,7 +1,7 @@
 /**
  * File:         source/compose/module_writer.d
  * Module:       compose.module_writer
- * Phase:        Composition helper (dracker-compose) — T74 (Module writer)
+ * Phase:        Composition helper (dracker-compose) — T74 (Module writer), T75 (Sampler samples)
  *
  * Purpose:
  *   Builds one module for the composition helper (decision T70). A ModuleWriter starts from a module type (at
@@ -18,14 +18,22 @@
  *   step, refuses the preset (mismatchedPreset), because the writer never clips. Module names follow the
  *   instrument library's rule (isValidPresetName, valid UTF-8), so any module can be saved to the library; a
  *   name taken from a preset or a file that breaks the rule is replaced by the nearest name that keeps it.
+ *   A synth.sampler module also takes a sample: loadSampleBytes() and loadSampleFile() load audio bytes or an
+ *   audio file into one of its 16 slots with a root note and a key range, storing the same extra data the app
+ *   stores after StudioSession.doLoadSample (T75); sampleDataFits() guards the app's extra-data size limit.
  *   A copy of a writer is independent of the original: the copy constructor copies the module's arrays.
  *   Every problem is returned as data: ModuleProblem says what kind of problem it is, the text it is about, a
  *   one-sentence reason, and the nearest valid name or value when there is one. Nothing is printed or thrown.
+ *   A synth.sampler module also takes a sample: loadSampleBytes() and loadSampleFile() load an audio file into
+ *   one of the 16 slots with a root note and a key range, storing byte-identical data to what the app stores
+ *   after StudioSession.doLoadSample (T75); sampleDataFits() guards the app's extra-data size limit.
  *
  * Real-Time & Safety Contract:
  *   Off-RT / offline only. Every function is @safe nothrow; all are pure except fromPreset(), fromPresetFile(),
- *   fromPresetBytes() and writePresetFile(), which go through the app's preset loader and writer, and
- *   presetBytes(). The app's registry, library and file functions are not marked @safe or nothrow although
+ *   fromPresetBytes() and writePresetFile(), which go through the app's preset loader and writer,
+ *   presetBytes(), and loadSampleBytes() and loadSampleFile(), which decode audio through
+ *   modules.synths.sampler and, for the file, read one path. The app's registry, library and file functions
+ *   are not marked @safe or nothrow although
  *   they only read immutable tables and bounds-checked files, so each is called through one private @trusted
  *   adapter at the end of this file that says why it is safe. Strings and the rows of the name distance are
  *   allocated on the GC heap. No audio, GUI or session dependency; files are touched only by fromPreset(),
@@ -35,9 +43,10 @@
  *   Internal: app.instrument_library (InstrumentLibrary, isValidPresetName, LibraryEntry, MAX_PRESET_NAME),
  *             compose.names (name matching and suggestions), graph.module_api (ModuleDescriptor,
  *             ParamDescriptor, ParamScale), graph.registry (ModuleRegistry), io.project_format (LoadedPreset,
- *             SavedModule, loadPreset, loadPresetFile, serializePreset, savePreset)
- *   External: std.conv (to), std.format (format), std.math (floor, isFinite), std.path (baseName,
- *             stripExtension), std.utf (validate)
+ *             MAX_EXTRA_BLOB_BYTES, SavedModule, loadPreset, loadPresetFile, serializePreset, savePreset),
+ *             modules.synths.sampler (Sampler, samplerExtraWithSample)
+ *   External: std.conv (to), std.file (read), std.format (format), std.math (floor, isFinite), std.path
+ *             (baseName, stripExtension), std.utf (validate)
  *
  * Planned API (Types, Functions & Hooks):
  *   - enum PRESET_MODULE_ID; enum ModuleProblemKind
@@ -45,17 +54,19 @@
  *     struct ModuleTextResult; struct ModuleEditResult; struct ModuleBytesResult
  *   - struct ModuleWriter: loaded(), typeId(), name(), descriptor(), paramCount(), paramValues(), setName(),
  *     setPresetName(), valueOf(), textOf(), setParamText(), setParamValue(), resetToDefaults(), savedModule(),
- *     loadedPreset(), presetBytes(), writePresetFile()
+ *     loadedPreset(), presetBytes(), writePresetFile(), loadSampleBytes(), loadSampleFile()
  *   - static ModuleWriter.fromType(), fromDescriptor(), fromPreset(), fromPresetFile(), fromPresetBytes()
- *   - findModuleType(); parameterRangeText(), parameterValueText(); suggestedName()
+ *   - findModuleType(); parameterRangeText(), parameterValueText(); suggestedName(); sampleDataFits()
  *
  * See_Also:
  *   docs/todo.md (T70, T74, T75, T76, T91, T92), source/graph/module_api.d (ParamDescriptor),
- *   source/io/project_format.d (serializePreset, loadPreset)
+ *   source/io/project_format.d (serializePreset, loadPreset), source/modules/synths/sampler.d
+ *   (samplerExtraWithSample)
  */
 module compose.module_writer;
 
 import std.conv : to;
+import std.file : read;
 import std.format : format;
 import std.math : floor, isFinite;
 import std.path : baseName, stripExtension;
@@ -65,7 +76,9 @@ import app.instrument_library : InstrumentLibrary, isValidPresetName, LibraryEnt
 import compose.names : namesMatch, NameMatch, nearestMatch, nearestName, trim;
 import graph.module_api : ModuleDescriptor, ParamDescriptor, ParamScale;
 import graph.registry : ModuleRegistry;
-import io.project_format : LoadedPreset, SavedModule, loadPreset, loadPresetFile, serializePreset, savePreset;
+import io.project_format : LoadedPreset, MAX_EXTRA_BLOB_BYTES, SavedModule, loadPreset, loadPresetFile,
+    serializePreset, savePreset;
+import modules.synths.sampler : Sampler, samplerExtraWithSample;
 
 /**
  * The module id a preset is stored with when its module has no id of its own (the bundled presets use it too).
@@ -89,7 +102,10 @@ enum ModuleProblemKind : ubyte {
     unknownOption = 10,
     invalidName = 11,
     notLoaded = 12,
-    writeFailed = 13
+    writeFailed = 13,
+    notASampler = 14,
+    unreadableSample = 15,
+    sampleTooLarge = 16
 }
 
 /**
@@ -634,6 +650,122 @@ struct ModuleWriter {
     }
 
     /**
+     * Loads the bytes of an audio file into one of the Sampler's 16 slots with a root note and a key range,
+     * storing the same extra data the app stores after StudioSession.doLoadSample. Only a synth.sampler module
+     * takes a sample; a refusal leaves the extra data unchanged. The defaults are the app's import defaults.
+     *
+     * Params:
+     *   slot = Slot index 0..15.
+     *   audioBytes = Complete encoded WAV/FLAC/MP3/OGG byte payload.
+     *   rootNote = Unity-pitch MIDI note, 0..127 (default 60).
+     *   lowNote = Lowest mapped note, 0..127 (default 0).
+     *   highNote = Highest mapped note, 0..127 (default 127).
+     *
+     * Returns:
+     *   ok, or notLoaded, notASampler, outOfRange (with the nearest valid slot or note as text),
+     *   unreadableSample, or sampleTooLarge.
+     */
+    ModuleEditResult loadSampleBytes(int slot, const(ubyte)[] audioBytes, int rootNote = 60, int lowNote = 0,
+            int highNote = 127) @safe nothrow {
+        if (desc_ is null) {
+            return ModuleEditResult(false, notLoadedProblem());
+        }
+        if (mod_.typeId != "synth.sampler") {
+            return ModuleEditResult(false, ModuleProblem(ModuleProblemKind.notASampler, mod_.typeId,
+                "only a Sampler module can load a sample; '" ~ mod_.typeId ~ "' is not a Sampler", ""));
+        }
+        if (slot < 0 || slot >= cast(int) Sampler.MAX_SLOTS) {
+            return ModuleEditResult(false, ModuleProblem(ModuleProblemKind.outOfRange, to!string(slot),
+                "'" ~ to!string(slot) ~ "' is not a Sampler slot; slots are 0 to 15",
+                to!string(clampInt(slot, 0, cast(int) Sampler.MAX_SLOTS - 1))));
+        }
+        if (rootNote < 0 || rootNote > 127) {
+            return ModuleEditResult(false, noteRangeProblem("root note", rootNote));
+        }
+        if (lowNote < 0 || lowNote > 127) {
+            return ModuleEditResult(false, noteRangeProblem("low note", lowNote));
+        }
+        if (highNote < 0 || highNote > 127) {
+            return ModuleEditResult(false, noteRangeProblem("high note", highNote));
+        }
+        if (lowNote > highNote) {
+            return ModuleEditResult(false, ModuleProblem(ModuleProblemKind.outOfRange, to!string(lowNote),
+                "the low note '" ~ to!string(lowNote) ~ "' is above the high note '" ~ to!string(highNote) ~ "'",
+                to!string(highNote)));
+        }
+        ubyte[] blob;
+        string err;
+        if (!buildSamplerExtra(mod_.extraBlob, cast(uint) slot, audioBytes, cast(ubyte) rootNote,
+                cast(ubyte) lowNote, cast(ubyte) highNote, blob, err)) {
+            return ModuleEditResult(false, ModuleProblem(ModuleProblemKind.unreadableSample, "",
+                "could not load the sample: " ~ err, ""));
+        }
+        if (!sampleDataFits(blob.length)) {
+            return ModuleEditResult(false, ModuleProblem(ModuleProblemKind.sampleTooLarge, "",
+                "the sample needs " ~ to!string(blob.length) ~ " bytes of extra data; the limit is "
+                ~ to!string(MAX_EXTRA_BLOB_BYTES), ""));
+        }
+        mod_.extraBlob = blob;
+        return ModuleEditResult(true);
+    }
+
+    /**
+     * Loads an audio file from disk into a Sampler slot: reads the file, then loadSampleBytes(). A file the
+     * system cannot read is refused as unreadableSample with the system's reason.
+     *
+     * Params:
+     *   slot = Slot index 0..15.
+     *   path = Path of the audio file.
+     *   rootNote = Unity-pitch MIDI note, 0..127 (default 60).
+     *   lowNote = Lowest mapped note, 0..127 (default 0).
+     *   highNote = Highest mapped note, 0..127 (default 127).
+     *
+     * Returns:
+     *   ok, or the refusal of reading the file or of loadSampleBytes().
+     */
+    ModuleEditResult loadSampleFile(int slot, string path, int rootNote = 60, int lowNote = 0,
+            int highNote = 127) @safe nothrow {
+        ubyte[] bytes;
+        string err;
+        if (!readAudioFile(path, bytes, err)) {
+            return ModuleEditResult(false, ModuleProblem(ModuleProblemKind.unreadableSample, path,
+                "could not load the sample: " ~ err, ""));
+        }
+        return loadSampleBytes(slot, bytes, rootNote, lowNote, highNote);
+    }
+
+    /**
+     * The refusal of a note outside 0..127, with the nearest valid note as text.
+     *
+     * Params:
+     *   label = What the number is ("root note", "low note", "high note").
+     *   value = The number as given.
+     *
+     * Returns:
+     *   outOfRange with the nearest of 0 and 127 as the suggestion.
+     */
+    private static ModuleProblem noteRangeProblem(string label, int value) @safe pure nothrow {
+        return ModuleProblem(ModuleProblemKind.outOfRange, to!string(value),
+            "'" ~ to!string(value) ~ "' is outside the range of the " ~ label ~ " (0 to 127)",
+            to!string(clampInt(value, 0, 127)));
+    }
+
+    /**
+     * The nearest value inside [lo, hi].
+     *
+     * Params:
+     *   value = The number as given.
+     *   lo = Lowest accepted value.
+     *   hi = Highest accepted value.
+     *
+     * Returns:
+     *   value when inside, else the nearer bound.
+     */
+    private static int clampInt(int value, int lo, int hi) @safe pure nothrow @nogc {
+        return value < lo ? lo : (value > hi ? hi : value);
+    }
+
+    /**
      * Takes over a loaded preset: checks its module type, its parameter count and every value against its
      * parameter, and names the module as the app does when it loads the preset (the preset name, else the
      * module's own name, else fallbackName). A name the library would refuse becomes suggestedName() of it, or
@@ -812,6 +944,9 @@ private bool isNameProblem(ModuleProblemKind kind) @safe pure nothrow @nogc {
         case ModuleProblemKind.notAWholeNumber:
         case ModuleProblemKind.notLoaded:
         case ModuleProblemKind.writeFailed:
+        case ModuleProblemKind.notASampler:
+        case ModuleProblemKind.unreadableSample:
+        case ModuleProblemKind.sampleTooLarge:
             return false;
     }
 }
@@ -1629,6 +1764,70 @@ private bool savePresetFile(const ref LoadedPreset preset, string path, out stri
         return savePreset(preset, path, err);
     } catch (Exception ex) {
         err = ex.msg.length > 0 ? ex.msg : "Failed writing .msym preset file";
+        return false;
+    }
+}
+
+/**
+ * Whether a module's extra data is within the size the app's preset format accepts (io.project_format's
+ * MAX_EXTRA_BLOB_BYTES), so a writer never hands the app a module it cannot store.
+ *
+ * Params:
+ *   blobBytes = The size of the extra data in bytes.
+ *
+ * Returns:
+ *   True when blobBytes is at most MAX_EXTRA_BLOB_BYTES.
+ */
+bool sampleDataFits(size_t blobBytes) @safe pure nothrow @nogc {
+    return blobBytes <= MAX_EXTRA_BLOB_BYTES;
+}
+
+/**
+ * Builds a Sampler's extra data with the module's own loader, modules.synths.sampler.samplerExtraWithSample(),
+ * which is not marked @safe or nothrow although it only decodes bytes and frees its own allocations; an
+ * exception becomes the reason. The adapter is therefore @trusted.
+ *
+ * Params:
+ *   current = The extra data the module stores now.
+ *   slot = Target slot index.
+ *   audio = Complete encoded audio byte payload.
+ *   root = Keymap unity root note.
+ *   low = Lowest mapped note.
+ *   high = Highest mapped note.
+ *   blob = Receives the serialized extra data on success.
+ *   err = Receives the reason on failure.
+ *
+ * Returns:
+ *   True when the slot was merged into a copy of the existing data and serialized.
+ */
+private bool buildSamplerExtra(const(ubyte)[] current, uint slot, const(ubyte)[] audio, ubyte root, ubyte low,
+        ubyte high, out ubyte[] blob, out string err) @trusted nothrow {
+    try {
+        return samplerExtraWithSample(current, slot, audio, root, low, high, blob, err);
+    } catch (Exception ex) {
+        err = ex.msg.length > 0 ? ex.msg : "Failed building sampler extra data";
+        return false;
+    }
+}
+
+/**
+ * Reads a file with std.file.read, which is not marked @safe or nothrow although it only returns the bytes of
+ * the named file; an exception becomes the reason. The adapter is therefore @trusted.
+ *
+ * Params:
+ *   path = Path of the file.
+ *   bytes = Receives the file contents.
+ *   err = Receives the reason on failure.
+ *
+ * Returns:
+ *   True when the file was read.
+ */
+private bool readAudioFile(string path, out ubyte[] bytes, out string err) @trusted nothrow {
+    try {
+        bytes = cast(ubyte[]) read(path);
+        return true;
+    } catch (Exception ex) {
+        err = ex.msg.length > 0 ? ex.msg : "Failed reading audio file";
         return false;
     }
 }

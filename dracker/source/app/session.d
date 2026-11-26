@@ -79,7 +79,7 @@ import io.project_format : LoadedPreset, LoadedProject, loadPreset, loadProject,
     serializePreset, serializeProject;
 import modules.control.metamodule : MetaMacroBinding, MetaModuleAsset;
 import io.audio_io : writeWavFile;
-import modules.synths.sampler : createSamplerAssetFromMemory, Sampler, SamplerSlotAsset;
+import modules.synths.sampler : samplerExtraWithSample, Sampler, SamplerSlotAsset;
 import platform.interfaces : IAudioDriver, MidiPacket, PlatformEvent, PlatformEventKind;
 import foundation.concurrency : hasGcReference;
 import sequencer.engine : Engine, EngineCommand, EngineTelemetry, MidiMapEntry, MidiMapSnapshot, StemExportSpec;
@@ -3230,34 +3230,9 @@ class StudioSession {
             err = "Audio engine did not acknowledge pending edits";
             return false;
         }
-        SamplerSlotAsset* asset = createSamplerAssetFromMemory(audioBytes, err, rootNote);
-        if (asset is null) {
-            return false;
-        }
-        asset.lowNote = lowNote;
-        asset.highNote = highNote;
-        const(ModuleVTable)* vt = inst.desc.vtable;
-        void* temp = vt.create();
-        if (temp is null) {
-            SamplerSlotAsset.destroyErased(asset);
-            err = "Out of memory";
-            return false;
-        }
-        scope (exit) vt.destroy(temp);
-        immutable ubyte[] current = snapshotLiveModule(*sm).extraBlob.idup;
-        if (current.length > 0 && !vt.deserializeExtra(temp, current, sampleRate_)) {
-            SamplerSlotAsset.destroyErased(asset);
-            err = "Existing sampler data could not be decoded";
-            return false;
-        }
-        void* old = null;
-        vt.swapAsset(temp, slot, asset, old);
-        if (old !is null) {
-            SamplerSlotAsset.destroyErased(old);
-        }
         ubyte[] blob;
-        if (!vt.serializeExtra(temp, blob)) {
-            err = "Sampler data could not be serialized";
+        if (!samplerExtraWithSample(snapshotLiveModule(*sm).extraBlob, slot, audioBytes, rootNote, lowNote,
+                highNote, blob, err)) {
             return false;
         }
         if (!doSetModuleExtra(samplerId, blob, "Load Sample")) {
