@@ -146,12 +146,6 @@ Facts about the current code that the tasks rely on:
 - **Task:** A `TextArea` widget for the script tab (T112); the toolkit has only the single-line `TextField`, which has no selection, word movement or clipboard. Monospace text of many lines; caret movement by character, word, line, page and to the ends; selection by keyboard and mouse (drag, double-click a word); typing, Return, Tab as spaces, Backspace and Delete; cut, copy, paste and select all through two clipboard delegates (T112 connects them to the app clipboard); vertical scrolling that follows the caret; line numbers in a gutter; one line can be marked (for an error) with an outline, not color alone; committed IME text is accepted as `TextField` accepts it. Colors come from theme tokens only. Tests for every editing operation, scrolling, the marked line, and that sizes follow the theme; a gallery entry.
 - **Needs:** —
 
-#### [App] Session: replace the document as one undo step · T111 · Build
-
-- **Files:** `source/app/session.d`, `source/app/history.d`, `tests/unit/session_test.d` (new)
-- **Task:** An undoable `StudioSession.doReplaceDocument(LoadedProject, label)` for the script tab (T113): activate the new document as `openProjectFromMemory()` does, but as one history command whose undo restores the document before it, without clearing the history, the file path or the modified flag logic. If the new document cannot be activated, the old one stays and the reason is returned. Playback continues where the timeline allows it. Tests: replace, undo, redo give identical documents and identical renders; a document that fails activation changes nothing; the undo count grows by one; a replace while playing keeps the transport running.
-- **Needs:** —
-
 #### [Modules] SpectraVoice: crossfade when the table changes · T115 · Build
 
 - **Files:** `source/modules/synths/spectravoice.d`, `tests/unit/modules_test.d`
@@ -355,6 +349,12 @@ Facts about the current code that the tasks rely on:
 ---
 
 ## Done
+
+#### [App] Session: replace the document as one undo step · T111 · Build
+
+- **Files:** `source/app/session.d`, `source/app/history.d`, `tests/unit/session_test.d` (new)
+- **Done:** 2026-11-26. Added StudioSession.doReplaceDocument(proj, label, err): the project is serialized, parsed again and probed against a throwaway Engine before a ReplaceDocumentCommand swaps the open document as one undo step (undo restores the previous document; history, file path, dirty-flag logic and id counters survive, playback continues where the timeline allows). activateLoadedProject was split into probeLoadedProject + commitLoadedProject so refusals change nothing and replaceDocumentDirect can keep the history across activation. Recorded in docs/changelog.md (2026-11-26 21:25:24 KST).
+- **Needs:** —
 
 #### [Modules] SpectraVoice: Profile and Bandwidth have no effect · T94 · Build
 
@@ -1191,3 +1191,7 @@ Facts about the current code that the tasks rely on:
 
 - Modified: T94 moved to *Done* (built by Qwen3.8 Flash Next; owner listened to Strings.wav and approved).
 - Modified: Stages recomputed: T115 Stage 1 → 0.
+
+### 2026-11-26T21:28:41+09:00 — Qwen3.8 Flash Next, T111 done
+
+- Modified: T111 moved to *Done*.

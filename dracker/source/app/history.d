@@ -17,7 +17,7 @@
  *   - interface IUndoCommand
  *   - class UndoHistory : pushAndExecute(), pushAndExecuteAt(), beginGroup(), endGroup(), inGroup(), setCoalesceWindow(), undo(), redo(), canUndo(), canRedo(), clear()
  *   - class CompoundCommand (atomic group) / class DelegateCommand (delegate-defined reversible step)
- *   - Reversible command classes: PatchCellCommand, ResizePatternCommand, AddModuleCommand, RemoveModuleCommand, ConnectWireCommand, DisconnectWireCommand, SetParamCommand, MoveModulePositionCommand, AddClipCommand, MoveClipCommand, CloneClipCommand, RemoveClipCommand, SetClipFlagsCommand, SetTempoCommand, SetTimeSignatureCommand, SetKeyCommand
+ *   - Reversible command classes: PatchCellCommand, ResizePatternCommand, AddModuleCommand, RemoveModuleCommand, ConnectWireCommand, DisconnectWireCommand, SetParamCommand, MoveModulePositionCommand, AddClipCommand, MoveClipCommand, CloneClipCommand, RemoveClipCommand, SetClipFlagsCommand, SetTempoCommand, SetTimeSignatureCommand, SetKeyCommand, ReplaceDocumentCommand
  *
  * See_Also:
  *   architecture_proposal.md, dev_plan_proposal.md
@@ -28,7 +28,7 @@ import core.time : dur, Duration, MonoTime;
 
 import app.music_theory : MusicalKey;
 import app.session : StudioSession;
-import io.project_format : SavedModule, SavedPattern, SavedWire;
+import io.project_format : LoadedProject, SavedModule, SavedPattern, SavedWire;
 import sequencer.note : NoteCell;
 import sequencer.timeline : TimelineClip;
 
@@ -1182,5 +1182,83 @@ class DelegateCommand : IUndoCommand {
 
     override void mergeFrom(IUndoCommand next) {
         cast(void) next;
+    }
+}
+
+/**
+ * Reversible whole-document replacement command (used by the script tab, T113).
+ *
+ * execute() activates after_ and undo() restores before_, each as one StudioSession
+ * replaceDocumentDirect() step; history, file path and transport survive the swap.
+ * Memory: unlike existing commands (which keep at most one module or one pattern's cells), this command
+ * keeps two complete LoadedProjects, live sample data included. The history holds up to 512 steps, so a
+ * long replace-heavy session can retain many whole documents; no memory limit is imposed in T111.
+ */
+class ReplaceDocumentCommand : IUndoCommand {
+    private string label_;
+    private LoadedProject before_;
+    private LoadedProject after_;
+    private string lastError_;
+
+    /**
+     * Constructs a ReplaceDocumentCommand holding the document snapshots to swap.
+     *
+     * Params:
+     *   label = Undo menu label.
+     *   before = Complete project open before the replacement (restore target for undo()).
+     *   after = Complete project the replacement activates (target for execute()).
+     */
+    this(string label, LoadedProject before, LoadedProject after) {
+        label_ = label;
+        before_ = before;
+        after_ = after;
+    }
+
+    /**
+     * Activates after_ as the open project; on a late activation failure the session restores before_.
+     *
+     * Params:
+     *   session = Active StudioSession owning document and Engine.
+     *
+     * Returns:
+     *   True if after_ is the open project; false leaves before_ open and records lastError().
+     */
+    override bool execute(StudioSession session) {
+        return session.replaceDocumentDirect(after_, before_, lastError_);
+    }
+
+    /**
+     * Restores before_ as the open project; on a late activation failure the session restores after_.
+     *
+     * Params:
+     *   session = Active StudioSession owning document and Engine.
+     *
+     * Returns:
+     *   True if before_ is the open project; false leaves after_ open and records lastError().
+     */
+    override bool undo(StudioSession session) {
+        return session.replaceDocumentDirect(before_, after_, lastError_);
+    }
+
+    override string label() const {
+        return label_;
+    }
+
+    override bool canMergeWith(IUndoCommand next) const {
+        return false;
+    }
+
+    override void mergeFrom(IUndoCommand next) {
+        cast(void) next;
+    }
+
+    /**
+     * Returns the reason the most recent execute() or undo() failed, or an empty string.
+     *
+     * Returns:
+     *   Last failure diagnostic.
+     */
+    string lastError() const {
+        return lastError_;
     }
 }

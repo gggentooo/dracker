@@ -37,7 +37,8 @@
  *     cancelExport()/waitForExport(), undo(), redo(), save/open/preset/import APIs, handleKeyEvent(),
  *     triggerLiveNote(), releaseLiveNote(), pollRetiredAndTelemetry(), live record takes (beginLiveTake(),
  *     liveTakeActive(), liveTakeStartLine(), liveTakeNoteCount(), liveSongPosition(), liveTakeNoteOn()/Off(),
- *     liveTakeShouldEnd(), endLiveTake()), uniquePatternName(), openProjectFromMemory(), loadModulePresetFromFile(),
+ *     liveTakeShouldEnd(), endLiveTake()), uniquePatternName(), openProjectFromMemory(), doReplaceDocument(),
+ *     loadModulePresetFromFile(),
  *     doApplyModulePresetBytes(), doApplyModulePresetFile()
  *   - struct MidiNoteEvent / SamplePeaks / ExportOptions / ExportStatus; enum ExportState; class ExportJob
  *   - SamplePeaks computeSamplePeaks(...) / float denormalizeParam(...)
@@ -1920,6 +1921,128 @@ class StudioSession {
             return false;
         }
         dirty_ = true;
+        return true;
+    }
+
+    /**
+     * Activates next as the open project in place, keeping the undo history, file path, id counters and the
+     * session's current pattern when it still exists, and continuing playback where the new timeline allows it.
+     * Used by ReplaceDocumentCommand for both execute() and undo().
+     *
+     * The playhead keeps its line when that line is before the end of the new song (loop end or the last clip
+     * end); otherwise activation rewinds to line 0. A running transport keeps running; a playPattern()
+     * audition is not resumed. A transient timeline is dropped, so the song timeline is restored.
+     * If activation fails after the old project was torn down, fallback (the project open before the attempt)
+     * is re-activated; if that also fails, the history is cleared, as after a failed load.
+     *
+     * Params:
+     *   next = Project (already validated by probeLoadedProject()) to activate.
+     *   fallback = Project to restore when activating next fails after the teardown.
+     *   err = Diagnostic error text populated when next could not be activated.
+     *
+     * Returns:
+     *   True when next is the open project; false when fallback is (or an empty project after a double failure).
+     */
+    package bool replaceDocumentDirect(const ref LoadedProject next, const ref LoadedProject fallback,
+            out string err) {
+        err = null;
+        if (!probeLoadedProject(next, err)) {
+            return false;
+        }
+        EngineTelemetry tel;
+        engine_.readTelemetry(tel);
+        immutable bool resumePlay = tel.playing && !transientTimeline_;
+        immutable long line = tel.currentLine;
+        immutable string path = currentPath_;
+        immutable uint keepPattern = currentPatternId_;
+        immutable uint keepNextModule = nextModuleId_;
+        immutable uint keepNextClip = nextClipId_;
+        immutable bool wasDirty = dirty_;
+        UndoHistory keep = history_;
+        history_ = null;
+        bool ok = commitLoadedProject(next, path, err);
+        if (!ok) {
+            string ignored;
+            if (!commitLoadedProject(fallback, path, ignored)) {
+                keep.clear();
+            }
+        }
+        history_ = keep;
+        dirty_ = ok ? true : wasDirty;
+        if (nextModuleId_ < keepNextModule) {
+            nextModuleId_ = keepNextModule;
+        }
+        if (nextClipId_ < keepNextClip) {
+            nextClipId_ = keepNextClip;
+        }
+        if (findPatternDoc(keepPattern) !is null) {
+            currentPatternId_ = keepPattern;
+        }
+        long endLine = doc_.loopEndLine > 0 ? doc_.loopEndLine : 0;
+        foreach (ref c; doc_.clips) {
+            immutable long clipEnd = c.startLine + cast(long) c.lengthLines;
+            if (clipEnd > endLine) {
+                endLine = clipEnd;
+            }
+        }
+        if (line > 0 && line < endLine) {
+            seekLine(line);
+        }
+        if (resumePlay) {
+            play();
+        }
+        return ok;
+    }
+
+    /**
+     * Makes a project built in memory the open project as one undoable history command.
+     *
+     * The project is serialized and parsed again, so it passes exactly the checks of loading an .msv file,
+     * then validated against a throwaway Engine before anything changes: a project that cannot be activated
+     * leaves the open project, history, file path, dirty flag and document revision untouched and err names
+     * the reason. On success the swap is recorded as ReplaceDocumentCommand, so undo() restores the project
+     * open before and redo() re-applies the new one; the history is not cleared, the file path is kept, and
+     * the document counts as modified. Playback continues where the new timeline allows it (see
+     * replaceDocumentDirect()). Refused while a live-record take is running.
+     *
+     * Params:
+     *   proj = Complete project; not modified.
+     *   label = Undo menu label; empty uses "Replace Document".
+     *   err = Diagnostic error text populated on validation, activation or recording failure.
+     *
+     * Returns:
+     *   True when proj is now the open project as one undo step; false leaves the session as it was.
+     */
+    bool doReplaceDocument(const ref LoadedProject proj, string label, out string err) {
+        err = null;
+        if (!initialized_ || history_ is null) {
+            err = "Session is not initialized";
+            return false;
+        }
+        if (liveTakeActive()) {
+            err = "Cannot replace the document while recording";
+            return false;
+        }
+        ubyte[] bytes;
+        if (!serializeProject(proj, bytes, err)) {
+            return false;
+        }
+        LoadedProject after;
+        if (!loadProject(bytes, after, err)) {
+            return false;
+        }
+        if (!probeLoadedProject(after, err)) {
+            return false;
+        }
+        LoadedProject before;
+        if (!snapshotDocumentForSave(before, err)) {
+            return false;
+        }
+        auto cmd = new ReplaceDocumentCommand(label.length > 0 ? label : "Replace Document", before, after);
+        if (!history_.pushAndExecute(cmd, this)) {
+            err = cmd.lastError().length > 0 ? cmd.lastError() : "Document could not be replaced";
+            return false;
+        }
         return true;
     }
 
@@ -4185,7 +4308,36 @@ class StudioSession {
         return freed;
     }
 
+    /**
+     * Validates a parsed project against a throwaway Engine, then activates it as the open project.
+     *
+     * Params:
+     *   parsed = Parsed project to validate and activate.
+     *   path = File path recorded for the activated document (null for an in-memory document).
+     *   err = Diagnostic error text populated on validation or activation failure.
+     *
+     * Returns:
+     *   True when parsed is the open project; a validation failure leaves the open project untouched.
+     */
     private bool activateLoadedProject(const ref LoadedProject parsed, string path, out string err) {
+        if (!probeLoadedProject(parsed, err)) {
+            return false;
+        }
+        return commitLoadedProject(parsed, path, err);
+    }
+
+    /**
+     * Trial-materializes a parsed project into a temporary Engine without changing the session.
+     *
+     * Params:
+     *   parsed = Project to validate against a throwaway Engine at the session sample rate.
+     *   err = Diagnostic error text populated when the Engine cannot be created or the project
+     *         cannot be materialized (unknown module type, rejected wiring, out of memory).
+     *
+     * Returns:
+     *   True when the project materializes cleanly; the session state is unchanged either way.
+     */
+    private bool probeLoadedProject(const ref LoadedProject parsed, out string err) {
         Engine probe;
         if (!probe.tryInit(sampleRate_)) {
             err = "Out of memory creating Engine for loaded project";
@@ -4197,10 +4349,23 @@ class StudioSession {
         foreach (ref s; probeOwned) {
             s.destroyOffRT();
         }
-        if (!probeOk) {
-            return false;
-        }
+        return probeOk;
+    }
 
+    /**
+     * Destroys the open project and activates parsed as the new document, rewinding playback to line 0
+     * and clearing dirty state and the undo history (unless history_ is null, as changeSampleRate sets it).
+     * A failure after the teardown leaves an empty project, exactly as a plain load failure does.
+     *
+     * Params:
+     *   parsed = Project already validated by probeLoadedProject().
+     *   path = File path recorded for the activated document (null for an in-memory document).
+     *   err = Diagnostic error text populated on activation failure.
+     *
+     * Returns:
+     *   True when parsed is the open project.
+     */
+    private bool commitLoadedProject(const ref LoadedProject parsed, string path, out string err) {
         immutable bool wasRunning = suspendAudio();
         scope (exit) resumeAudio(wasRunning);
 

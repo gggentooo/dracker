@@ -10,6 +10,31 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
 
 ---
 
+## [2026-11-26 21:25:24 KST]
+- **Author:** Qwen3.8 Flash Next
+- **Task:** T111 (Session: replace the document as one undo step)
+- **Affected Files:**
+  - `source/app/session.d`
+  - `source/app/history.d`
+  - `tests/unit/session_test.d` (new)
+  - `docs/todo.json`, `docs/todo.md`, `docs/todo-guides.md` (through `tools/todo.py`)
+  - `docs/changelog.md`
+- **Description:**
+  - `source/app/session.d`: split `activateLoadedProject()` into `probeLoadedProject()` (the old lines 4189–4202 trial build, which changes nothing) and `commitLoadedProject()` (the old lines 4207–4249 unchanged); `activateLoadedProject()` now probes, then commits. No caller was changed.
+  - Added `doReplaceDocument(proj, label, err)` below `openProjectFromMemory()`: serialize, parse again, probe against a throwaway Engine, snapshot the open document (live sample data included), then record a `ReplaceDocumentCommand` and execute it. A refusal (session not initialized, live take active, serialize/parse/probe/snapshot failure) leaves document, history, file path, dirty flag and document revision unchanged and fills `err`; a project with BPM 5.0 refuses with the exact `serializeProject` message "Out-of-range BPM or TPL".
+  - Added `package replaceDocumentDirect(next, fallback, err)`: activates `next` through `commitLoadedProject` with `history_` held null across the call (as `changeSampleRate` does), keeping the history, file path, module/clip id counters and the current pattern when it still exists; a late commit failure re-activates `fallback` and clears the history only if that fails too. The document counts as modified (`dirty_ = true` on success). Transport: the playhead keeps its line when that line is before the end of the new song (loop end or last clip end), otherwise activation rewinds to line 0; playback continues via the queued `seekLine()`/`play()` — a `playPattern()` audition is not resumed.
+  - `source/app/history.d`: added `ReplaceDocumentCommand` (execute activates `after_`, undo restores `before_`, both through `replaceDocumentDirect`; `lastError()` names the reason of a failed execute/undo; never merges), added `LoadedProject` to the `io.project_format` import and added the class to the header Planned API list. The class DDoc records that each step keeps two whole projects, samples included, while existing commands keep at most one module or one pattern's cells — per the owner decision of 2026-11-26, no memory limit is added in T111 (history holds up to 512 steps).
+  - `tests/unit/session_test.d` (new): `makeMemoryProject(uint clipLines = 16)` copied from `persistence_test.d:762` plus four unittest blocks, one assert per acceptance-table row — replace/undo/redo give identical bytes and `bitExact()` renders and older steps still undo/redo (`doAddModule("synth.fm_synth", "Next")` returns 3 afterwards); the five refusals (bad tempo, bad shape, duplicate ids, unknown type, wire loop) change bytes, undo/redo counts and document revision nothing, and an empty label gives `nextUndoLabel() == "Replace Document"`; after `saveProjectToFile` the path is kept and the flag set, still after undo; stopped sessions stay stopped at line 0, a playing session keeps its line (asserted `L > 0 && L < 16`, not `L == 3`), a 2-line song rewinds the playhead to 0 while playing, and undo keeps playback running.
+- **Verification:**
+  - `dub test --compiler=ldc2 --config=headless` → `42 modules passed unittests` (the run before the new test file printed `41 modules passed unittests`)
+  - `ldc2 -w -unittest -c -o- $I -Itests $V source/app/session.d source/app/history.d tests/unit/session_test.d` → no output apart from `exit 0` (run after each guide step)
+  - `grep -n '//' source/app/session.d source/app/history.d tests/unit/session_test.d` → no matches, and no `/* ... */` comment outside the file header and DDoc blocks
+  - `python3 tools/todo.py check` → `ok: 115 tasks (32 open, 83 done), 4 features, 29 changelog entries`
+  - Not run: `dub build --compiler=ldc2 --config=compose` (nothing in `source/compose/` changed) and the `--config=app` build/tests (nothing in `source/platform/`, `source/app/studio_app.d`, `source/app/gui_shell.d`, `source/app/audio_host.d` or `source/app/gui_gallery.d` changed).
+  - Mutation check (Step 9) not applicable: T111 is a new feature, not a bug fix.
+
+---
+
 ## [2026-11-26 20:42:37 KST]
 - **Author:** Gemini 4 Neon
 - **Task:** T94 reviewed and closed (owner approved `Strings.wav`)
