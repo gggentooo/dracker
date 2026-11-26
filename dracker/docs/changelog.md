@@ -10,6 +10,43 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
 
 ---
 
+## [2026-11-26 18:13:35 KST]
+- **Author:** Gemini 4 Neon
+- **Task:** T93 owner decision recorded (`Audio Out` rests at 1.0 in Inverted mode)
+- **Affected Files:**
+  - `docs/todo.json`, `docs/todo.md`, `docs/todo-guides.md` (through `tools/todo.py`)
+  - `docs/changelog.md`
+- **Description:**
+  - Recorded the owner's decision on T93: in ADSR *Inverted* mode, both `CV Out` and `Audio Out` rest at `1.0` when idle (removing the unresolved "Open point" from T93's guide).
+  - Updated T93 Step 4 so that if T94 has already removed the SpectraVoice sentence from `docs/manual.md` Appendix C row 15, the now-empty row 15 is deleted cleanly.
+- **Verification:**
+  - `python3 tools/todo.py check` → `ok: 115 tasks (36 open, 79 done), 4 features, 25 changelog entries`
+  - Not run: D test suites (no `.d` source files were changed).
+
+---
+
+## [2026-11-26 18:04:46 KST]
+- **Author:** Gemini 4 Neon
+- **Task:** T109 closed (owner accepted); Stage 0 guides (T75, T76, T94, T110) and `qwen-inkling.md` updated for local-model delegation
+- **Affected Files:**
+  - `qwen-inkling.md`
+  - `docs/todo.json`, `docs/todo.md`, `docs/todo-guides.md` (through `tools/todo.py`)
+  - `docs/changelog.md`
+- **Description:**
+  - **T109 (Decision):** Closed on owner approval (`owner accepted the proposal`), preserving the full Script tab specification (open-project handles, refused file/project commands, single undo step, apply while playing, error listing and marked line, tab persistence, ⌘Return).
+  - **Stage 0 guides updated via `tools/todo.py guide`:**
+    - **T75:** Fixed Step 6/7 ordering deadlock on the `float.nan` identity test (run valid-WAV identity tests against the original `doLoadSample` in Step 6, then refactor `doLoadSample` to call `samplerExtraWithSample` and run the `float.nan` identity check in Step 7); added missing `err` text when `serializeExtra` returns false, clarified `lowNote > highNote` suggestion, and added `dub build --compiler=ldc2 --config=compose`.
+    - **T76:** Folded owner decision #2 into the pasted code, steps, acceptance table, and tests (`ProjectProblemKind.invalidName = 14`, included in `isHandleProblem`, `setName(handle)` in `insertModule` and `renameModule`, new `setModuleName` method refusing `out` with `protectedModule` and invalid names with `invalidName`); removed stale `"Leave the questions below to the owner."` text and added `--config=compose` verification.
+    - **T94:** Removed stale `"Do not start before the owner has answered."` blocker from **Goal**; made `deserializeExtra` magic check explicit; noted removing Appendix C row 15 if T93 already cleared ADSR; added Step 8 (`--sound-check-presets=build/preset-sounds`) and instructed builders to leave T94 open with `--status` for the owner to listen to `Strings.wav` instead of running `done`.
+    - **T110:** Unified test filename from `widgets_test.d` to `tests/unit/widgets_textarea_test.d` (4 places) to match **Files**, and clarified `openTextEditor()` ends at line 3384.
+  - **`qwen-inkling.md`:** Updated `agents.md` rule count (five → six) and baseline test module count (38 → 41); added inner `dracker/` working-directory note; added `--config=compose` and `gui_gallery.d` checks plus 300 s wait note to Gate 1; chained Gate 2 into one shell command with `&&` and `--skip-registry=all`; scoped Gate 3 to `.d` files and noted mid-function `/* ... */` comments; fixed Step 10 finish/record ordering; added `docs/todo-guides.md` to the changelog template, automatic test-file discovery note in §3.7, and Gate 4 / compose-app items in the §8 checklist.
+- **Verification:**
+  - `python3 tools/todo.py check` → `ok: 115 tasks (36 open, 79 done), 4 features, 25 changelog entries`
+  - `python3 tools/todo.py show T109` → verified Done entry preserves all 7 proposal bullets
+  - Not run: D test suites (no `.d` source files were changed).
+
+---
+
 ## [2026-11-26 17:17:54 KST]
 - **Author:** Claude Fable 5.2
 - **Task:** Task guides ("verbose todo"): script, guides, rules; large tasks split; Script tab tasks; T95 and T115 added

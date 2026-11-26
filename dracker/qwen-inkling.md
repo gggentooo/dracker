@@ -1,8 +1,10 @@
 # Dracker — Working Rules for Qwen and Inkling
 
-This file is for the local models **Qwen** and **Inkling**. It adds to [`agents.md`](./agents.md); it does not replace it. All five rules in `agents.md` still apply. Where this file is stricter, this file wins.
+This file is for the local models **Qwen** and **Inkling**. It adds to [`agents.md`](./agents.md); it does not replace it. All six rules in `agents.md` still apply. Where this file is stricter, this file wins.
 
 Read the whole file before you start a task. Read it again before you change the task list or write in `docs/changelog.md`.
+
+**Working directory:** Run every command below from the inner `dracker/` folder (the folder that holds `dub.json` and `tools/todo.py`; check `pwd` before you start).
 
 ---
 
@@ -32,39 +34,40 @@ A gate is a check that must pass before you continue. **If a gate fails, stop at
    dub test --compiler=ldc2 --config=headless 2>&1 | tail -5
    ```
 
-   It takes about 3 minutes. Wait for it to finish. Do not guess the result.
-2. The output must contain the line `N modules passed unittests` (N is the number of test modules, 38 or more on 2026-11-26). It must not contain `FAILED`, `AssertError`, `Error:` or `Segmentation fault`.
-3. If the task touched anything in `source/platform/`, `source/app/studio_app.d`, `source/app/gui_shell.d` or `source/app/audio_host.d`, also run `dub test --compiler=ldc2 --config=app 2>&1 | tail -5`. It must say `4 modules passed unittests` (or more).
-4. Copy the last output line **exactly as printed** into the changelog entry (see section 6).
+   It takes about 3 minutes and may stay quiet while compiling. Use a command timeout of at least 300 seconds, do not kill it early, and wait for it to finish. Do not guess the result.
+2. The output must contain the line `N modules passed unittests` (N is the number of test modules, 41 or more on 2026-11-26). It must not contain `FAILED`, `AssertError`, `Error:` or `Segmentation fault`.
+3. If the task touched anything in `source/compose/` or `source/compose_main.d`, also run `dub build --compiler=ldc2 --config=compose 2>&1 | tail -5` and confirm it links with exit 0 (this catches imports excluded from `dracker-compose` that pass the headless build).
+4. If the task touched anything in `source/platform/`, `source/app/studio_app.d`, `source/app/gui_shell.d` or `source/app/audio_host.d`, also run `dub test --compiler=ldc2 --config=app 2>&1 | tail -5`. It must say `4 modules passed unittests` (or more). If it touched `source/app/gui_gallery.d`, run `dub build --compiler=ldc2 --config=app --build=debug 2>&1 | tail -5` and confirm exit 0.
+5. Copy the last output line **exactly as printed** into the changelog entry (see section 6).
 
 D stops a test module at the **first** failed assertion. After you fix one failure, run the suite again, because the next assertion in the same module may fail too. Repeat until the suite passes.
 
 ### Gate 2 — Zero compiler warnings
 
-Run this from `dracker/` and list every file you created or changed at the end:
+Run all lines below in **one single shell command** from `dracker/` (do not split across separate shell calls, or `$V` and `$I` will be empty) and list every `.d` file you created or changed at the end:
 
 ```zsh
-V=$(dub describe --compiler=ldc2 --config=headless --data=versions --data-list | sed 's/^/-d-version=/' | tr '\n' ' ')
-I=$(dub describe --compiler=ldc2 --config=headless --data=import-paths --data-list | sed 's/^/-I/' | tr '\n' ' ')
-eval ldc2 -w -unittest -c -o- $I -Itests $V source/path/one.d tests/unit/one_test.d
+V=$(dub describe --skip-registry=all --compiler=ldc2 --config=headless --data=versions --data-list | sed 's/^/-d-version=/' | tr '\n' ' ') && \
+I=$(dub describe --skip-registry=all --compiler=ldc2 --config=headless --data=import-paths --data-list | sed 's/^/-I/' | tr '\n' ' ') && \
+eval ldc2 -w -unittest -c -o- $I -Itests $V source/path/one.d tests/unit/one_test.d && \
 echo "exit $?"
 ```
 
-The output must be empty apart from `exit 0`. Any warning counts as a failure.
+The output must be empty apart from `exit 0`. Any warning or non-zero exit counts as a failure.
 
 ### Gate 3 — No inline comments
 
 ```zsh
-grep -n '//' <every file you created or changed>
+grep -n '//' <every .d file you created or changed>
 ```
 
-This must print nothing, except for `//` inside a string literal such as a URL. Comments are allowed only in the file header block and in the DDoc block above a function (`agents.md` Rule 1). This also applies to test files.
+Run this on `.d` files only (not `.md` files). This must print nothing, except for `//` inside a string literal such as a URL. Comments are allowed only in the file header block and in the DDoc block above a function (`agents.md` Rule 1). Also check by eye that you wrote no `/* ... */` comments inside function bodies or trailing on struct fields (`grep -n '//'` does not catch those). This also applies to test files.
 
 ### Gate 4 — Every claim has evidence
 
 Each sentence in a changelog entry, a *Done* entry or your final report that says something was checked must name a command **you ran in this session**, followed by the line it printed.
 
-- Allowed: `dub test --compiler=ldc2 --config=headless` → `38 modules passed unittests`.
+- Allowed: `dub test --compiler=ldc2 --config=headless` → `41 modules passed unittests`.
 - Not allowed: "all tests pass", "verified", "works correctly", or "exit 0" with no command, or for a command you did not run.
 
 If you did not run something, write "not run" and why.
@@ -155,13 +158,18 @@ Do these steps in order. Do not skip any.
    - Convert to `ulong` **before** you multiply: write `(cast(ulong) bar - 1) * linesPerBar`, never `(bar - 1) * linesPerBar` with `uint` values. Test the largest input as well (`uint.max`).
    - A suggestion in an error must be a value the same parser accepts. Test that: parse the suggestion and check that it is accepted.
    - Give every function a DDoc block (`Params:`, `Returns:`). Indent the `Returns:` text by two spaces on every line, like `Params:`.
-7. **Write the tests** from the acceptance table: one `assert` per row, using the literal expected value from the table. Also add:
+7. **Write the tests** from the acceptance table: one `assert` per row, using the literal expected value from the table. New `tests/unit/*_test.d` files are discovered automatically by `dub test --config=headless`; do not edit `dub.json` to register them. Also add:
    - every refusal, with its offset, length, reason and suggestion;
    - the edges: empty text, 0, 1, the largest allowed value, one past it, and a number too large for the type;
    - round trips (format, then parse, gives the same value).
-8. **Run Gate 2** (warnings) for quick feedback while you work, then **Gate 1** (the full suite). When a test fails, decide which one is wrong, the code or the expected value, by working the row by hand again. Never change an expected value just to make the test pass. Say which side was wrong in the changelog.
+8. **Run Gate 2** (warnings) for quick feedback while you work, then **Gate 1** (the full suite, plus `--config=compose` or `--config=app` if applicable). When a test fails, decide which one is wrong, the code or the expected value, by working the row by hand again. Never change an expected value just to make the test pass. Say which side was wrong in the changelog.
 9. **Mutation check (for bug fixes).** For each bug you fixed, put the bug back for a moment, run the tests, and confirm that a test now fails. Then remove the bug again. If no test fails, add a test that does.
-10. **Run Gates 3, 6 and 7**, then write the docs (sections 5 and 6).
+10. **Finish and record, in this exact order:**
+    1. Run Gate 3 (`grep -n '//'` on every changed `.d` file and check by eye for mid-function `/* ... */`), Gate 5 (`date`), and confirm Gate 6 (exact model name).
+    2. Write the entry in `docs/changelog.md` (section 6).
+    3. Update the task list with `tools/todo.py` (`done` or `set --status`, then `log --title`; section 5), citing the changelog timestamp you just wrote.
+    4. Run Gate 7 (`python3 tools/todo.py check` and `python3 tools/todo.py show <id>`).
+    5. Run `git status --short` and confirm every file it lists appears in **Affected Files** in `docs/changelog.md` (add any missing one, such as `docs/todo-guides.md`).
 11. **Write the final report** (section 7).
 
 ---
@@ -253,12 +261,12 @@ The newest entry goes at the **top**, directly below the `---` under "Entry Form
 - **Affected Files:**
   - `source/compose/module_writer.d` (new)
   - `tests/unit/compose_module_test.d` (new)
-  - `docs/todo.json`, `docs/todo.md` (through `tools/todo.py`)
+  - `docs/todo.json`, `docs/todo.md`, `docs/todo-guides.md` (through `tools/todo.py`)
 - **Description:**
   - What changed and why, one bullet per file or topic.
   - Any bug found on the way, and whether the code or the test was wrong.
 - **Verification:**
-  - `dub test --compiler=ldc2 --config=headless` → `38 modules passed unittests`
+  - `dub test --compiler=ldc2 --config=headless` → `41 modules passed unittests`
   - `ldc2 -w … <files>` → no output, exit 0
   - `grep -n '//' <files>` → no matches
   - Not run: `--config=app` tests (the task changed no app-only files).
@@ -292,9 +300,10 @@ Copy this list into your notes and tick each item only after doing it:
 - [ ] An acceptance table exists, and every expected value was worked out by hand and checked a second way.
 - [ ] Every "not found" check compares against the exact sentinel; digit counters start at 0; multiplications are widened before they can overflow.
 - [ ] No constant duplicates an existing one, and every name says what the value is.
-- [ ] Gate 1: the full headless suite was run in this session and printed `N modules passed unittests`.
-- [ ] Gate 2: `ldc2 -w` printed nothing for every changed file.
-- [ ] Gate 3: `grep -n '//'` printed nothing.
+- [ ] Gate 1: the full headless suite was run in this session and printed `N modules passed unittests` (plus `--config=compose` or `--config=app` if applicable).
+- [ ] Gate 2: `ldc2 -w` printed nothing apart from `exit 0` for every changed `.d` file.
+- [ ] Gate 3: `grep -n '//'` printed nothing on changed `.d` files, and there are no mid-function or trailing `/* ... */` comments.
+- [ ] Gate 4: every verification claim cites a command run in this session and the exact line it printed.
 - [ ] Mutation check done for every bug fix.
 - [ ] Gate 5: the timestamps come from `date`.
 - [ ] Gate 6: the entries are signed with my exact model name.

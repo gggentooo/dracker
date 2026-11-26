@@ -162,19 +162,6 @@ Facts about the current code that the tasks rely on:
   - Tests: click a clip of another pattern and check `ctx.currentPattern()` and what the pattern editor shows; a clone clip opens the shared pattern; a drag still moves the clip; the undo count is unchanged by selecting. Update the manual.
 - **Needs:** —
 
-#### [Project] Script tab: project access, file commands, undo, and errors · T109 · Decision
-
-- **Files:** `source/gui/views/script_view.d` (new), `source/compose/script/interpreter.d`
-- **Task:** Decide the remaining behaviour of the script tab (T108). **(proposed)**
-  - The script works on the open project: its modules, parts and sections are reachable by the handles `open` would derive (T82, T100), which the tab lists next to the input.
-  - Commands that replace the project or touch files are refused in the tab with a one-line reason: `project` (would discard the open project; title, tempo, signature and key have their own commands), `open` and `save` (use the File menu). `savemodule` and `sample` are allowed and take paths; a relative path is relative to the project file's folder.
-  - Apply is one undo step ("Apply script"), so ⌘Z takes the whole script back.
-  - Apply is allowed while the song plays; playback continues with the new content.
-  - Errors are listed under the input with line, column, reason and suggestion; the first offending line is marked and the caret moves to it.
-  - The tab is offered for every pattern, normal or drum, and does not depend on which pattern is selected. Its text is kept while the app runs (switching tabs or patterns does not clear it) and is not saved in the project.
-  - ⌘Return applies. No history of earlier scripts in the first version.
-- **Needs:** —
-
 #### [GUI/widgets] Multi-line text editor widget · T110 · Build
 
 - **Files:** `source/gui/widgets.d`, `tests/unit/widgets_textarea_test.d` (new; uses the `Harness` of `tests/unit/gui_test.d`), `source/app/gui_gallery.d` (compiled in the `app` configuration only)
@@ -390,6 +377,20 @@ Facts about the current code that the tasks rely on:
 ---
 
 ## Done
+
+#### [Project] Script tab: project access, file commands, undo, and errors · T109 · Decision
+
+- **Files:** `source/gui/views/script_view.d` (new), `source/compose/script/interpreter.d`
+- **Done:** 2026-11-26 (owner accepted the proposal). The remaining behaviour of the script tab (T108):
+  - The script works on the open project: its modules, parts and sections are reachable by the handles `open` would derive (T82, T100), which the tab lists next to the input.
+  - Commands that replace the project or touch files are refused in the tab with a one-line reason: `project` (would discard the open project; title, tempo, signature and key have their own commands), `open` and `save` (use the File menu). `savemodule` and `sample` are allowed and take paths; a relative path is relative to the project file's folder.
+  - Apply is one undo step ("Apply script"), so ⌘Z takes the whole script back.
+  - Apply is allowed while the song plays; playback continues with the new content.
+  - Errors are listed under the input with line, column, reason and suggestion; the first offending line is marked and the caret moves to it.
+  - The tab is offered for every pattern, normal or drum, and does not depend on which pattern is selected. Its text is kept while the app runs (switching tabs or patterns does not clear it) and is not saved in the project.
+  - ⌘Return applies. No history of earlier scripts in the first version.
+  - Recorded here until T114 moves it into `docs/manual.md` and `../architecture.md`.
+- **Needs:** —
 
 #### [Project] Script tab in the pattern editor · T108 · Decision
 
@@ -1170,3 +1171,13 @@ Facts about the current code that the tasks rely on:
 - Note: Owner decisions of 2026-11-26: the Script tab (T108, with the feature text changed: the earlier "no human-oriented mode" is replaced); comments start with `//` instead of `#` (T67 and T83 changed); a module is shown under its handle (T76 guide); SpectraVoice gets prebuilt tables and old stored tables are ignored (T94 rewritten: the bug is wider than first recorded); the smaller proposals in the guides are recorded as proposed.
 - Note: Guides written for the eight Build tasks that can start now: T75, T76, T84, T93, T94, T95, T110, T111. Later tasks get theirs when the tasks they need are built.
 - Note: T110 and T111 file lists corrected: `tests/unit/widgets_test.d` and `tests/unit/session_test.d` do not exist.
+
+### 2026-11-26T18:04:46+09:00 — Gemini 4 Neon, T109 done; Stage 0 guides (T75, T76, T93, T94, T110) ready
+
+- Modified: T109 moved to *Done* (owner accepted the proposal).
+- Modified: The guide of T75.
+- Modified: The guide of T76.
+- Modified: The guide of T94.
+- Modified: The guide of T110.
+- Modified: The guide of T93.
+- Note: Owner decided T93 Inverted mode rests at 1.0 on both CV Out and Audio Out.
