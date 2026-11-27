@@ -28,7 +28,7 @@
 module tests.unit.compose_part_test;
 
 version (unittest) {
-    import std.algorithm : canFind;
+    import std.algorithm : canFind, startsWith;
 
     import app.pattern_notes : PatternGrid;
     import compose.module_writer : ModuleWriter;
@@ -251,7 +251,9 @@ version (unittest) {
 
         immutable PartPatternResult omittedWhenExplicit = pw.patternFor("bass", "");
         assert(!omittedWhenExplicit.ok && omittedWhenExplicit.problem.kind == PartProblemKind.unknownSection);
-        assert(omittedWhenExplicit.problem.suggestion == "maxed");
+        assert(omittedWhenExplicit.problem.suggestion == "");
+        assert(omittedWhenExplicit.problem.reason.startsWith("a section is needed here, because the song has sections ("),
+            omittedWhenExplicit.problem.reason);
 
         immutable PartPatternResult missingPatPart = pw.patternFor("bazz", "verse");
         assert(!missingPatPart.ok && missingPatPart.problem.kind == PartProblemKind.unknownPart);

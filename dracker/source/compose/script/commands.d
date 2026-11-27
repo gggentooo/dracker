@@ -2141,6 +2141,10 @@ private StepResult handleChords(ScriptInterpreter interp, const ref ParsedComman
             return StepResult(false, ScriptProblem(rhythmTok.line, errCol, errLen,
                 res.problem.reason, res.problem.suggestion, false));
         }
+        if (res.problem.kind == ChordProblemKind.progressionTooLong && hasPreset) {
+            return StepResult(false, ScriptProblem(presetTok.line, presetTok.column, presetTok.length,
+                res.problem.reason, "", false));
+        }
         if (res.problem.kind == ChordProblemKind.pitchOutOfRange) {
             if (auto octTok = "octave" in optMap) {
                 return StepResult(false, ScriptProblem(octTok.line, octTok.column, octTok.length,
@@ -2154,6 +2158,10 @@ private StepResult handleChords(ScriptInterpreter interp, const ref ParsedComman
             }
             if (hasSection && namesMatch(res.problem.subject, sectionName)) {
                 return StepResult(false, ScriptProblem(secTok.line, secTok.column, secTok.length,
+                    res.problem.reason, res.problem.suggestion, true));
+            }
+            if (!hasSection && trim(res.problem.subject).length == 0) {
+                return StepResult(false, ScriptProblem(partTok.line, partTok.column, partTok.length,
                     res.problem.reason, res.problem.suggestion, true));
             }
         }

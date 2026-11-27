@@ -1746,14 +1746,15 @@
       "area": "Docs",
       "title": "Script tab: end-to-end check, manual, and architecture",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`tests/unit/views_studio_root_test.d`, `source/app/studio_app.d` (`--studio-gui-selftest`), `docs/manual.md`, `../architecture.md` (§10), `agents.md` (package map)",
       "task": "A headless end-to-end test (type the example script of T67 without its `project` and `save` lines into the tab, Apply, check the document, undo, redo, render) and a GUI self-test step. A manual section for the Script tab with the commands refused there, and the decisions T108 and T109 moved into the manual and the architecture document. **Open until the owner has applied a script by hand** in the running app.",
-      "status": "Built 2026-11-27: headless end-to-end test (`views_studio_root_test.d`: the T67 example without `project` and `save` typed into the tab, Apply, document checked, render not silent, ⌘Z and ⇧⌘Z restore the exact bytes), GUI self-test step \"script tab (apply, undo)\" (18/18 passed), manual §8.14, §15 and Appendix D, `../architecture.md` §10, `agents.md`. Waiting for the owner to apply a script by hand in the running app.",
-      "done": null,
+      "status": null,
+      "done": "2026-11-27. Built and verified 2026-11-27 (headless end-to-end test, GUI self-test step, manual §8.14, architecture §10, agents.md); the owner applied a script by hand in the running app and confirmed the Script tab works as intended. Recorded in docs/changelog.md.",
       "needs": [
         "T113"
-      ]
+      ],
+      "closed": 115
     },
     {
       "id": "T115",
@@ -1775,45 +1776,61 @@
       "area": "Compose",
       "title": "arrange: raw clips and section arrangements together",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/part_writer.d`, `source/compose/script/commands.d`, `tests/unit/compose_part_test.d`, `tests/unit/compose_script_test.d`, `docs/composer.md`",
       "task": "Found while writing `docs/composer.md` (T89). `arrange clip=…` after `arrange <sections>` moves every section clip to line 0 and the song shrinks to one bar; `arrange <sections>` after `arrange clip=` drops the raw clips. Reproduce: two one-bar sections a and b with notes, a raw pattern made with `cells riff tracks=1 lines=16`, then `arrange a b a` and `arrange clip=riff start=0 len=16 lane=5`; `describe` shows the a and b clips at `start=0` on one lane and `render` reports one bar. Make the two forms combine (raw clips keep their lanes and the section arrangement keeps its positions), or refuse the second form with a clear reason; document the rule. Tests for both orders.",
       "status": null,
-      "done": null,
-      "needs": []
+      "done": "2026-11-27. The two arrange forms combine in both orders. A clip placed with `arrange clip=` after a section arrangement is kept on top of it (PartWriter extra clips; a drum clip is kept by drum part and section, so later pattern ids do not break it), the sections keep their positions and the clip its lane; `arrange <sections>` after clips keeps the clips of raw patterns and replaces the rest. The default loop runs to the later of the arrangement end and the last clip. Tests in tests/unit/compose_song_checks_test.d; rule in docs/composer.md §4.4. Recorded in docs/changelog.md.",
+      "needs": [],
+      "closed": 116
     },
     {
       "id": "T117",
       "area": "Compose",
       "title": "Warnings for scripts that run but make no sound",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/script/interpreter.d`, `source/compose/script/commands.d`, `source/compose_main.d`, `tests/unit/compose_script_test.d`, `docs/composer.md`",
       "task": "Found while writing `docs/composer.md` (T89). Scripts that are valid but certainly silent pass `check`, `run` and `render` without a word: named sections with notes but no `arrange` (every bar silent), and `remove` of a module that a part plays (the notes stay as cells with no module). Add warnings (not errors) to the result of `run` and `check`, printed after the summary and in `--json`, and shown in the app's Script tab message: sections that are never arranged, parts whose module was removed, parts with no notes. Exit code stays 0. Tests for each warning and for a script that gets none.",
       "status": null,
-      "done": null,
-      "needs": []
+      "done": "2026-11-27. RunResult.warnings (PartWriter.soundWarnings(), computed after a full run): no section arranged, a section with notes that no clip plays, a part or drum lane whose module was removed, a part with no notes, a drum part with no hits. check and run print them as Warning: lines after the summary and as a warnings array in --json; exit code stays 0; the Script tab appends them to its message. Tests in tests/unit/compose_song_checks_test.d; docs/composer.md §2 Warnings, manual §8.14. Recorded in docs/changelog.md.",
+      "needs": [],
+      "closed": 117
     },
     {
       "id": "T118",
       "area": "Compose/program",
       "title": "Render report: limiter detection and the loop",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/render.d`, `tests/unit/compose_render_test.d`, `docs/composer.md`",
       "task": "Found while writing `docs/composer.md` (T89). (1) \"limiter reached\" is reported only for samples at 0.999 or more after the soft limiter, which starts at 0.95, so a mix driven to about twice full scale still says \"limiter not reached\" (a Saw Lead with 4-voice chords and a Synth Bass, both at gain 1 into `out`). Report when the limiter engages (input above its threshold), with the number of bars affected. (2) `render` follows a custom `loop` (for example `loop verse chorus`), so the end of the arrangement is never heard; T68 says the loop covers the arrangement unless set otherwise. Decide with the owner whether `render` plays the arrangement once from start to end (proposed) or the loop, and state it in the report header. Tests for both.",
       "status": null,
-      "done": null,
-      "needs": []
+      "done": "2026-11-27. Owner decision 2026-11-27: render plays the arrangement once from start to end. render switches the loop off for its session, states 'the arrangement once from start to end' in the header, and prints 'Loop: lines a to b, not followed by the render' for a custom loop (JSON: playback, loop.start/end/followed). The limiter counts as engaged when an output sample passes LIMITER_KNEE (0.95, now a named constant in modules/output.d), with limiterBars and a per-bar (limiter) mark. Tests in tests/unit/compose_song_checks_test.d; docs/composer.md §4.4 and §7.2, architecture §10.2. Recorded in docs/changelog.md.",
+      "needs": [],
+      "closed": 118
     },
     {
       "id": "T119",
       "area": "Compose/script",
       "title": "Error messages: wrong suggestions and empty section names",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/script/commands.d`, `source/compose/script/interpreter.d`, `tests/unit/compose_script_test.d`",
       "task": "Found while writing `docs/composer.md` (T89). (1) A chord progression longer than its section is reported at the command word with \"did you mean '1'?\", a position shown as a name suggestion; report it at the progression with the section length and the number of bars the progression needs. (2) `notes` or `chords` without a section once sections exist says \"there is no section ''; did you mean 'a'?\"; say that a section is needed and list the sections. (3) `describe` prints raw `arrange clip=#id` lines when parts were declared in another order than it uses, although the arrangement is a plain section arrangement; print `arrange <sections>` then. Tests for each message.",
+      "status": null,
+      "done": "2026-11-27. (1) A chord progression longer than its named section is refused before writing, at the progression: 'the progression needs 4 bars, but section a has 2 bars; lengthen the section (section a bars=4) or shorten the progression' (ChordProblemKind.progressionTooLong). (2) A missing section name says 'a section is needed here, because the song has sections (a, b); write the section after the part name', at the part name, without a suggestion. (3) Reopened melodic parts are ordered by their timeline lanes, so describe prints arrange <sections> for a plain arrangement whatever order the notes were written in. Tests in tests/unit/compose_song_checks_test.d and compose_part_test.d. Recorded in docs/changelog.md.",
+      "needs": [],
+      "closed": 119
+    },
+    {
+      "id": "T120",
+      "area": "Sequencer/Compose",
+      "title": "Notes that last to the end of a pattern are never released",
+      "type": "Decision",
+      "state": "open",
+      "files": "`source/compose/part_writer.d` (note placement), `source/app/pattern_notes.d` (piano roll), or `source/sequencer/engine.d` (clip end)",
+      "task": "Found while testing T118. A note that ends exactly at the end of its pattern gets no note-off (the note-off would fall on the line after the pattern: part_writer.d and pattern_notes.d write it only when end < lines), and the sequencer does not release notes when a clip ends. The note therefore holds at full level through any following gap and through the 2-second render tail, until a later note on the same track replaces it. Reproduce: section a bars=1, section rest bars=2, notes mel a: C4:4, arrange a rest; render reports bars 2 and 3 at average 0.094 (C4:15l leaves bar 3 silent). This affects songs made in the app as well. Owner to choose: (a) the engine sends a note-off for the notes a clip started when that clip ends (changes playback of existing projects, in the app too); (b) the composition helper and the piano roll end such notes one line early; (c) leave it and keep the workaround documented in docs/composer.md §9.",
       "status": null,
       "done": null,
       "needs": []
@@ -2277,6 +2294,20 @@
         "Modified: Stages recomputed: T114 Stage 1 → 0.",
         "Modified: T89 moved to *Done*.",
         "Modified: T114 status changed."
+      ]
+    },
+    {
+      "time": "2026-11-27T13:10:18+09:00",
+      "author": "Claude Opus 5.5",
+      "title": "T114 and T116–T119 done; T120 added",
+      "changes": [
+        "Modified: T114 moved to *Done*.",
+        "Modified: T116 moved to *Done*.",
+        "Modified: T117 moved to *Done*.",
+        "Modified: T118 moved to *Done*.",
+        "Modified: T119 moved to *Done*.",
+        "Added: T120 ([Sequencer/Compose] Notes that last to the end of a pattern are never released, Decision) in Stage 0.",
+        "Note: T118 closed on the owner's decision that render plays the arrangement once from start to end."
       ]
     }
   ]

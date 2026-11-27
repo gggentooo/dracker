@@ -16,6 +16,7 @@
  * Planned API (Types, Functions & Hooks):
  *   - struct MasterOutput (typeId = "core.output", ports: audioStereo in -> audioStereo out)
  *   - @Param volume, limiterEnable
+ *   - enum LIMITER_KNEE (level where the soft limiter starts)
  *   - lastPeakL(), lastPeakR(), clipped()
  *
  * See_Also:
@@ -29,6 +30,12 @@ import dsp.smoother : ParamSmoother;
 import graph.context : ProcessContext;
 import graph.module_api : ModuleCategory, Param, ParamScale;
 import graph.port : PortDescriptor, PortDirection, PortKind;
+
+/**
+ * Level above which the master soft limiter changes the signal. The limiter is monotonic, so an output sample
+ * above this level means the limiter was working on it (read by compose.render, T118).
+ */
+enum float LIMITER_KNEE = 0.95f;
 
 /**
  * Terminal master output module with smoothed gain and soft-clip safety limiter.
@@ -152,14 +159,13 @@ struct MasterOutput {
     }
 
     private static float softLimitSample(float x) pure @safe {
-        enum float KNEE = 0.95f;
         enum float HEADROOM = 0.05f;
         immutable float ax = fabs(x);
-        if (ax <= KNEE) {
+        if (ax <= LIMITER_KNEE) {
             return x;
         }
-        immutable float excess = ax - KNEE;
-        immutable float limited = KNEE + HEADROOM * (excess / (HEADROOM + excess));
+        immutable float excess = ax - LIMITER_KNEE;
+        immutable float limited = LIMITER_KNEE + HEADROOM * (excess / (HEADROOM + excess));
         return x < 0.0f ? -limited : limited;
     }
 

@@ -157,6 +157,27 @@ modul lead synth.analog_gen
 dracker-compose: line 1, col 1: unknown command 'modul'; did you mean 'module'?
 ```
 
+### Warnings
+
+A script can be valid and still make no sound in places. After a successful `check` or `run`, the program prints one `Warning:` line for each of these, after the summary line; `--json` lists them in a `warnings` array (empty when there are none). The exit code stays 0, so read the output.
+
+| Warning | Cause |
+| --- | --- |
+| `no section is arranged, so the song is silent; add 'arrange a b'` | Sections have notes, but there is no `arrange`. |
+| `section 'b' has notes but is not arranged, so it is never heard` | A section with notes is missing from `arrange`. |
+| `part 'p2' plays module 'pad', which was removed, so its notes make no sound` | `remove` of a module a part plays. |
+| `drum part 'drums' lane 'Boom' plays module 'boom', which was removed, so its hits make no sound` | The same, for a drum lane. |
+| `part 'empty' has no notes` / `drum part 'hats' has no hits` | A part was declared but nothing was written into it. |
+
+```text
+OK (12 commands checked).
+Warning: no section is arranged, so the song is silent; add 'arrange a "b side"'.
+Warning: part 'p2' plays module 'pad', which was removed, so its notes make no sound.
+Warning: part 'empty' has no notes.
+```
+
+The Script tab in the app shows the same warnings after its "Applied ..." message. After `open`, and in the Script tab, sections and parts that were already in the project are not reported as unarranged or empty (a pattern waiting off the timeline is normal in the app); a part whose module was removed is always reported.
+
 ## 3. Musical time
 
 ### Lines
@@ -416,7 +437,7 @@ Error: `there is no wire from 'a' (Audio Out) to 'out' (Input)`.
 
 #### `remove <handle>`
 
-Removes a module and all its wires. Do not remove a module that a part still plays: `check` and `save` accept it, but that part's notes then play nothing (tested: the render is silent).
+Removes a module and all its wires. Do not remove a module that a part still plays: the script still runs, but that part's notes then play nothing, and `check` and `run` print a warning such as `Warning: part 'p2' plays module 'pad', which was removed, so its notes make no sound.` (section 2, Warnings).
 
 ```dcs
 module spare fx.echo
@@ -430,7 +451,7 @@ Error: `remove out` gives `the Master Output 'out' cannot be removed`.
 
 Music lives in parts and sections. A **section** is a named stretch of bars (`verse`, 4 bars). A **part** is one voice bound to one module (`bass` plays module `bass`) or a drum part bound to drum lanes. Each part gets one pattern per section it plays in, named `<part> · <section>`, created on first use.
 
-**Implicit section.** If a script declares no section at all, writing music without a section name uses one implicit section. It grows to fit the music (whole bars) and is arranged automatically. Do not mix the two ways: if you use sections, declare them before any music, name a section in every music command, and call `arrange`. A music command without a section name, once sections exist, fails with `there is no section ''; did you mean '<first section>'?`.
+**Implicit section.** If a script declares no section at all, writing music without a section name uses one implicit section. It grows to fit the music (whole bars) and is arranged automatically. Do not mix the two ways: if you use sections, declare them before any music, name a section in every music command, and call `arrange`. A music command without a section name, once sections exist, fails with `a section is needed here, because the song has sections (a, b); write the section after the part name`.
 
 #### `section <name> bars=<n>`
 
@@ -475,7 +496,7 @@ Errors:
 - `command 'notes' needs ':' before the notes`
 - `note runs past the end of section 'verse'; the nearest valid value is 1.4` (the value is the last start position that fits)
 - `another note of the same pitch already sounds at 1` (a same-pitch note overlaps an existing one; `clear` first)
-- `there is no section ''; did you mean 'a'?` (the section name is missing while sections exist)
+- `a section is needed here, because the song has sections (a, b); write the section after the part name` (the section name is missing while sections exist; reported at the part name)
 
 #### `chords <part> [<section>] [options]: <progression> [options]` or `chords <part> [<section>] preset=<name> [options]`
 
@@ -517,7 +538,7 @@ Errors:
 - `rhythm length 3 does not divide a bar of 16 lines; the nearest valid value is 16`
 - `option 'rhythm' can only be combined with style hold, root, or pulse; the nearest valid value is hold`
 - `option 'voices' must be 3 or 4; the nearest valid value is 3`
-- A progression longer than the section: `note runs past the end of section 'a'; did you mean '1'?` (reported at the command word; count the bars)
+- A progression longer than the section: `the progression needs 4 bars, but section 'a' has 2 bars; lengthen the section (section a bars=4) or shorten the progression` (reported at the progression; with `at=` the message says `needs 3 bars from 1.3`)
 
 #### `drums` (three forms)
 
@@ -653,7 +674,7 @@ arrange a
 
 #### `arrange <section> [<section> ...]`
 
-Puts sections on the song timeline in order. A section may appear more than once; the copies are clones of one pattern (edit once, all change). Each part gets its own timeline lane (melodic parts in declaration order, then drum parts). A part with no music in a section leaves a gap there. Calling `arrange` again replaces the previous arrangement. **Without `arrange`, a script with named sections renders silence.** The default loop covers the whole arrangement.
+Puts sections on the song timeline in order. A section may appear more than once; the copies are clones of one pattern (edit once, all change). Each part gets its own timeline lane (melodic parts in declaration order, then drum parts). A part with no music in a section leaves a gap there. Calling `arrange` again replaces the previous arrangement; clips placed with `arrange clip=` for raw patterns stay. **Without `arrange`, a script with named sections renders silence**, and `check` and `run` warn: `Warning: no section is arranged, so the song is silent; add 'arrange verse chorus'.` The default loop covers the whole arrangement.
 
 ```dcs
 module k preset="Pluck"
@@ -672,7 +693,7 @@ Error: `there is no section 'chorsu'; did you mean 'chorus'?`.
 
 Places one clip by hand, in lines from the song start. `<pattern>` is a pattern name (`"m · a"`, with the middle dot `·` and spaces, as patterns are named) or `#<id>`. `describe` writes this form when a project's timeline is not a plain section list. `start=`, `len=` and `lane=` are required.
 
-**Do not combine `arrange clip=` with `arrange <sections>`.** A clip placed after a section arrangement throws that arrangement away (every section pattern then sits at line 0), and `arrange <sections>` after clips drops the clips. Use one form only.
+**The two forms combine.** A clip placed after `arrange <sections>` is added on top of the section arrangement: the sections keep their positions and the clip keeps its lane (pick a lane above the parts' lanes, which are 0, 1, 2, ... in part order, then the drum parts). `arrange <sections>` after clips keeps the clips of raw patterns (`cells`) and replaces the rest. The default loop then runs to the end of the arrangement or of the last clip, whichever is later. Tested: `arrange a b a` followed by `arrange clip=riff start=0 len=16 lane=5` gives the three section clips at lines 0, 16 and 32 and the riff at line 0 on lane 5 (3 bars); the other order gives the same timeline.
 
 ```dcs
 module lead preset="Pluck"
@@ -688,9 +709,9 @@ arrange clip="m · b" start=16 len=16 lane=0
 
 #### `loop <section> [<last section>]`, `loop all`, `loop start=<line> end=<line>`
 
-Sets the song loop. `loop verse chorus` loops from the first `verse` in the arrangement to the first `chorus` at or after it, inclusive. `loop verse` loops that one section. `loop all` (also `clear` or `reset`) loops the whole arrangement (the default). `start=`/`end=` give lines from the song start. Use `loop` after `arrange`.
+Sets the song loop, which the app uses when it plays. `loop verse chorus` loops from the first `verse` in the arrangement to the first `chorus` at or after it, inclusive. `loop verse` loops that one section. `loop all` (also `clear` or `reset`) loops the whole arrangement (the default). `start=`/`end=` give lines from the song start. Use `loop` after `arrange`.
 
-**`render` follows the loop.** It plays from the song start; at the loop end it jumps back to the loop start, and it stops after as many bars as the arrangement has. Bars after the loop end are never heard in the render. Tested: `arrange a b c` with `loop a` rendered bar 1 three times. Keep the default loop (or write `loop all`) while you render and judge the song; add a custom loop last, if at all.
+**`render` does not follow the loop.** It plays the arrangement once from the start to its end, and its report prints the loop it did not follow (section 7.2).
 
 ```dcs
 module k preset="Pluck"
@@ -905,7 +926,7 @@ Drum hits are one-shots; the voice decides how long it rings (DrumSynth `Kit Dec
 
 - `cells <part> <section> ...`: the part's pattern in that section.
 - `cells <part> ...`: the part's pattern in the implicit section.
-- `cells <name> tracks=<n> lines=<n>`: create a raw tracker pattern (1 to 64 tracks, 1 to 4096 lines). Later `cells <name> line=...` write into it. A raw pattern plays only when placed with `arrange clip=` (and that form cannot be mixed with section arrangements), so raw patterns are mainly for `describe` round trips.
+- `cells <name> tracks=<n> lines=<n>`: create a raw tracker pattern (1 to 64 tracks, 1 to 4096 lines). Later `cells <name> line=...` write into it. A raw pattern plays only when placed with `arrange clip=`, which may follow `arrange <sections>` (section 4.4).
 
 | Option | Values | Default |
 | --- | --- | --- |
@@ -1021,7 +1042,7 @@ with `delay` Dry=0.85 Wet=0.28, `reverb` Dry=0.85 Wet=0.24 Room Size 0.62, and `
 
 Starting points when wiring straight to `out`: chord keys 0.2 to 0.3, bass 0.3 to 0.35, lead 0.3, drums 0.4 to 0.45, one solo instrument 0.6 to 0.8. These are for **each part on its own**; when bass, keys, lead and drums all play together, start about 20 to 25% lower (a test song with bass 0.3, drums 0.42, keys 0.18 into a reverb and lead 0.35 into a delay peaked at 0.955; bass 0.22, drums 0.36, keys 0.15 and lead 0.3 gave peak 0.755, average 0.129). Then render and adjust.
 
-The report's "limiter not reached" only means no sample reached 0.999; the limiter starts squashing at 0.95, so a peak above about 0.9 already means it is working. Keep the peak below 0.9.
+The report says `limiter engaged in <n> bars (...)` as soon as any output sample passes the limiter knee (0.95), and marks those bars `(limiter)`. Keep the peak below 0.9, so that the limiter stays out of the way.
 
 ### 6.4 Reusing sounds
 
@@ -1061,8 +1082,8 @@ $ dracker-compose run first_idea.dcs
 Ran 10 commands.
 Wrote first_idea.msv
 $ dracker-compose render first_idea.msv -o first_idea.wav
-Rendered: first_idea.wav (11.60 s, 44100 Hz, 4 bars)
-Levels:   peak 0.3836  average 0.0615  limiter not reached
+Rendered: first_idea.wav (11.60 s, 44100 Hz, 4 bars, the arrangement once from start to end)
+Levels:   peak 0.3836  average 0.0536  limiter not engaged
 Silent bars: none
 Bars:
   bar 1: peak 0.3829  avg 0.0663
@@ -1122,8 +1143,8 @@ save "two_sections.msv"
 In E minor, `i VI III VII` is Em C G D. The verse holds the chords and walks the bass between root and fifth; the chorus pulses the keys in eighths, gives the bass a syncopated rhythm and adds a snare fill in bar 4.
 
 ```text
-Rendered: two_sections.wav (43.74 s, 44100 Hz, 16 bars)
-Levels:   peak 0.8418  average 0.1280  limiter not reached
+Rendered: two_sections.wav (43.74 s, 44100 Hz, 16 bars, the arrangement once from start to end)
+Levels:   peak 0.8418  average 0.1273  limiter not engaged
 Silent bars: none
 Bars:
   bar 1: peak 0.6154  avg 0.0756
@@ -1156,17 +1177,18 @@ The chorus bars (5-8, 13-16) are about twice as loud on average as the verse bar
 
 | Field | Meaning |
 | --- | --- |
-| `Rendered: <wav> (<s> s, <rate> Hz, <n> bars)` | The WAV written, its length in seconds, the sample rate, and the song length in bars. The length is the arrangement plus a 2-second tail for reverb and release. The bar count is the end of the last timeline clip (or the loop end, if later), rounded up to whole bars. |
+| `Rendered: <wav> (<s> s, <rate> Hz, <n> bars, the arrangement once from start to end)` | The WAV written, its length in seconds, the sample rate, and the song length in bars. The render plays the arrangement once from the start to its end, then a 2-second tail for reverb and release; it does not follow the loop. The bar count is the end of the last timeline clip (or the loop end, if later), rounded up to whole bars. |
+| `Loop: lines <a> to <b>, not followed by the render` | Printed only when the project has a custom loop (one that does not cover the whole song). The app plays this loop; the render ignores it. |
 | `peak` | The highest sample of the whole file, after the Master Output limiter (0 to 1). |
 | `average` | The RMS level of the whole file, tail included. |
-| `limiter reached` / `not reached` | `reached` when some output sample hit 0.999 or more. See the warning below. |
+| `limiter not engaged` / `limiter engaged in <n> bars (<list>)` | Engaged when some output sample passed the limiter knee (0.95), with the bars where that happened; those bars are marked `(limiter)` in the `Bars:` list. `engaged after the arrangement` means only the tail passed it. |
 | `Silent bars` | Bars whose peak is at most 0.00001, or `none`. |
-| `Bars:` | Peak and average (RMS) of each bar of playback, measured by tempo from the song start; `(silent)` marks silent bars. The tail is not listed. Playback follows the loop, so with a custom loop the bars after the loop end repeat the loop instead. |
+| `Bars:` | Peak and average (RMS) of each bar, measured by tempo from the song start; `(silent)` marks silent bars and `(limiter)` bars where the limiter worked. The tail is not listed. |
 | `Modules:` | For each module: its displayed name, type, the peak of its own output (before wire gains), and `sound` or `silent` (peak above 0.00001). |
 
-`render --json` gives the same values as `wav`, `sampleRate`, `lengthSeconds`, `totalFrames`, `arrangementBars`, `peak`, `rms`, `limiterReached`, `silentBars` (array), `bars` (array of `bar`, `peak`, `rms`, `silent`) and `modules` (array of `id`, `typeId`, `name`, `peak`, `producedSound`).
+`render --json` gives the same values as `wav`, `sampleRate`, `lengthSeconds`, `totalFrames`, `arrangementBars`, `peak`, `rms`, `limiterReached` (true when the limiter engaged), `limiterBars` (array), `playback` (always `"once"`), `loop` (`start`, `end` in lines, and `followed`, always false), `silentBars` (array), `bars` (array of `bar`, `peak`, `rms`, `silent`, `limited`) and `modules` (array of `id`, `typeId`, `name`, `peak`, `producedSound`).
 
-**Warning on `limiter`.** The limiter is soft: it begins at 0.95 and the output approaches 1.0 slowly. `limiter reached` only appears for heavy overload (input around 3 times full scale). A song whose input was twice full scale rendered `peak 0.9977 ... limiter not reached`. Treat any **peak above 0.95 as limiting** and lower the gains.
+**On the limiter.** The limiter is soft: it begins at 0.95 and the output approaches 1.0 slowly, so the peak alone hardly shows how hard it works. A song whose input was about twice full scale rendered `peak 0.9967  average 0.2928  limiter engaged in 4 bars (1, 2, 3, 4)`. When the report says `engaged`, lower the gains.
 
 ### 7.3 A full arrangement: neon_drift
 
@@ -1277,8 +1299,9 @@ How it is built:
 Render report:
 
 ```text
-Rendered: neon_drift.wav (38.92 s, 44100 Hz, 16 bars)
-Levels:   peak 0.6933  average 0.1174  limiter not reached
+Rendered: neon_drift.wav (38.92 s, 44100 Hz, 16 bars, the arrangement once from start to end)
+Loop:     lines 64 to 192, not followed by the render
+Levels:   peak 0.6484  average 0.1070  limiter not engaged
 Silent bars: none
 Bars:
   bar 1: peak 0.4229  avg 0.0691
@@ -1293,40 +1316,39 @@ Bars:
   bar 10: peak 0.5004  avg 0.1264
   bar 11: peak 0.6188  avg 0.1276
   bar 12: peak 0.5125  avg 0.1306
-  bar 13: peak 0.6308  avg 0.1340
-  bar 14: peak 0.6857  avg 0.1305
-  bar 15: peak 0.6933  avg 0.1352
-  bar 16: peak 0.6804  avg 0.1366
+  bar 13: peak 0.4839  avg 0.1192
+  bar 14: peak 0.5723  avg 0.1176
+  bar 15: peak 0.4420  avg 0.0841
+  bar 16: peak 0.3504  avg 0.0798
 Modules:
-  Master Output      (core.output): peak 0.6933 (sound)
+  Master Output      (core.output): peak 0.6484 (sound)
   bass               (synth.analog_gen): peak 1.9214 (sound)
-  keys               (synth.fm_synth): peak 2.5647 (sound)
-  Neon Lead          (synth.analog_gen): peak 0.7839 (sound)
-  Neon Harmony       (synth.analog_gen): peak 0.9170 (sound)
+  keys               (synth.fm_synth): peak 2.5619 (sound)
+  Neon Lead          (synth.analog_gen): peak 0.9299 (sound)
+  Neon Harmony       (synth.analog_gen): peak 0.9548 (sound)
   kit                (synth.drumsynth): peak 1.0644 (sound)
   delay              (fx.delay): peak 0.3151 (sound)
   reverb             (fx.reverb): peak 0.4616 (sound)
-  bus_comp           (fx.compressor): peak 1.1555 (sound)
+  bus_comp           (fx.compressor): peak 1.0806 (sound)
 ```
 
 The modules `lead` and `harmony` are listed under their displayed names because the script gave `name=`.
 
-Because of `loop verse chorus`, this render plays intro, verse, chorus and then the verse again: report bars 13-16 are the verse, not the outro. With `loop all` instead, the same song renders `peak 0.6484  average 0.1087`, and the outro bars 15 and 16 fall to an average of 0.0841 and 0.0798 as the arrangement thins out. Render with `loop all` to hear the real ending.
+The song has `loop verse chorus`, so the app loops lines 64 to 192 when it plays. The render ignores the loop and plays intro, verse, chorus and outro once: the outro bars 15 and 16 fall to an average of 0.0841 and 0.0798 as the arrangement thins out.
 
 ## 8. Reading the report and fixing problems
 
 | Symptom in the report | Likely cause | Fix |
 | --- | --- | --- |
 | Every bar silent; the synth's module line says `sound`; Master Output `silent` | The synth has no audio path to `out`. | `connect <synth> out gain=...` (or through effects to `out`). |
-| Every bar silent; every module `silent`; the script has `section` commands | No `arrange`. Sections exist but are not on the timeline. | Add `arrange <sections...>`. |
+| Every bar silent; every module `silent`; the script has `section` commands | No `arrange`. Sections exist but are not on the timeline (`check` warns about it). | Add `arrange <sections...>`. |
 | One part's module `silent` | Its notes are in a section that is not arranged; it was bound to the wrong module; or it is an event processor chain with a missing event wire. | Check `part ... module=`, `arrange`, and `connect ... from=out to=in`. |
 | An effect `silent` although its source makes sound | The source is not wired into the effect, or the effect is not wired onward. | Check both wires. |
 | Some bars silent where music was meant | Notes written at the wrong `at=`, or the part has no music in that section (a gap). | Positions count from the section start. Use `describe` to see what was written. |
-| Peak above 0.95, or `limiter reached` | Too much gain; the limiter is squashing. | Lower wire gains, starting with the loudest module in the Modules list; or lower the bus wire to `out`. |
+| `limiter engaged in ...` | Too much gain; the limiter is squashing. | Lower wire gains, starting with the loudest module in the Modules list; or lower the bus wire to `out`. |
 | Peak below 0.2 | Too little gain. | Raise the wire gains to `out`. |
-| The song is shorter than expected | Sections missing from `arrange`, or an `arrange clip=` mixed with a section arrangement. | Check `Rendered: ... <n> bars` against the planned bar count. |
+| The song is shorter than expected | Sections missing from `arrange` (the warning `section '...' has notes but is not arranged` says which). | Check `Rendered: ... <n> bars` against the planned bar count. |
 | The tempo feels doubled or halved | `tpl=` was changed. | Use `tempo <bpm>` with the default `tpl=6`. |
-| The last bars sound like an earlier section; the ending is missing | A custom `loop` is set; `render` follows it. | Remove the `loop` command or write `loop all`. |
 
 To inspect what the script actually wrote, run `describe` on the `.msv`. It prints every part's notes per section with explicit lengths (and turns presets back into parameter lists).
 
@@ -1355,7 +1377,7 @@ notes m: C4
 ```
 
 ```text
-dracker-compose: line 4, col 7: there is no section ''; did you mean 'a'?
+dracker-compose: line 4, col 7: a section is needed here, because the song has sections (a); write the section after the part name
 ```
 
 A script that checks fine but renders silence because the module is not wired:
@@ -1369,8 +1391,8 @@ arrange a
 ```
 
 ```text
-Rendered: e_silent.wav (3.92 s, 44100 Hz, 1 bars)
-Levels:   peak 0.0000  average 0.0000  limiter not reached
+Rendered: e_silent.wav (3.92 s, 44100 Hz, 1 bars, the arrangement once from start to end)
+Levels:   peak 0.0000  average 0.0000  limiter not engaged
 Silent bars: 1
 Bars:
   bar 1: peak 0.0000  avg 0.0000 (silent)
@@ -1392,14 +1414,16 @@ Modules:
 
 - Modules with extra data (Sampler samples, drawn data, MetaModule children) are printed as `module <h> keep="<file.msv>:<id>"` (or `keep="<file.msym>"` for a preset). The path is the one given to `describe`, so run the described script from the same folder.
 - Patterns that are not exactly what `notes` and `drums` would write are printed as `cells` commands.
-- A timeline that is not a plain list of sections is printed as `arrange clip=#<id> ...` commands and a `loop start= end=`. A part that does not play in every arranged section (a gap, for example a lead that starts after the intro) already counts, and so does a part order different from the one `describe` uses; the printed script is longer but writes the same file. In this output `section` commands and `arrange clip=` lines appear together: that is safe here because the `section` lines only declare the sections the clips' patterns belong to, and no `arrange <sections>` line follows.
-- `describe` prints parts in its own order (not always the order the script declared them) and writes each drum lane as one step string over the whole section, with leading rests turned into `at=`, instead of `fill=` ranges.
+- A timeline that is not a plain list of sections is printed as `arrange clip=#<id> ...` commands and a `loop start= end=`. A part that does not play in every arranged section (a gap, for example a lead that starts after the intro) does not count, and neither does declaring the parts in another order than you wrote their notes: those still print as `arrange <sections>`. What counts: clips added with `arrange clip=`, and a section with no music in any part (the file does not store empty sections, so that stretch becomes a gap between clips). The printed script is longer but writes the same file. In this output `section` commands and `arrange clip=` lines appear together: that is safe here because the `section` lines only declare the sections the clips' patterns belong to, and no `arrange <sections>` line follows.
+- `describe` prints melodic parts in the order of their timeline lanes (the order the script declared them, for an arranged song) and writes each drum lane as one step string over the whole section, with leading rests turned into `at=`, instead of `fill=` ranges.
 - `open` keeps everything it does not understand (module extra data, MetaModule children, MIDI mappings) unchanged.
 - Patterns made in the app have no part or section names; `describe` and `open` invent them from pattern and module names (and from displayed names for handles).
 
 ### The one-note-per-track rule
 
 Each tracker track plays one note at a time; a new note on a track ends the previous one. `notes` and `chords` hide this: overlapping notes go to new tracks (at most 64 per pattern: `too many simultaneous notes at <pos> (limit is 64 tracks)`), each note gets a note-off at its end, and same-pitch overlaps are refused. Drum lanes are one track each.
+
+**A note that lasts to the very end of its section gets no note-off** (the note-off would fall on the line after the pattern), so it keeps sounding until a later note on the same track replaces it. When the next section of that part starts with a note on the same track, nothing is heard; but in a gap (a following section where the part does not play) and in the 2-second tail after the song, the note holds at full level. Tested: `notes mel a: C4:4` in a 1-bar section followed by an empty 2-bar section rendered bars 2 and 3 at average 0.094, while `C4:1` left them silent. To end a part cleanly before a gap or at the end of the song, make its last note end at least one line early: `C4:15l` instead of `C4:4` in a 16-line bar (tested: bar 2 then only carries the release, average 0.007, and bar 3 is silent). This is task T120.
 
 ### Numeric limits
 
@@ -1428,7 +1452,7 @@ Other rules found in the code:
 - Use either the implicit section or named sections, not both.
 - Key modes are only major and minor.
 - Notes, chords and drum steps are always inside one section; nothing crosses a section boundary.
-- `render` plays the song loop, not simply the arrangement (section 4.4).
+- `render` plays the arrangement once and ignores the loop; the app plays the loop (section 4.4).
 
 ## 10. Cheat sheet
 
@@ -1465,7 +1489,7 @@ repeat p sec [from=1] len=1b times=3
 transpose p sec [from=1] [len=..] by=12|steps=-2
 clear p sec [from=1] [len=..]
 arrange intro verse chorus verse          (required when sections exist)
-loop verse chorus | loop all | loop start=0 end=64   (render follows the loop!)
+loop verse chorus | loop all | loop start=0 end=64   (the app plays it; render ignores it)
 save "song.msv"
 
 DRUM LANES (DrumSynth)  Kick 36, Snare 38, Closed Hat 42, Open Hat 46, Low Tom 43, High Tom 48, Perc 39

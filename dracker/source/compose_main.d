@@ -580,11 +580,13 @@ private int executeCheck(ProgramIo io, const ref CommandLine command, string sou
         json.valueString("check");
         json.key("commands");
         json.valueInt(cast(long) res.commandsRun);
+        writeWarningsJson(json, res.warnings);
         json.endObject();
         io.writeOutput(json.text() ~ "\n");
     } else {
         io.writeOutput("OK (" ~ decimal(res.commandsRun) ~ " "
             ~ (res.commandsRun == 1 ? "command" : "commands") ~ " checked).\n");
+        writeWarningsText(io, res.warnings);
     }
     return ExitCode.success;
 }
@@ -657,6 +659,7 @@ private int executeRun(ProgramIo io, const ref CommandLine command, string sourc
             json.valueString(w);
         }
         json.endArray();
+        writeWarningsJson(json, runRes.warnings);
         json.endObject();
         io.writeOutput(json.text() ~ "\n");
     } else {
@@ -665,8 +668,38 @@ private int executeRun(ProgramIo io, const ref CommandLine command, string sourc
         foreach (w; written) {
             io.writeOutput("Wrote " ~ w ~ "\n");
         }
+        writeWarningsText(io, runRes.warnings);
     }
     return ExitCode.success;
+}
+
+/**
+ * Writes the warnings of a successful run or check as a "warnings" array (T117).
+ *
+ * Params:
+ *   json = Writer positioned inside the result object.
+ *   warnings = Warning sentences.
+ */
+private void writeWarningsJson(ref JsonWriter json, const(string)[] warnings) @safe {
+    json.key("warnings");
+    json.beginArray();
+    foreach (w; warnings) {
+        json.valueString(w);
+    }
+    json.endArray();
+}
+
+/**
+ * Writes the warnings of a successful run or check, one "Warning:" line each, after the summary (T117).
+ *
+ * Params:
+ *   io = Program output.
+ *   warnings = Warning sentences.
+ */
+private void writeWarningsText(ProgramIo io, const(string)[] warnings) @safe {
+    foreach (w; warnings) {
+        io.writeOutput("Warning: " ~ w ~ ".\n");
+    }
 }
 
 private void reportScriptProblems(ProgramIo io, bool json, Subcommand sub,

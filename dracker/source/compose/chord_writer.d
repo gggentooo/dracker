@@ -41,8 +41,8 @@ import app.music_theory : MusicalKey;
 import compose.names : namesMatch, nearestName, trim;
 import compose.part_writer : PartEditResult, PartProblem, PartWriter;
 import compose.script.notation : DEFAULT_NOTE_VELOCITY, NoteEvent;
-import compose.timing : BeatPosition, formatTimeSignature, Length, linesPerBar, linesPerBeat,
-    MAX_POSITION_LINES, TimeSignature;
+import compose.timing : BeatPosition, formatPosition, formatTimeSignature, Length, linesPerBar, linesPerBeat,
+    LinesResult, MAX_POSITION_LINES, positionToLine, TimeSignature;
 
 /** Chord realization styles supported in T78 and T99 (per decision T69). */
 enum ChordStyle : ubyte {
@@ -80,7 +80,8 @@ enum ChordProblemKind : ubyte {
     partError = 9,
     invalidVoicing = 10,
     invalidDirection = 11,
-    invalidRhythm = 12
+    invalidRhythm = 12,
+    progressionTooLong = 13
 }
 
 /**
@@ -916,12 +917,99 @@ ChordWriteResult writePresetChords(PartWriter parts, string partName, string sec
     return writeTimedChords(parts, partName, sectionName, parsed.chords, opts, startPos);
 }
 
+/**
+ * Checks that a realized progression ends inside its named section (T119). The implicit section grows, so it
+ * always fits.
+ *
+ * Params:
+ *   parts = Target PartWriter.
+ *   sectionName = Destination section name, or "" for the implicit section.
+ *   chords = Parsed chords, for the span of the progression text.
+ *   totalLines = Length of the realized progression in lines.
+ *   startPos = Starting position inside the section.
+ *   problem = Receives progressionTooLong with the section length and the bars the progression needs.
+ *
+ * Returns:
+ *   True when the progression fits or the section is not a named one.
+ */
+private bool progressionFitsSection(PartWriter parts, string sectionName, const(TimedChord)[] chords,
+        uint totalLines, BeatPosition startPos, out ChordProblem problem) @safe nothrow {
+    if (trim(sectionName).length == 0) {
+        return true;
+    }
+    immutable sec = parts.sectionOf(sectionName);
+    if (!sec.ok) {
+        return true;
+    }
+    immutable TimeSignature sig = parts.project().timeSignature();
+    immutable LinesResult start = positionToLine(startPos, sig);
+    immutable uint startLine = start.ok ? start.lines : 0;
+    immutable ulong endLine = cast(ulong) startLine + totalLines;
+    if (endLine <= sec.section.lines) {
+        return true;
+    }
+    immutable uint lpb = linesPerBar(sig);
+    immutable ulong neededBars = lpb > 0 ? (endLine + lpb - 1) / lpb : 0;
+    size_t textEnd = 0;
+    foreach (ref c; chords) {
+        if (c.textOffset + c.textLength > textEnd) {
+            textEnd = c.textOffset + c.textLength;
+        }
+    }
+    immutable string fromText = startLine > 0 ? " from " ~ formatPosition(startPos) : "";
+    problem = ChordProblem(ChordProblemKind.progressionTooLong, sec.section.name,
+        "the progression needs " ~ barsText(neededBars) ~ fromText ~ ", but section '" ~ sec.section.name
+            ~ "' has " ~ barsText(sec.section.bars) ~ "; lengthen the section (section " ~ sec.section.name
+            ~ " bars=" ~ wholeBars(neededBars) ~ ") or shorten the progression",
+        "", 0, textEnd);
+    return false;
+}
+
+/**
+ * Writes a bar count with its unit.
+ *
+ * Params:
+ *   bars = Number of bars.
+ *
+ * Returns:
+ *   "1 bar" or "<n> bars".
+ */
+private string barsText(ulong bars) @safe pure nothrow {
+    return wholeBars(bars) ~ (bars == 1 ? " bar" : " bars");
+}
+
+/**
+ * Writes a whole number in decimal.
+ *
+ * Params:
+ *   v = The number.
+ *
+ * Returns:
+ *   Its decimal digits.
+ */
+private string wholeBars(ulong v) @safe pure nothrow {
+    if (v == 0) {
+        return "0";
+    }
+    char[20] buf;
+    size_t n = buf.length;
+    while (v > 0) {
+        buf[--n] = cast(char)('0' + v % 10);
+        v /= 10;
+    }
+    return buf[n .. $].idup;
+}
+
 private ChordWriteResult writeTimedChords(PartWriter parts, string partName, string sectionName,
         const(TimedChord)[] chords, const ref ChordOptions opts, BeatPosition startPos) @safe nothrow {
     ChordEventsResult realized = realizeChords(chords, parts.project().key(),
         parts.project().timeSignature(), opts);
     if (!realized.ok) {
         return ChordWriteResult(0, 0, false, realized.problem);
+    }
+    ChordProblem lengthProblem;
+    if (!progressionFitsSection(parts, sectionName, chords, realized.totalLines, startPos, lengthProblem)) {
+        return ChordWriteResult(0, 0, false, lengthProblem);
     }
     immutable PartEditResult written = parts.writeNotes(partName, sectionName, startPos, realized.events);
     if (!written.ok) {

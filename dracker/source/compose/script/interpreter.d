@@ -181,6 +181,7 @@ struct RunResult {
     bool ok = true;
     size_t commandsRun = 0;
     ScriptProblem[] problems;
+    string[] warnings;
 }
 
 /** Handler callback delegate invoked for a validated command. */
@@ -836,7 +837,8 @@ final class ScriptInterpreter {
      *   source = Full script source text.
      *
      * Returns:
-     *   RunResult with ok flag, commandsRun count, and any ScriptProblems.
+     *   RunResult with ok flag, commandsRun count, any ScriptProblems, and, after a full run, warnings about
+     *   parts of the song that make no sound (T117).
      */
     RunResult runScript(string source) @safe nothrow {
         RunResult result;
@@ -857,6 +859,7 @@ final class ScriptInterpreter {
             }
             result.commandsRun++;
         }
+        result.warnings = parts_.soundWarnings();
         return result;
     }
 

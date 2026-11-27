@@ -685,6 +685,7 @@ Click **Script** in the view bar to change the open project by typing commands o
   - When **every line succeeds**, all changes are made at once as **one undo step** named "Apply script", the editor is cleared, and the message says how many commands were applied. **⌘Z** takes the whole script back; **⇧⌘Z** applies it again.
   - When **any line fails**, **nothing is changed**. The text stays, the first failing line is outlined, and the message gives its line, column, reason and, where possible, a "did you mean" suggestion. Fix the line and press Apply again.
   - Applying while the song plays is allowed; playback continues with the new content.
+  - **Warnings:** after a successful Apply, the message also lists anything in the project that certainly makes no sound, for example "Warning: section 'chorus' has notes but is not arranged, so it is never heard", a part whose module was removed, or a part with no notes. Warnings do not stop the Apply. Patterns that were already in the project and are not on the timeline are not reported.
 - **Commands not available here:** `project`, `open` and `save` are refused with a reason. Use **title** to set the title, **tempo**, **signature** and **key** for the other settings, and the File menu to open or save.
 - **Files:** `sample`, `savemodule` and `module file=` read or write files. A relative path is taken from the folder of the project file; before the project has been saved, write an absolute path. A preset written by `savemodule` is saved only when the whole script succeeds.
 - **Example:** with a new project, type
@@ -1347,7 +1348,7 @@ dracker-compose run <script.dcs> [-o <file.msv>]   run a script; its save comman
 dracker-compose check <script.dcs>                 run a script without writing anything, to find errors
 dracker-compose catalog [topic]                    module types and their parameters, presets, chords, keys, commands
 dracker-compose describe <file.msv|file.msym>      print an existing project or preset as a script
-dracker-compose render <file.msv> -o <file.wav>    play a project offline into a WAV file with a level report
+dracker-compose render <file.msv> -o <file.wav>    play the arrangement once offline into a WAV file with a level report
 dracker-compose help [subcommand]
 ```
 

@@ -238,6 +238,7 @@ private struct SectionEntry {
     string name = "";
     uint bars = 0;
     bool isImplicit = false;
+    bool opened = false;
 }
 
 /**
@@ -247,6 +248,7 @@ private struct PartEntry {
     string name = "";
     string moduleHandle = "";
     uint moduleId = 0;
+    bool opened = false;
 }
 
 /**
@@ -262,6 +264,24 @@ private struct PatternEntry {
     ubyte kind = PATTERN_KIND_NORMAL;
     SavedDrumLane[] lanes;
     bool[ulong] handPlaced;
+}
+
+/**
+ * A timeline clip placed with `arrange clip=` on top of a section arrangement (T116). A drum pattern is
+ * kept by its drum part and section, because drum pattern ids are given out when the document is built.
+ */
+private struct ExtraClip {
+    uint patternId = 0;
+    bool isDrum = false;
+    size_t drumPart = 0;
+    size_t drumSection = 0;
+    long startLine = 0;
+    uint lengthLines = 0;
+    uint laneY = 0;
+    uint patternOffset = 0;
+    bool mute = false;
+    bool solo = false;
+    bool isSupertrack = false;
 }
 
 /**
@@ -339,6 +359,7 @@ final class PartWriter {
     private long preservedLoopStart_ = 0;
     private long preservedLoopEnd_ = 0;
     private bool[uint] originalPatternIds_;
+    private ExtraClip[] extraClips_;
     private DrumWriter attachedDrums_ = null;
 
     /**
@@ -1686,7 +1707,8 @@ final class PartWriter {
 
     /**
      * Sets the song arrangement as an ordered sequence of declared sections (per T68/T98).
-     * Calling arrange() again replaces the previous arrangement.
+     * Calling arrange() again replaces the previous arrangement. Clips of raw patterns placed earlier with
+     * addRawClip() keep their positions and lanes; other placed clips are replaced by the arrangement (T116).
      *
      * Params:
      *   sectionList = Ordered section names.
@@ -1708,14 +1730,131 @@ final class PartWriter {
             }
             nextIndices ~= sIdx;
         }
+        if (hasPreservedClips_) {
+            foreach (ref cl; preservedClips_) {
+                if (isRawPatternId(cl.patternId)) {
+                    extraClips_ ~= ExtraClip(cl.patternId, false, 0, 0, cl.startLine, cl.lengthLines, cl.laneY,
+                        cl.patternOffset, cl.mute, cl.solo, cl.isSupertrack);
+                }
+            }
+            preservedClips_ = null;
+        }
         arrangedSectionIndices_ = nextIndices;
         hasPreservedClips_ = false;
         return PartEditResult(true);
     }
 
     /**
+     * Returns the drum patterns of the attached DrumWriter with the ids they get in the built document.
+     *
+     * Returns:
+     *   Drum export entries, or null without an attached DrumWriter.
+     */
+    private DrumExportEntry[] currentDrumExports() const @safe nothrow {
+        if (attachedDrums_ is null) {
+            return null;
+        }
+        bool[uint] used;
+        uint maxId = 0;
+        foreach (ref p; patterns_) {
+            used[p.patternId] = true;
+            if (p.patternId > maxId) {
+                maxId = p.patternId;
+            }
+        }
+        return attachedDrums_.exportPatterns(maxId + 1, used);
+    }
+
+    /**
+     * Records a clip placed on top of the section arrangement, keeping a drum pattern by part and section.
+     *
+     * Params:
+     *   clip = The clip as given to addRawClip(); its ids are ignored.
+     *
+     * Returns:
+     *   ok, or unknownPattern.
+     */
+    private PartEditResult addExtraClip(const ref TimelineClip clip) @safe nothrow {
+        ExtraClip extra = ExtraClip(clip.patternId, false, 0, 0, clip.startLine, clip.lengthLines, clip.laneY,
+            clip.patternOffset, clip.mute, clip.solo, clip.isSupertrack);
+        if (indexOfPatternById(clip.patternId) == patterns_.length) {
+            bool found = false;
+            foreach (ref de; currentDrumExports()) {
+                if (de.patternId == clip.patternId) {
+                    extra.isDrum = true;
+                    extra.drumPart = de.partIndex;
+                    extra.drumSection = de.sectionIndex;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                return PartEditResult(false, PartProblem(PartProblemKind.unknownPattern, wholeText(clip.patternId),
+                    "there is no pattern with id " ~ wholeText(clip.patternId), ""));
+            }
+        }
+        extraClips_ ~= extra;
+        return PartEditResult(true);
+    }
+
+    /**
+     * Returns the line after the last clip placed on top of the section arrangement.
+     *
+     * Returns:
+     *   End line of the extra clips, or 0 without any.
+     */
+    private long extraClipsEndLine() const @safe nothrow {
+        long endLine = 0;
+        foreach (ref ex; extraClips_) {
+            immutable long clipEnd = ex.startLine + ex.lengthLines;
+            if (clipEnd > endLine) {
+                endLine = clipEnd;
+            }
+        }
+        return endLine;
+    }
+
+    /**
+     * Appends the clips placed on top of the section arrangement to a built clip list.
+     *
+     * Params:
+     *   clips = Built clips; receives the extra clips.
+     *   firstClipByPat = First clip id per pattern id, for clone links.
+     *   nextClipId = Next free clip id.
+     *   drumExports = Drum patterns with their built ids.
+     *   patternIds = Ids of the patterns in the built document; clips of other patterns are skipped.
+     */
+    private void appendExtraClips(ref TimelineClip[] clips, ref uint[uint] firstClipByPat, ref uint nextClipId,
+            const(DrumExportEntry)[] drumExports, const(bool[uint]) patternIds) const @safe nothrow {
+        foreach (ref ex; extraClips_) {
+            uint patId = ex.patternId;
+            if (ex.isDrum) {
+                patId = 0;
+                foreach (ref de; drumExports) {
+                    if (de.partIndex == ex.drumPart && de.sectionIndex == ex.drumSection) {
+                        patId = de.patternId;
+                        break;
+                    }
+                }
+            }
+            if (patId == 0 || (patId in patternIds) is null) {
+                continue;
+            }
+            uint cloneId = 0;
+            if (auto prev = patId in firstClipByPat) {
+                cloneId = *prev;
+            } else {
+                firstClipByPat[patId] = nextClipId;
+            }
+            clips ~= TimelineClip(nextClipId++, patId, cloneId, ex.startLine, ex.lengthLines, ex.laneY,
+                ex.patternOffset, ex.mute, ex.solo, ex.isSupertrack);
+        }
+    }
+
+    /**
      * Appends an explicit raw TimelineClip (preserving non-canonical clip offsets, lanes, or muted
-     * clips when opening or describing existing .msv files — T107).
+     * clips when opening or describing existing .msv files — T107). After a section arrangement the clip is
+     * placed on top of it, and the arrangement keeps its positions (T116).
      *
      * Params:
      *   patternId = Existing pattern id (in this PartWriter or its attached DrumWriter).
@@ -1740,6 +1879,11 @@ final class PartWriter {
         if (startLine < 0 || lengthLines == 0) {
             return PartEditResult(false, PartProblem(PartProblemKind.invalidArrangement, "clip",
                 "timeline clip start must be >= 0 and length must be at least 1 line", "0"));
+        }
+        if (!hasPreservedClips_ && arrangedSectionIndices_.length > 0) {
+            immutable TimelineClip placed = TimelineClip(0, patternId, 0, startLine, lengthLines, laneY,
+                patternOffset, mute, solo, isSupertrack);
+            return addExtraClip(placed);
         }
         uint maxId = 0;
         foreach (ref cl; preservedClips_) {
@@ -1921,13 +2065,19 @@ final class PartWriter {
     }
 
     /**
-     * Returns the active loop end line (total arrangement length when no custom loop is set).
+     * Returns the active loop end line (when no custom loop is set: the end of the arrangement, or of the
+     * last clip placed on top of it when that ends later).
      *
      * Returns:
      *   Loop end line.
      */
     long loopEndLine() const @safe nothrow {
-        return hasCustomLoop_ ? customLoopEnd_ : arrangementLengthLines();
+        if (hasCustomLoop_) {
+            return customLoopEnd_;
+        }
+        immutable long sectionEnd = arrangementLengthLines();
+        immutable long extraEnd = extraClipsEndLine();
+        return extraEnd > sectionEnd ? extraEnd : sectionEnd;
     }
 
     /**
@@ -2161,6 +2311,7 @@ final class PartWriter {
             }
         }
 
+        pw.orderOpenedPartsByLane(base);
         size_t[] reconstructedSeq;
         bool isImplicitSingle = false;
         if (pw.tryReconstructArrangement(dw, base, mappings, lpb, reconstructedSeq, isImplicitSingle)) {
@@ -2294,10 +2445,10 @@ final class PartWriter {
         } else {
             const(size_t)[] seq = activeSectionSequence();
             TimelineClip[] clips;
+            uint[uint] firstClipByPat;
+            uint nextClipId = 1;
             if (seq.length > 0) {
-                uint[uint] firstClipByPat;
                 long cursor = 0;
-                uint nextClipId = 1;
                 immutable uint baseDrumLane = cast(uint) parts_.length;
                 foreach (sIdx; seq) {
                     foreach (pIdx; 0 .. parts_.length) {
@@ -2336,6 +2487,13 @@ final class PartWriter {
                     cursor += cast(long) sections_[sIdx].bars * lpb;
                 }
             }
+            if (extraClips_.length > 0) {
+                bool[uint] builtIds;
+                foreach (ref sp; allPats) {
+                    builtIds[sp.patternId] = true;
+                }
+                appendExtraClips(clips, firstClipByPat, nextClipId, drumExports, builtIds);
+            }
             result.project.clips = clips;
             result.project.loopStartLine = loopStartLine();
             result.project.loopEndLine = loopEndLine();
@@ -2349,6 +2507,136 @@ final class PartWriter {
             return result;
         }
         return result;
+    }
+
+    /**
+     * Lists what in the current song certainly makes no sound (T117): sections with notes that no clip
+     * plays, parts and drum lanes whose module was removed, and parts or drum parts without notes. Sections
+     * and parts rebuilt from an opened project are not reported as unarranged or empty: a pattern that is not
+     * on the timeline is normal in the app.
+     *
+     * Returns:
+     *   One plain sentence per warning, in declaration order; empty when nothing was found.
+     */
+    package string[] soundWarnings() const @safe nothrow {
+        string[] warnings;
+        DrumExportEntry[] drumExports = currentDrumExports();
+        bool[uint] clipped;
+        ProjectDocumentResult doc = buildDocument(attachedDrums_);
+        if (doc.ok) {
+            foreach (ref cl; doc.project.clips) {
+                clipped[cl.patternId] = true;
+            }
+        }
+
+        string[] unheard;
+        foreach (sIdx, ref sec; sections_) {
+            if (sec.isImplicit || sec.opened) {
+                continue;
+            }
+            bool hasNotes = false;
+            bool heard = false;
+            foreach (ref entry; patterns_) {
+                if (!entry.isRaw && entry.sectionIndex == sIdx && cellsHaveNotes(entry.grid.cells)) {
+                    hasNotes = true;
+                    heard = heard || (entry.patternId in clipped) !is null;
+                }
+            }
+            foreach (ref de; drumExports) {
+                if (de.sectionIndex == sIdx && cellsHaveNotes(de.pattern.cells)) {
+                    hasNotes = true;
+                    heard = heard || (de.patternId in clipped) !is null;
+                }
+            }
+            if (hasNotes && !heard) {
+                unheard ~= sec.name;
+            }
+        }
+        if (unheard.length > 0 && clipped.length == 0) {
+            string list;
+            foreach (i, nm; unheard) {
+                list ~= (i > 0 ? " " : "") ~ scriptName(nm);
+            }
+            warnings ~= "no section is arranged, so the song is silent; add 'arrange " ~ list ~ "'";
+        } else {
+            foreach (nm; unheard) {
+                warnings ~= "section '" ~ nm ~ "' has notes but is not arranged, so it is never heard";
+            }
+        }
+
+        foreach (pIdx, ref part; parts_) {
+            bool hasNotes = false;
+            foreach (ref entry; patterns_) {
+                if (!entry.isRaw && entry.partIndex == pIdx && cellsHaveNotes(entry.grid.cells)) {
+                    hasNotes = true;
+                    break;
+                }
+            }
+            if (!project_.hasModuleId(part.moduleId)) {
+                warnings ~= "part '" ~ part.name ~ "' plays module '" ~ part.moduleHandle
+                    ~ "', which was removed, so its notes make no sound";
+            } else if (!hasNotes && !part.opened) {
+                warnings ~= "part '" ~ part.name ~ "' has no notes";
+            }
+        }
+
+        if (attachedDrums_ !is null) {
+            foreach (dpIdx, dpName; attachedDrums_.drumPartNames()) {
+                foreach (ref lane; attachedDrums_.lanesOf(dpName)) {
+                    if (!project_.hasModuleId(lane.moduleId)) {
+                        warnings ~= "drum part '" ~ dpName ~ "' lane '" ~ lane.name ~ "' plays module '"
+                            ~ lane.moduleHandle ~ "', which was removed, so its hits make no sound";
+                    }
+                }
+                bool hasHits = false;
+                foreach (ref de; drumExports) {
+                    if (de.partIndex == dpIdx && cellsHaveNotes(de.pattern.cells)) {
+                        hasHits = true;
+                        break;
+                    }
+                }
+                if (!hasHits) {
+                    warnings ~= "drum part '" ~ dpName ~ "' has no hits";
+                }
+            }
+        }
+        return warnings;
+    }
+
+    /**
+     * Reports whether any cell holds a note (MIDI note 1 to 128, not a note command).
+     *
+     * Params:
+     *   cells = Pattern cells.
+     *
+     * Returns:
+     *   True when at least one cell starts a note.
+     */
+    private static bool cellsHaveNotes(const(NoteCell)[] cells) @safe pure nothrow @nogc {
+        foreach (ref c; cells) {
+            if (c.note >= 1 && c.note <= 128) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Writes a section name as a script word, quoted when it holds a space.
+     *
+     * Params:
+     *   name = Section name.
+     *
+     * Returns:
+     *   The name, or the name in double quotes.
+     */
+    private static string scriptName(string name) @safe pure nothrow {
+        foreach (ch; name) {
+            if (ch == ' ') {
+                return "\"" ~ name ~ "\"";
+            }
+        }
+        return name;
     }
 
     /**
@@ -2586,18 +2874,24 @@ final class PartWriter {
      * Builds an unknownSection problem with the nearest declared section name.
      *
      * Params:
-     *   name = Requested section name.
+     *   name = Requested section name; an empty name means no section was given while named sections exist.
      *
      * Returns:
      *   PartProblem.
      */
     private PartProblem unknownSectionProblem(string name) const @safe nothrow {
         const(string)[] names = sectionNames();
-        immutable string suggestion = trim(name).length == 0
-            ? (names.length > 0 ? names[0] : "")
-            : nearestName(name, names);
+        if (trim(name).length == 0) {
+            string list;
+            foreach (i, nm; names) {
+                list ~= (i > 0 ? ", " : "") ~ scriptName(nm);
+            }
+            return PartProblem(PartProblemKind.unknownSection, name,
+                "a section is needed here, because the song has sections (" ~ list
+                    ~ "); write the section after the part name", "");
+        }
         return PartProblem(PartProblemKind.unknownSection, name,
-            "there is no section '" ~ name ~ "'", suggestion);
+            "there is no section '" ~ name ~ "'", nearestName(name, names));
     }
 
     /**
@@ -2670,22 +2964,12 @@ final class PartWriter {
         if (indexOfPatternById(patId) != patterns_.length) {
             return true;
         }
-        if (attachedDrums_ !is null) {
-            if (attachedDrums_.hasFixedPatternId(patId)) {
+        if (attachedDrums_ !is null && attachedDrums_.hasFixedPatternId(patId)) {
+            return true;
+        }
+        foreach (ref de; currentDrumExports()) {
+            if (de.patternId == patId) {
                 return true;
-            }
-            bool[uint] used;
-            uint maxId = 0;
-            foreach (ref p; patterns_) {
-                used[p.patternId] = true;
-                if (p.patternId > maxId) {
-                    maxId = p.patternId;
-                }
-            }
-            foreach (ref de; attachedDrums_.exportPatterns(maxId + 1, used)) {
-                if (de.patternId == patId) {
-                    return true;
-                }
             }
         }
         return false;
@@ -2707,19 +2991,9 @@ final class PartWriter {
                 return entry.patternId;
             }
         }
-        if (attachedDrums_ !is null) {
-            bool[uint] used;
-            uint maxId = 0;
-            foreach (ref p; patterns_) {
-                used[p.patternId] = true;
-                if (p.patternId > maxId) {
-                    maxId = p.patternId;
-                }
-            }
-            foreach (ref de; attachedDrums_.exportPatterns(maxId + 1, used)) {
-                if (namesMatch(de.pattern.name, name)) {
-                    return de.patternId;
-                }
+        foreach (ref de; currentDrumExports()) {
+            if (namesMatch(de.pattern.name, name)) {
+                return de.patternId;
             }
         }
         return 0;
@@ -3084,7 +3358,7 @@ final class PartWriter {
             }
             clean = freeSectionName(clean);
         }
-        sections_ ~= SectionEntry(clean, bars, false);
+        sections_ ~= SectionEntry(clean, bars, false, true);
         return sections_.length - 1;
     }
 
@@ -3111,8 +3385,76 @@ final class PartWriter {
             finalName = freePartName(clean);
         }
         immutable string modHandle = project_.handleForId(moduleId);
-        parts_ ~= PartEntry(finalName, modHandle, moduleId);
+        parts_ ~= PartEntry(finalName, modHandle, moduleId, true);
         return parts_.length - 1;
+    }
+
+    /**
+     * Orders reopened melodic parts by their timeline lanes (T119), so a part declared first in the script
+     * comes first again even when its first pattern was written later. Nothing changes when a part's clips
+     * use more than one lane, two parts share a lane, or a lane is past the melodic parts.
+     *
+     * Params:
+     *   base = The opened document.
+     */
+    private void orderOpenedPartsByLane(const ref LoadedProject base) @safe nothrow {
+        immutable size_t n = parts_.length;
+        if (n < 2 || base.clips.length == 0) {
+            return;
+        }
+        uint[] laneOf = new uint[n];
+        laneOf[] = uint.max;
+        foreach (ref cl; base.clips) {
+            immutable size_t mIdx = indexOfPatternById(cl.patternId);
+            if (mIdx == patterns_.length || patterns_[mIdx].isRaw) {
+                continue;
+            }
+            immutable size_t p = patterns_[mIdx].partIndex;
+            if (cl.laneY >= n || (laneOf[p] != uint.max && laneOf[p] != cl.laneY)) {
+                return;
+            }
+            laneOf[p] = cl.laneY;
+        }
+        size_t[] order = new size_t[n];
+        order[] = size_t.max;
+        foreach (p, lane; laneOf) {
+            if (lane == uint.max) {
+                continue;
+            }
+            if (order[lane] != size_t.max) {
+                return;
+            }
+            order[lane] = p;
+        }
+        size_t slot = 0;
+        foreach (p, lane; laneOf) {
+            if (lane != uint.max) {
+                continue;
+            }
+            while (order[slot] != size_t.max) {
+                slot++;
+            }
+            order[slot] = p;
+        }
+        bool identity = true;
+        foreach (pos, p; order) {
+            identity = identity && pos == p;
+        }
+        if (identity) {
+            return;
+        }
+        size_t[] newIndex = new size_t[n];
+        PartEntry[] reordered = new PartEntry[n];
+        foreach (pos, p; order) {
+            newIndex[p] = pos;
+            reordered[pos] = parts_[p];
+        }
+        parts_ = reordered;
+        foreach (ref entry; patterns_) {
+            if (!entry.isRaw) {
+                entry.partIndex = newIndex[entry.partIndex];
+            }
+        }
     }
 
     private bool tryReconstructArrangement(const DrumWriter drums, const ref LoadedProject base,

@@ -10,6 +10,6 @@ Only open tasks are listed, in stage order. A task without a guide is named at t
 
 ## Open tasks without a guide
 
-T114 (Stage 0), T116 (Stage 0), T117 (Stage 0), T118 (Stage 0), T119 (Stage 0).
+T120 (Stage 0).
 
 A guide is written when the tasks it needs are built, so that it can name real functions.

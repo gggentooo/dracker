@@ -68,6 +68,7 @@ struct ScriptApplyResult {
     ScriptProblem[] problems;
     string message = "";
     bool checkOnly = false;
+    string[] warnings;
 }
 
 /** Delegate executed when the user clicks Apply or presses Cmd+Return. */
@@ -199,8 +200,9 @@ final class ScriptView : Widget, StudioCommandSink {
             return result;
         }
         result.ok = true;
+        result.warnings = run.warnings;
         result.message = format("Applied %d %s. Cmd+Z takes the script back.", run.commandsRun,
-            run.commandsRun == 1 ? "command" : "commands");
+            run.commandsRun == 1 ? "command" : "commands") ~ warningText(run.warnings);
         return result;
     }
 
@@ -351,10 +353,31 @@ final class ScriptView : Widget, StudioCommandSink {
         outRes.commandsRun = res.commandsRun;
         outRes.problems = res.problems;
         if (res.ok) {
+            outRes.warnings = res.warnings;
             outRes.message = format("%d %s valid (check only)", res.commandsRun,
-                res.commandsRun == 1 ? "command" : "commands");
+                res.commandsRun == 1 ? "command" : "commands") ~ warningText(res.warnings);
         }
         return outRes;
+    }
+
+    /**
+     * Writes the warnings of a successful run for the status strip (T117).
+     *
+     * Params:
+     *   warnings = Warning sentences.
+     *
+     * Returns:
+     *   " Warning: a; b." or "" without warnings.
+     */
+    static string warningText(const(string)[] warnings) @safe pure nothrow {
+        if (warnings.length == 0) {
+            return "";
+        }
+        string text = warnings.length == 1 ? " Warning: " : " Warnings: ";
+        foreach (i, w; warnings) {
+            text ~= (i > 0 ? "; " : "") ~ w;
+        }
+        return text ~ ".";
     }
 
     /**
