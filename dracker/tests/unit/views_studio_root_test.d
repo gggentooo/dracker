@@ -33,7 +33,9 @@
 module tests.unit.views_studio_root_test;
 
 version (unittest) {
-    import std.algorithm : startsWith;
+    import std.algorithm : canFind, startsWith;
+    import std.array : join;
+    import std.conv : to;
     import std.file : exists, getSize, remove, tempDir, write;
     import std.format : format;
     import std.math : fabs;
@@ -48,7 +50,7 @@ version (unittest) {
     import gui.renderer;
     import gui.views.studio_context : IStudioClipboard, StudioContext;
     import gui.views.studio_root : StudioRoot;
-    import gui.widgets : ConfirmDialog, MenuItem, UiContext;
+    import gui.widgets : ConfirmDialog, KeyCode, MenuItem, UiContext;
     import platform.interfaces : FileDialogFilter, IFileDialog, KeyModifiers, PlatformEvent, PlatformEventKind;
     import sequencer.note : NoteCell, NoteCmd;
 
@@ -126,6 +128,23 @@ version (unittest) {
         void press(uint code, uint mods = 0) {
             key(code, mods, true);
             key(code, mods, false);
+            frame();
+        }
+
+        void type(string text) {
+            import std.utf : byDchar;
+
+            foreach (dchar c; text.byDchar) {
+                if (c == '\n') {
+                    key(KeyCode.returnKey);
+                    key(KeyCode.returnKey, 0, false);
+                    continue;
+                }
+                PlatformEvent ev;
+                ev.kind = PlatformEventKind.textInput;
+                ev.utf32Char = c;
+                ui.handleEvent(ev);
+            }
             frame();
         }
     }
@@ -1347,4 +1366,99 @@ version (unittest) {
         assert(r.root.pattern.currentView() == PatternViewKind.pianoRoll);
         assert(r.session.history().undoCount() == u0);
     }
+
+    unittest {
+        import gui.views.pattern_editor : PatternViewKind;
+        import gui.views.script_view : ScriptView;
+        import io.project_format : LoadedProject, serializeProject;
+
+        Rig r = makeRig();
+        scope (exit) r.session.dispose();
+
+        ubyte[] snapshotBytes() {
+            LoadedProject snap;
+            string err;
+            assert(r.session.snapshotDocumentForSave(snap, err), err);
+            ubyte[] bytes;
+            assert(serializeProject(snap, bytes, err), err);
+            return bytes;
+        }
+
+        float renderPeak(size_t blocks) {
+            float[256] left = 0.0f;
+            float[256] right = 0.0f;
+            const(float[])[2] ins = [null, null];
+            float peak = 0.0f;
+            foreach (_; 0 .. blocks) {
+                float[][2] outs = [left[], right[]];
+                r.session.engine().processHostBuffer(outs, ins, 256);
+                foreach (i; 0 .. 256) {
+                    peak = fabs(left[i]) > peak ? fabs(left[i]) : peak;
+                    peak = fabs(right[i]) > peak ? fabs(right[i]) : peak;
+                }
+            }
+            return peak;
+        }
+
+        immutable string script = "tempo 96\n"
+            ~ "signature 4/4\n"
+            ~ "key A minor\n"
+            ~ "module bass preset=\"Electric Bass\"\n"
+            ~ "module keys preset=\"Electric Piano\"\n"
+            ~ "set keys Release=250\n"
+            ~ "connect bass out gain=0.3\n"
+            ~ "connect keys out gain=0.22\n"
+            ~ "section verse bars=4\n"
+            ~ "part bass module=bass\n"
+            ~ "part keys module=keys\n"
+            ~ "chords keys verse: i VI III VII style=hold\n"
+            ~ "chords bass verse: i VI III VII style=root octave=2\n"
+            ~ "arrange verse verse";
+
+        r.click(r.root.pattern.viewButtons[PatternViewKind.script].bounds.center());
+        assert(r.root.pattern.currentView() == PatternViewKind.script);
+        ScriptView sv = r.root.pattern.scriptView();
+        assert(r.ui.focused is sv.editor);
+        immutable ubyte[] before = snapshotBytes().idup;
+        immutable size_t undoBefore = r.session.history().undoCount();
+
+        r.type(script);
+        assert(sv.editor.text() == script, sv.editor.text());
+        r.click(sv.applyButton.bounds.center());
+        assert(sv.lastOk(), sv.message());
+        assert(sv.message() == "Applied 14 commands. Cmd+Z takes the script back.", sv.message());
+        assert(sv.editor.text() == "");
+
+        const doc = r.session.document();
+        assert(doc.bpm == 96.0f && doc.timeSigNumerator == 4 && doc.timeSigDenominator == 4);
+        assert(doc.keyTonic == 9);
+        string[] names;
+        foreach (ref m; doc.modules) {
+            names ~= m.name;
+        }
+        assert(names.canFind("bass") && names.canFind("keys"), names.join(", "));
+        size_t verseClips = 0;
+        foreach (ref c; doc.clips) {
+            foreach (ref p; doc.patterns) {
+                if (p.patternId == c.patternId && p.name.canFind("verse")) {
+                    verseClips++;
+                }
+            }
+        }
+        assert(verseClips == 4, to!string(verseClips));
+        assert(r.session.history().undoCount() == undoBefore + 1);
+        assert(r.session.history().nextUndoLabel() == "Apply script");
+        immutable ubyte[] after = snapshotBytes().idup;
+
+        assert(r.session.seekLine(0) && r.session.play());
+        assert(renderPeak(400) > 0.001f);
+        assert(r.session.stop());
+        renderPeak(4);
+
+        r.press(6, KeyModifiers.command);
+        assert(snapshotBytes() == before);
+        r.press(6, KeyModifiers.command | KeyModifiers.shift);
+        assert(snapshotBytes() == after);
+    }
 }
+

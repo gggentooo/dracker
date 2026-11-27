@@ -87,6 +87,8 @@ version (unittest) {
     }
 
     unittest {
+        import std.algorithm : canFind;
+
         ProjectWriter w = new ProjectWriter();
         assert(w.title() == "Untitled" && w.tempo() == 125.0 && w.ticksPerLine() == 6);
         assert(w.timeSignature() == TimeSignature(4, 4));
@@ -119,6 +121,8 @@ version (unittest) {
     }
 
     unittest {
+        import std.algorithm : canFind;
+
         ProjectWriter w = new ProjectWriter();
 
         immutable ProjectEditResult lowTempo = w.setTempo(19.9);
@@ -222,6 +226,8 @@ version (unittest) {
     }
 
     unittest {
+        import std.algorithm : canFind;
+
         ProjectWriter w = new ProjectWriter();
         immutable ProjectIdResult bass = w.addModule("bass", writerOf("synth.analog_gen"));
         assert(bass.ok && bass.id == 2, bass.problem.text());
@@ -456,5 +462,488 @@ version (unittest) {
         assert(session.document().title == "Night Drive");
 
         rmdirRecurse(root);
+    }
+
+    unittest {
+        import std.algorithm : canFind;
+
+        ProjectWriter w = new ProjectWriter();
+        auto bassMod = ModuleWriter.fromType("synth.analog_gen");
+        assert(bassMod.ok);
+        auto kickMod = ModuleWriter.fromType("synth.analog_gen");
+        assert(kickMod.ok);
+        auto compMod = ModuleWriter.fromType("fx.compressor");
+        assert(compMod.ok);
+        auto lfoMod = ModuleWriter.fromType("fx.lfo");
+        assert(lfoMod.ok);
+        auto fbMod = ModuleWriter.fromType("ctl.feedback");
+        assert(fbMod.ok);
+
+        immutable ProjectIdResult bassId = w.addModule("bass", bassMod.writer);
+        immutable ProjectIdResult kickId = w.addModule("kick", kickMod.writer);
+        immutable ProjectIdResult compId = w.addModule("comp", compMod.writer);
+        immutable ProjectIdResult lfoId = w.addModule("lfo", lfoMod.writer);
+        immutable ProjectIdResult fbId = w.addModule("fb", fbMod.writer);
+        assert(bassId.ok && kickId.ok && compId.ok && lfoId.ok && fbId.ok);
+
+        immutable ProjectEditResult c1 = w.connect("bass", "comp", 0.75f);
+        assert(c1.ok, c1.problem.reason);
+        immutable ProjectEditResult c2 = w.connect("comp", "out", 0.5f);
+        assert(c2.ok, c2.problem.reason);
+        immutable ProjectEditResult c3 = w.connect("kick", "comp", 0.6f, "", "Sidechain");
+        assert(c3.ok, c3.problem.reason);
+        assert(w.wireCount() == 3);
+
+        auto listed = w.wires();
+        assert(listed.length == 3);
+        assert(listed[0].srcHandle == "bass" && listed[0].dstHandle == "comp" && listed[0].gain == 0.75f);
+        assert(listed[2].srcHandle == "kick" && listed[2].dstHandle == "comp"
+            && listed[2].dstPort == "Sidechain" && listed[2].gain == 0.6f);
+
+        immutable ProjectEditResult unkSrc = w.connect("bazz", "out");
+        assert(!unkSrc.ok && unkSrc.problem.kind == ProjectProblemKind.unknownHandle);
+        assert(unkSrc.problem.suggestion == "bass");
+
+        immutable ProjectEditResult unkDst = w.connect("bass", "com");
+        assert(!unkDst.ok && unkDst.problem.kind == ProjectProblemKind.unknownHandle);
+        assert(unkDst.problem.suggestion == "comp");
+
+        immutable ProjectEditResult unkPort = w.connect("kick", "comp", 1.0f, "", "Sidechan");
+        assert(!unkPort.ok && unkPort.problem.kind == ProjectProblemKind.unknownPort);
+        assert(unkPort.problem.suggestion == "Sidechain");
+        assert(unkPort.problem.text().canFind("did you mean 'Sidechain'?"));
+
+        immutable ProjectEditResult inAsSrc = w.connect("comp", "out", 1.0f, "Input", "");
+        assert(!inAsSrc.ok && inAsSrc.problem.kind == ProjectProblemKind.invalidPortDirection);
+
+        immutable ProjectEditResult outAsDst = w.connect("bass", "comp", 1.0f, "", "Output");
+        assert(!outAsDst.ok && outAsDst.problem.kind == ProjectProblemKind.invalidPortDirection);
+
+        immutable ProjectEditResult incompat = w.connect("lfo", "out", 1.0f, "CV Out", "");
+        assert(!incompat.ok && incompat.problem.kind == ProjectProblemKind.incompatiblePorts);
+
+        immutable ProjectEditResult badGainNeg = w.connect("kick", "out", -0.1f);
+        assert(!badGainNeg.ok && badGainNeg.problem.kind == ProjectProblemKind.invalidGain);
+        immutable ProjectEditResult badGainNan = w.connect("kick", "out", float.nan);
+        assert(!badGainNan.ok && badGainNan.problem.kind == ProjectProblemKind.invalidGain);
+
+        immutable ProjectEditResult dup = w.connect("bass", "comp", 0.5f);
+        assert(!dup.ok && dup.problem.kind == ProjectProblemKind.duplicateWire);
+
+        immutable ProjectEditResult selfLoop = w.connect("comp", "comp");
+        assert(!selfLoop.ok && selfLoop.problem.kind == ProjectProblemKind.feedbackLoop);
+
+        assert(w.connect("comp", "lfo").ok);
+        immutable ProjectEditResult twoNodeLoop = w.connect("lfo", "comp");
+        assert(!twoNodeLoop.ok && twoNodeLoop.problem.kind == ProjectProblemKind.feedbackLoop);
+
+        assert(w.connect("comp", "fb", 0.3f).ok);
+        assert(w.connect("fb", "comp", 0.3f).ok);
+        assert(w.msvBytes().ok);
+
+        assert(w.renameModule("bass", "sub").ok);
+        assert(w.wires()[0].srcHandle == "sub");
+
+        immutable ProjectEditResult missingDisc = w.disconnect("kick", "out");
+        assert(!missingDisc.ok && missingDisc.problem.kind == ProjectProblemKind.unknownWire);
+
+        immutable ProjectEditResult disc = w.disconnect("kick", "comp", "", "scIn");
+        assert(disc.ok, disc.problem.reason);
+        assert(w.wireCount() == 5);
+
+        assert(w.removeModule("fb").ok);
+        assert(w.wireCount() == 3);
+        foreach (wire; w.wires()) {
+            assert(wire.srcModuleId != fbId.id && wire.dstModuleId != fbId.id);
+        }
+    }
+
+    unittest {
+        import foundation.memory : OwnedBuffer;
+        import io.project_format : SavedModule, SavedWire;
+        import sequencer.note : NoteCell;
+        import std.math : fabs;
+
+        ProjectWriter w = new ProjectWriter();
+        assert(w.setTitle("Audio Smoke").ok);
+        assert(w.setTempo(120.0).ok);
+        auto synth = ModuleWriter.fromType("synth.analog_gen");
+        assert(synth.ok);
+        immutable ProjectIdResult synthId = w.addModule("lead", synth.writer);
+        assert(synthId.ok);
+        assert(w.connect("lead", "out", 0.8f).ok);
+
+        ProjectDocumentResult doc = w.document();
+        assert(doc.ok, doc.problem.reason);
+        assert(doc.project.wires.length == 1);
+        assert(doc.project.wires[0].srcMod == synthId.id && doc.project.wires[0].dstMod == 1);
+
+        doc.project.patterns[0].cells[0] = NoteCell.makeNote(60, 0.9f, cast(ushort) synthId.id);
+
+        immutable string root = buildPath(tempDir(), "dracker_t96_audio_test");
+        immutable string path = buildPath(root, "audio_smoke.msv");
+        if (exists(root)) {
+            rmdirRecurse(root);
+        }
+        mkdirRecurse(root);
+        scope (exit) {
+            if (exists(root)) {
+                rmdirRecurse(root);
+            }
+        }
+
+        immutable ProjectEditResult written = w.writeDocument(doc.project, path);
+        assert(written.ok, written.problem.reason);
+
+        StudioSession session = new StudioSession();
+        assert(session.initialize(44_100.0f));
+        scope (exit) {
+            session.shutdown();
+        }
+        string openErr;
+        assert(session.openProjectFile(path, openErr), openErr);
+        session.engine().reset();
+        session.engine().setTempo(session.document().bpm, session.document().ticksPerLine);
+        session.engine().seekLine(0);
+        session.engine().setPlaying(true);
+        OwnedBuffer!float outL;
+        OwnedBuffer!float outR;
+        assert(session.engine().renderOfflineToBuffer(4096, 64, outL, outR));
+        session.engine().setPlaying(false);
+
+        float peak = 0.0f;
+        foreach (i; 0 .. outL.length) {
+            immutable float al = fabs(outL[i]);
+            immutable float ar = fabs(outR[i]);
+            if (al > peak) peak = al;
+            if (ar > peak) peak = ar;
+        }
+        assert(peak > 0.01f);
+
+        LoadedProject cyclic = doc.project;
+        auto fx = ModuleWriter.fromType("fx.compressor");
+        assert(fx.ok);
+        SavedModule fxMod = fx.writer.savedModule(3);
+        cyclic.modules ~= fxMod;
+        cyclic.wires ~= SavedWire(3, 2, 3, 0, 1.0f);
+        immutable ProjectEditResult cyclicAct = w.trialActivate(cyclic);
+        assert(!cyclicAct.ok && cyclicAct.problem.kind == ProjectProblemKind.invalidProject);
+        immutable string badPath = buildPath(root, "should_not_write.msv");
+        immutable ProjectEditResult badWrite = w.writeDocument(cyclic, badPath);
+        assert(!badWrite.ok && badWrite.problem.kind == ProjectProblemKind.invalidProject);
+        assert(!exists(badPath));
+    }
+
+    unittest {
+        import foundation.memory : OwnedBuffer;
+        import foundation.types : ModuleId;
+        import io.audio_io : writeWavFile;
+        import io.project_format : PATTERN_KIND_DRUM, SavedDrumLane, SavedMidiMapping, SavedWire,
+            serializeProject;
+        import modules.control.metamodule : MetaMacroBinding, MetaModuleAsset;
+        import sequencer.note : NoteCell;
+        import std.math : fabs;
+
+        immutable string root = buildPath(tempDir(), "dracker_t82_open_test");
+        if (exists(root)) {
+            rmdirRecurse(root);
+        }
+        mkdirRecurse(root);
+        scope (exit) {
+            if (exists(root)) {
+                rmdirRecurse(root);
+            }
+        }
+
+        foreach (sampleName; ["sample-projects/midnight_pulse.msv", "sample-projects/lobby_waltz.msv"]) {
+            ProjectOpenResult opened = ProjectWriter.fromFile(sampleName);
+            assert(opened.ok, opened.problem.reason);
+            assert(opened.handles.length >= 2);
+            immutable string resavedPath = buildPath(root, "resaved_" ~ sampleName[16 .. $]);
+            immutable ProjectEditResult wrote = opened.writer.writeFile(resavedPath);
+            assert(wrote.ok, wrote.problem.reason);
+
+            StudioSession sOrig = new StudioSession();
+            StudioSession sCopy = new StudioSession();
+            assert(sOrig.initialize(44_100.0f));
+            assert(sCopy.initialize(44_100.0f));
+            scope (exit) {
+                sOrig.shutdown();
+                sCopy.shutdown();
+            }
+            string err;
+            assert(sOrig.openProjectFile(sampleName, err), err);
+            assert(sCopy.openProjectFile(resavedPath, err), err);
+            OwnedBuffer!float oL;
+            OwnedBuffer!float oR;
+            OwnedBuffer!float cL;
+            OwnedBuffer!float cR;
+            sOrig.engine().reset();
+            sOrig.engine().setTempo(sOrig.document().bpm, sOrig.document().ticksPerLine);
+            sOrig.engine().seekLine(0);
+            sOrig.engine().setPlaying(true);
+            assert(sOrig.engine().renderOfflineToBuffer(8192, 64, oL, oR));
+            sCopy.engine().reset();
+            sCopy.engine().setTempo(sCopy.document().bpm, sCopy.document().ticksPerLine);
+            sCopy.engine().seekLine(0);
+            sCopy.engine().setPlaying(true);
+            assert(sCopy.engine().renderOfflineToBuffer(8192, 64, cL, cR));
+            foreach (i; 0 .. oL.length) {
+                assert(oL[i] == cL[i] && oR[i] == cR[i]);
+            }
+        }
+
+        float[256] wavL = 0.0f;
+        float[256] wavR = 0.0f;
+        foreach (i; 0 .. 256) {
+            wavL[i] = 0.25f * (i % 16 < 8 ? 1.0f : -1.0f);
+            wavR[i] = wavL[i];
+        }
+        immutable string wavPath = buildPath(root, "tone.wav");
+        string wavErr;
+        const(float)[][2] wavChans = [wavL[], wavR[]];
+        assert(writeWavFile(wavPath, wavChans[], 44_100, wavErr), wavErr);
+
+        auto samplerMod = ModuleWriter.fromType("synth.sampler");
+        assert(samplerMod.ok);
+        assert(samplerMod.writer.loadSampleFile(0, wavPath, 60, 0, 127).ok);
+        SavedModule smSampler = samplerMod.writer.savedModule(2);
+        smSampler.name = "My Sampler";
+
+        LoadedProject childProj;
+        childProj.title = "Child";
+        auto childGen = ModuleWriter.fromType("synth.analog_gen");
+        auto childOut = ModuleWriter.fromType("core.output");
+        assert(childGen.ok && childOut.ok);
+        childProj.modules = [childOut.writer.savedModule(1), childGen.writer.savedModule(2)];
+        childProj.wires = [SavedWire(2, 2, 1, 0, 1.0f)];
+        childProj.patterns = [SavedPattern(1, 1, 16, "C", new NoteCell[16])];
+        childProj.clips = [TimelineClip(1, 1, 0, 0, 16, 0, 0, false, false, false)];
+        ubyte[] childBytes;
+        string childErr;
+        assert(serializeProject(childProj, childBytes, childErr), childErr);
+
+        auto metaMod = ModuleWriter.fromType("ctl.metamodule");
+        assert(metaMod.ok);
+        SavedModule smMeta = metaMod.writer.savedModule(3);
+        smMeta.name = "My Meta";
+        smMeta.hasChildProject = true;
+        smMeta.childProjectMsv = childBytes;
+        smMeta.metaInputModuleId = 2;
+        smMeta.metaMacros[0] = MetaMacroBinding(ModuleId(2), 0, 0.0f, 1.0f, true);
+
+        auto outMod = ModuleWriter.fromType("core.output");
+        assert(outMod.ok);
+        LoadedProject rich;
+        rich.title = "Rich Keep";
+        rich.author = "Owner";
+        rich.bpm = 112.0;
+        rich.loopStartLine = 0;
+        rich.loopEndLine = 16;
+        rich.modules = [outMod.writer.savedModule(1), smSampler, smMeta];
+        rich.wires = [SavedWire(2, 2, 1, 0, 0.8f), SavedWire(3, 2, 1, 0, 0.5f)];
+        SavedPattern richPat;
+        richPat.patternId = 1;
+        richPat.tracks = 1;
+        richPat.lines = 16;
+        richPat.name = "Hit";
+        richPat.kind = PATTERN_KIND_DRUM;
+        richPat.lanes = [SavedDrumLane("Kick", 2, 60)];
+        richPat.cells = new NoteCell[16];
+        richPat.cells[0] = NoteCell.makeNote(60, 0.9f, 2);
+        rich.patterns = [richPat];
+        rich.clips = [TimelineClip(1, 1, 0, 0, 16, 0, 0, false, false, false)];
+        rich.midiMappings = [SavedMidiMapping(0, 74, 2, 0, 0.0f, 1.0f)];
+
+        immutable string richPath = buildPath(root, "rich.msv");
+        immutable string richCopyPath = buildPath(root, "rich_copy.msv");
+        ProjectWriter tmpW = new ProjectWriter();
+        assert(tmpW.writeDocument(rich, richPath).ok);
+
+        ProjectOpenResult richOpen = ProjectWriter.fromFile(richPath);
+        assert(richOpen.ok, richOpen.problem.reason);
+        assert(richOpen.handles.length == 3);
+        assert(richOpen.handles[0].handle == "out");
+        assert(richOpen.handles[1].handle == "MySampler");
+        assert(richOpen.handles[2].handle == "MyMeta");
+        assert(richOpen.writer.writeFile(richCopyPath).ok);
+
+        LoadedProject reloaded;
+        string loadErr;
+        assert(loadProjectFile(richCopyPath, reloaded, loadErr), loadErr);
+        assert(reloaded.author == "Owner");
+        assert(reloaded.midiMappings == rich.midiMappings);
+        assert(reloaded.patterns[0].kind == PATTERN_KIND_DRUM && reloaded.patterns[0].lanes == richPat.lanes);
+        assert(reloaded.modules[1].extraBlob == smSampler.extraBlob);
+        assert(reloaded.modules[2].hasChildProject);
+        assert(reloaded.modules[2].childProjectMsv == childBytes);
+        assert(reloaded.modules[2].metaMacros[0] == smMeta.metaMacros[0]);
+
+        ProjectOpenResult editOpen = ProjectWriter.fromFile("sample-projects/midnight_pulse.msv");
+        assert(editOpen.ok);
+        string targetHandle;
+        foreach (h; editOpen.handles) {
+            if (h.handle != "out") {
+                targetHandle = h.handle;
+                break;
+            }
+        }
+        assert(targetHandle.length > 0);
+        assert(editOpen.writer.setModuleParam("out", "Volume", "0.75").ok);
+        auto added = ModuleWriter.fromType("synth.fm_synth");
+        assert(added.ok);
+        assert(editOpen.writer.addModule("extraKeys", added.writer).ok);
+        assert(editOpen.writer.connect("extraKeys", "out", 0.3f).ok);
+        immutable string editedPath = buildPath(root, "edited.msv");
+        assert(editOpen.writer.writeFile(editedPath).ok);
+
+        StudioSession verifySess = new StudioSession();
+        assert(verifySess.initialize(44_100.0f));
+        scope (exit) verifySess.shutdown();
+        string openErr;
+        assert(verifySess.openProjectFile(editedPath, openErr), openErr);
+        assert(verifySess.document().modules.length == editOpen.handles.length + 1);
+        assert(fabs(verifySess.document().modules[0].paramValues[0] - 0.75f) < 1e-4f);
+    }
+
+    unittest {
+        import compose.drum_writer : DrumWriter;
+        import compose.part_writer : PartOpenResult, PartWriter;
+        import compose.timing : BeatPosition, Length;
+        import foundation.memory : OwnedBuffer;
+        import std.file : read;
+        import std.math : fabs;
+
+        immutable string root = buildPath(tempDir(),
+            "dracker_t100_open_parts_test_" ~ to!string(thisProcessID()));
+        if (exists(root)) {
+            rmdirRecurse(root);
+        }
+        mkdirRecurse(root);
+        scope (exit) {
+            if (exists(root)) {
+                rmdirRecurse(root);
+            }
+        }
+
+        ProjectWriter orig = new ProjectWriter();
+        assert(orig.setTitle("Helper Song").ok);
+        assert(orig.setTempo(132.0).ok);
+        assert(orig.addModule("bass", writerOf("synth.analog_gen")).ok);
+        assert(orig.addModule("keys", writerOf("synth.fm_synth")).ok);
+        assert(orig.addModule("drums", writerOf("synth.drumsynth")).ok);
+        assert(orig.connect("bass", "out", 0.5f).ok);
+        assert(orig.connect("keys", "out", 0.4f).ok);
+        assert(orig.connect("drums", "out", 0.7f).ok);
+
+        PartWriter origPw = new PartWriter(orig);
+        DrumWriter origDw = new DrumWriter(origPw);
+        assert(origPw.addSection("verse", 2).ok);
+        assert(origPw.addSection("chorus", 2).ok);
+        assert(origPw.addPart("bass", "bass").ok);
+        assert(origPw.addPart("keys", "keys").ok);
+        assert(origDw.addDrumPart("kit", "drums").ok);
+        assert(origPw.writeNote("bass", "verse", BeatPosition(1, 1, 1), Length(8), 36).ok);
+        assert(origPw.writeNote("keys", "chorus", BeatPosition(1, 1, 1), Length(8), 64).ok);
+        assert(origDw.writeSteps("kit", "verse", "Kick", "x---x---").ok);
+        assert(origPw.arrange(["verse", "chorus", "verse"]).ok);
+
+        immutable string helperPath = buildPath(root, "helper_parts.msv");
+        auto origDoc = origPw.buildDocument();
+        assert(origDoc.ok, origDoc.problem.reason);
+        assert(orig.writeDocument(origDoc.project, helperPath).ok);
+
+        ProjectOpenResult reopenedProj = ProjectWriter.fromFile(helperPath);
+        assert(reopenedProj.ok, reopenedProj.problem.reason);
+        PartOpenResult reopenedParts = PartWriter.openFromProject(reopenedProj.writer);
+        assert(reopenedParts.ok, reopenedParts.problem.reason);
+        assert(reopenedParts.arrangementReconstructed);
+        assert(reopenedParts.parts.sectionNames() == ["verse", "chorus"]);
+        assert(reopenedParts.parts.partNames() == ["bass", "keys"]);
+        assert(reopenedParts.drums.drumPartNames() == ["kit"]);
+        assert(reopenedParts.parts.arrangement() == ["verse", "chorus", "verse"]);
+        assert(reopenedParts.parts.notesOfPart("bass", "verse").length == 1);
+        assert(reopenedParts.parts.notesOfPart("keys", "chorus").length == 1);
+
+        auto rebuiltDoc = reopenedParts.parts.buildDocument();
+        assert(rebuiltDoc.ok, rebuiltDoc.problem.reason);
+        assert(rebuiltDoc.project.patterns.length == origDoc.project.patterns.length);
+        assert(rebuiltDoc.project.clips.length == origDoc.project.clips.length);
+
+        foreach (sampleIdx, samplePath; ["sample-projects/midnight_pulse.msv", "sample-projects/lobby_waltz.msv"]) {
+            ProjectOpenResult sOpen = ProjectWriter.fromFile(samplePath);
+            assert(sOpen.ok, sOpen.problem.reason);
+            PartOpenResult pOpen = PartWriter.openFromProject(sOpen.writer);
+            assert(pOpen.ok, pOpen.problem.reason);
+            auto roundDoc = pOpen.parts.buildDocument();
+            assert(roundDoc.ok, roundDoc.problem.reason);
+
+            LoadedProject origLoaded;
+            string lErr;
+            assert(loadProjectFile(samplePath, origLoaded, lErr), lErr);
+
+            StudioSession sOrig = new StudioSession();
+            StudioSession sRound = new StudioSession();
+            assert(sOrig.initialize(44_100.0f) && sRound.initialize(44_100.0f));
+            scope (exit) {
+                sOrig.shutdown();
+                sRound.shutdown();
+            }
+            string oErr1;
+            string oErr2;
+            assert(sOrig.openProjectFromMemory(origLoaded, oErr1), oErr1);
+            assert(sRound.openProjectFromMemory(roundDoc.project, oErr2), oErr2);
+
+            sOrig.engine().reset();
+            sOrig.engine().setTempo(origLoaded.bpm, origLoaded.ticksPerLine);
+            sOrig.engine().seekLine(0);
+            sOrig.engine().setPlaying(true);
+
+            sRound.engine().reset();
+            sRound.engine().setTempo(roundDoc.project.bpm, roundDoc.project.ticksPerLine);
+            sRound.engine().seekLine(0);
+            sRound.engine().setPlaying(true);
+
+            OwnedBuffer!float l1;
+            OwnedBuffer!float r1;
+            OwnedBuffer!float l2;
+            OwnedBuffer!float r2;
+            assert(sOrig.engine().renderOfflineToBuffer(16_384, 64, l1, r1));
+            assert(sRound.engine().renderOfflineToBuffer(16_384, 64, l2, r2));
+            foreach (k; 0 .. l1.length) {
+                assert(fabs(l1[k] - l2[k]) < 1e-6f && fabs(r1[k] - r2[k]) < 1e-6f);
+            }
+            cast(void) sampleIdx;
+        }
+
+        ProjectOpenResult addOpen = ProjectWriter.fromFile("sample-projects/midnight_pulse.msv");
+        assert(addOpen.ok);
+        PartOpenResult addParts = PartWriter.openFromProject(addOpen.writer);
+        assert(addParts.ok);
+        assert(addOpen.writer.addModule("bell", writerOf("synth.fm_synth")).ok);
+        assert(addOpen.writer.connect("bell", "out", 0.35f).ok);
+        assert(addParts.parts.addPart("bell", "bell").ok);
+        immutable string targetSec = addParts.parts.sectionNames().length > 0
+            ? addParts.parts.sectionNames()[0] : "";
+        if (targetSec.length == 0) {
+            assert(addParts.parts.addSection("overlay", 2).ok);
+        }
+        immutable string useSec = targetSec.length > 0 ? targetSec : "overlay";
+        assert(addParts.parts.writeNote("bell", useSec, BeatPosition(1, 1, 1), Length(8), 72, 0.8f).ok);
+
+        immutable string expandedPath = buildPath(root, "midnight_with_bell.msv");
+        auto expandedDoc = addParts.parts.buildDocument();
+        assert(expandedDoc.ok, expandedDoc.problem.reason);
+        assert(addOpen.writer.writeDocument(expandedDoc.project, expandedPath).ok);
+
+        StudioSession verifySess2 = new StudioSession();
+        assert(verifySess2.initialize(44_100.0f));
+        scope (exit) verifySess2.shutdown();
+        string openErr2;
+        assert(verifySess2.openProjectFile(expandedPath, openErr2), openErr2);
+        assert(verifySess2.document().patterns.length == addOpen.writer.document().project.patterns.length + 1
+            || verifySess2.document().patterns.length >= 2);
+        assert(verifySess2.document().clips.length > addOpen.writer.document().project.clips.length);
+        assert(read(expandedPath).length > 0);
     }
 }

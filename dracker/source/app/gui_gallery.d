@@ -6,7 +6,7 @@
  * Purpose:
  *   Platform-independent IGuiScene used by the Phase 7 shell and self-test. A gui.widgets UiContext hosts a
  *   SplitView with a scrolling controls pane (toggle, log slider, knobs, numeric drag box, dropdown, context menu,
- *   curve and ADSR envelope editors) and a primitives canvas widget exercising every IRenderer2D feature
+ *   curve and ADSR envelope editors, multi-line text area) and a primitives canvas widget exercising every IRenderer2D feature
  *   (rounded/gradient/bordered panels, scissor clipping, UI and monospace text, anti-aliased Bezier patch cables,
  *   polyline oscilloscope, RGBA texture). An optional continuously animated mode drives display-paced rendering.
  *
@@ -36,7 +36,7 @@ import gui.layout : Axis, Insets, SplitPaneNode;
 import gui.renderer : ColorRGBA, FontId, IRenderer2D, Point2F, RectF;
 import gui.theme : StudioTheme;
 import gui.widgets : Button, CurveEditor, Dropdown, EnvelopeEditor, Label, MenuItem, NumericDragBox, Panel, PanelLayout,
-    RotaryKnob, ScrollView, Slider, SplitView, Toggle, UiContext, ValueRange, Widget;
+    RotaryKnob, ScrollView, Slider, SplitView, TextArea, Toggle, UiContext, ValueRange, Widget;
 import platform.interfaces : PlatformEvent;
 
 private immutable string[3] NODE_TITLES = ["Analog Gen", "Echo", "Output"];
@@ -135,6 +135,7 @@ final class GalleryScene : IGuiScene {
     private PrimitivesCanvas canvas_;
     private Toggle animateToggle_;
     private Label status_;
+    private string clipText_;
     private float lastW_ = 0.0f;
     private float lastH_ = 0.0f;
 
@@ -190,6 +191,14 @@ final class GalleryScene : IGuiScene {
         EnvelopeEditor env = controls.add(new EnvelopeEditor());
         env.setAdsr(0.1f, 0.2f, 0.6f, 0.3f);
         env.preferredSize = Point2F(240, 110);
+        controls.add(new Label("Text area"));
+        TextArea area = controls.add(new TextArea("tempo 120\nplay C-4\n  wait 4"));
+        area.preferredSize = Point2F(240, 110);
+        area.markLine(1);
+        area.clipboardRead = () => clipText_;
+        area.clipboardWrite = (string s) { clipText_ = s; return true; };
+        area.onChange = () { setStatus(format("text area: %s lines", area.lineCount())); };
+        area.onSubmit = () { setStatus("text area: submit"); };
         status_ = controls.add(new Label("ready"));
 
         ScrollView scroller = new ScrollView(controls);

@@ -142,15 +142,15 @@ version (unittest) {
             assert(cast(ubyte) info.kind == i, info.name);
             assert(subcommandInfo(info.kind).name == info.name);
             assert(info.usage.startsWith(info.name), info.usage);
-            assert((info.builtBy.length > 0) == (info.kind != Subcommand.help), info.name);
+            assert(info.builtBy.length == 0, info.name);
         }
         assert(subcommandInfo(Subcommand.help).outputAllowed == false);
         assert(subcommandInfo(Subcommand.run).outputAllowed && !subcommandInfo(Subcommand.run).outputRequired);
         assert(subcommandInfo(Subcommand.render).outputAllowed && subcommandInfo(Subcommand.render).outputRequired);
-        assert(subcommandInfo(Subcommand.run).builtBy == "T83" && subcommandInfo(Subcommand.check).builtBy == "T83");
-        assert(subcommandInfo(Subcommand.catalog).builtBy == "T85");
-        assert(subcommandInfo(Subcommand.render).builtBy == "T86");
-        assert(subcommandInfo(Subcommand.describe).builtBy == "T87");
+        assert(subcommandInfo(Subcommand.run).builtBy == "" && subcommandInfo(Subcommand.check).builtBy == "");
+        assert(subcommandInfo(Subcommand.catalog).builtBy == "");
+        assert(subcommandInfo(Subcommand.render).builtBy == "");
+        assert(subcommandInfo(Subcommand.describe).builtBy == "");
         assert(PROGRAM_NAME == "dracker-compose" && SCRIPT_EXTENSION == ".dcs");
         assert(ExitCode.success == 0 && ExitCode.fileError == 1 && ExitCode.wrongUsage == 2);
     }
@@ -266,13 +266,16 @@ version (unittest) {
         string runHelp = subcommandHelpText(Subcommand.run);
         assert(runHelp.startsWith("Usage:\n  dracker-compose run <script> [-o <file>]\n\nRuns a script"));
         foreach (part; ["Arguments:", "script   The script file (.dcs)", "--json", "-o <file>",
-                "The file the run writes.", "0  success", "2  wrong usage",
-                "Not available in this build yet (task T83)."]) {
+                "The file the run writes.", "0  success", "2  wrong usage"]) {
             assert(runHelp.indexOf(part) != runHelp.length, part);
         }
+        assert(runHelp.indexOf("Not available") == runHelp.length);
+        string describeHelp = subcommandHelpText(Subcommand.describe);
+        assert(describeHelp.indexOf("Not available") == describeHelp.length);
+        assert(describeHelp.indexOf("dracker-compose describe <file.msv|file.msym>") != describeHelp.length);
         string renderHelp = subcommandHelpText(Subcommand.render);
         assert(renderHelp.indexOf("-o <file>   The WAV file to write (needed).") != renderHelp.length);
-        assert(renderHelp.indexOf("(task T86)") != renderHelp.length);
+        assert(renderHelp.indexOf("Not available") == renderHelp.length);
         string catalogHelp = subcommandHelpText(Subcommand.catalog);
         assert(catalogHelp.indexOf("topic   One part of the catalog") != catalogHelp.length);
         assert(catalogHelp.indexOf("-o <file>") == catalogHelp.length);
@@ -298,10 +301,7 @@ version (unittest) {
             JSONValue entry = doc["subcommands"][cast(uint) i];
             assert(entry["name"].str == info.name && entry["usage"].str == info.usage);
             assert(entry["summary"].str == info.summary);
-            assert(entry["available"].boolean == (info.kind == Subcommand.help), info.name);
-            if (info.kind != Subcommand.help) {
-                assert(entry["builtBy"].str == info.builtBy, info.name);
-            }
+            assert(entry["available"].boolean == true, info.name);
         }
         assert(doc["subcommands"][0]["argument"].str == "script");
         assert(doc["subcommands"][0]["argumentOptional"].boolean == false);
@@ -315,7 +315,7 @@ version (unittest) {
 
         JSONValue one = parseJSON(helpJson(Subcommand.render));
         assert(one["ok"].boolean && one["subcommands"].array.length == 1);
-        assert(one["subcommands"][0]["name"].str == "render" && one["subcommands"][0]["available"].boolean == false);
+        assert(one["subcommands"][0]["name"].str == "render" && one["subcommands"][0]["available"].boolean == true);
         assert(parseJSON(helpJson(Subcommand.help))["subcommands"].array.length == 6);
 
         foreach (text; ["plain", "a\"b\\c", "line\nbreak\ttab", "\u0001\u001F\u007F", "caf\u00E9 \u266B",
@@ -411,37 +411,59 @@ version (unittest) {
         assert(fileDoc["error"]["message"].str == "could not read 'a.dcs': No such file or directory.");
         assert(fileDoc["error"]["subcommand"].str == "run" && fileDoc["error"].object.length == 3);
 
-        assert(run(["run", "a.dcs"], output, errors) == 1 && output == "");
-        assert(errors == "dracker-compose: 'run' is not available in this build yet (task T83).\n"
-            ~ "Try 'dracker-compose help run'.\n", errors);
         assert(run(["check", "a.dcs"], output, errors) == 1);
-        assert(errors.indexOf("'check' is not available in this build yet (task T83).") != errors.length, errors);
-        assert(run(["catalog"], output, errors) == 1);
-        assert(errors == "dracker-compose: 'catalog' is not available in this build yet (task T85).\n"
-            ~ "Try 'dracker-compose help catalog'.\n", errors);
-        assert(run(["catalog", "modules"], output, errors) == 1);
+        assert(errors.indexOf("unknown command 'script'") != errors.length, errors);
+        assert(run(["catalog"], output, errors) == 0 && errors == "");
+        assert(run(["catalog", "modules"], output, errors) == 0 && errors == "");
         assert(run(["describe", "a.msym"], output, errors) == 1);
-        assert(errors.indexOf("(task T87)") != errors.length);
-        assert(run(["render", "a.msv", "-o", "a.wav"], output, errors) == 1);
-        assert(errors.indexOf("'render' is not available in this build yet (task T86).") != errors.length);
-        assert(run(["--json", "catalog", "modules"], output, errors) == 1 && errors == "");
-        JSONValue pending = parseJSON(output);
-        assert(!pending["ok"].boolean && pending["error"]["code"].str == "not_available");
-        assert(pending["error"]["message"].str == "'catalog' is not available in this build yet (task T85).");
-        assert(pending["error"]["subcommand"].str == "catalog");
-        assert(pending["error"]["hint"].str == "dracker-compose help catalog");
+        assert(errors.indexOf("dracker-compose:") != errors.length);
+        assert(run(["--json", "describe", "a.msym"], output, errors) == 1 && errors == "");
+        JSONValue descErr = parseJSON(output);
+        assert(!descErr["ok"].boolean && descErr["error"]["code"].str == "describe");
+        assert(descErr["error"]["subcommand"].str == "describe");
+        assert(descErr["error"]["hint"].str == "dracker-compose help describe");
+        assert(run(["--json", "catalog", "modules"], output, errors) == 0 && errors == "");
+        JSONValue catJson = parseJSON(output);
+        assert(catJson["ok"].boolean && catJson["modules"].array.length > 0);
         assert(run(["--json", "run", "a.dcs", "-o", "out.msv"], output, errors) == 1 && errors == "");
         assert(parseJSON(output)["error"]["subcommand"].str == "run");
+        assert(parseJSON(output)["error"]["code"].str == "script");
     }
 
     unittest {
-        immutable string path = buildPath(tempDir(), "dracker-compose-program-test.dcs");
+        import std.file : mkdirRecurse, rmdirRecurse;
+        import app.session : StudioSession;
+
+        immutable string root = buildPath(tempDir(), "dracker-compose-program-t102-test");
+        if (exists(root)) {
+            rmdirRecurse(root);
+        }
+        mkdirRecurse(root);
         scope (exit) {
-            if (exists(path)) {
-                remove(path);
+            if (exists(root)) {
+                rmdirRecurse(root);
             }
         }
-        write(path, "project \"Test\"\n");
+
+        immutable string path = buildPath(root, "good.dcs");
+        immutable string outMsv = buildPath(root, "out.msv");
+        immutable string innerMsv = buildPath(root, "inner.msv");
+        immutable string badScript = buildPath(root, "bad.dcs");
+        immutable string abortedMsv = buildPath(root, "aborted.msv");
+        immutable string abortedOut = buildPath(root, "aborted_o.msv");
+        write(path,
+            "project \"CLI Test\"\n"
+            ~ "tempo 112 tpl=4\n"
+            ~ "signature 3/4\n"
+            ~ "key F# minor\n"
+            ~ "module bass synth.analog_gen\n"
+            ~ "connect bass out gain=0.5\n"
+            ~ "save \"" ~ innerMsv ~ "\"\n");
+        write(badScript,
+            "project \"Should Not Save\"\n"
+            ~ "save \"" ~ abortedMsv ~ "\"\n"
+            ~ "temop 120\n");
+
         string outText = "";
         string errText = "";
         ProgramIo io;
@@ -451,17 +473,43 @@ version (unittest) {
         io.writeError = (string text) @safe {
             errText ~= text;
         };
-        assert(runProgram(["check", path], io) == 1);
-        assert(errText.indexOf("could not read") == errText.length, errText);
-        assert(errText.indexOf("'check' is not available in this build yet (task T83).") != errText.length);
+
+        assert(runProgram(["check", path], io) == 0 && errText == "");
+        assert(outText.indexOf("7 commands checked") != outText.length, outText);
+        assert(!exists(innerMsv));
+
+        outText = "";
+        assert(runProgram(["--json", "check", badScript], io) == 1 && errText == "");
+        JSONValue chkErr = parseJSON(outText);
+        assert(!chkErr["ok"].boolean && chkErr["error"]["code"].str == "script");
+        assert(chkErr["error"]["line"].integer == 3 && chkErr["error"]["column"].integer == 1);
+        assert(chkErr["error"]["suggestion"].str == "tempo");
+
+        outText = "";
         errText = "";
-        immutable string missing = buildPath(tempDir(), "dracker-compose-no-such-file.dcs");
+        assert(runProgram(["run", badScript, "-o", abortedOut], io) == 1);
+        assert(errText.indexOf("line 3, col 1") != errText.length, errText);
+        assert(!exists(abortedMsv) && !exists(abortedOut));
+
+        outText = "";
+        errText = "";
+        assert(runProgram(["run", path, "-o", outMsv], io) == 0 && errText == "");
+        assert(exists(innerMsv) && exists(outMsv));
+
+        StudioSession sess = new StudioSession();
+        assert(sess.initialize(44_100.0f));
+        scope (exit) sess.shutdown();
+        string openErr;
+        assert(sess.openProjectFile(outMsv, openErr), openErr);
+        assert(sess.document().title == "CLI Test" && sess.document().bpm == 112.0);
+        assert(sess.document().wires.length == 1);
+
+        immutable string missing = buildPath(root, "no-such-file.dcs");
         assert(runProgram(["check", missing], io) == 1);
-        assert(errText.indexOf("could not read '" ~ missing ~ "': ") != errText.length, errText);
+        outText = "";
         errText = "";
         assert(runProgram(["--json", "check", missing], io) == 1 && errText == "");
         assert(parseJSON(outText)["error"]["code"].str == "file");
-        remove(path);
         assert(runProgram(["help"], io) == 0);
         assert(runProgram(["help"], ProgramIo()) == 2);
     }

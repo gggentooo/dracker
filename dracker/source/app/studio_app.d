@@ -1080,6 +1080,33 @@ int runStudioGuiSelfTest(string[] args) {
         }
 
         {
+            import gui.views.pattern_editor : PatternViewKind;
+            import gui.views.script_view : ScriptView;
+
+            click(root.pattern.viewButtons[PatternViewKind.script].bounds.center());
+            pumpFor(0.08);
+            ScriptView sv = root.pattern.scriptView();
+            immutable bool onScript = sv !is null && root.pattern.currentView() == PatternViewKind.script;
+            immutable size_t modsBefore = doc().modules.length;
+            bool applied = false;
+            bool cleared = false;
+            bool undone = false;
+            if (onScript) {
+                sv.editor.setText("module selftest_pad synth.analog_gen\nconnect selftest_pad out gain=0.1");
+                click(sv.applyButton.bounds.center());
+                applied = pumpUntil(() => doc().modules.length == modsBefore + 1);
+                cleared = sv.editor.text().length == 0;
+                key(6, "z", KeyModifiers.command);
+                undone = pumpUntil(() => doc().modules.length == modsBefore);
+            }
+            click(root.pattern.viewButtons[PatternViewKind.tracker].bounds.center());
+            pumpFor(0.05);
+            check("script tab (apply, undo)", onScript && applied && cleared && undone,
+                format("tab=%s applied=%s cleared=%s undone=%s message=%s", onScript, applied, cleared, undone,
+                    sv !is null ? sv.message() : ""));
+        }
+
+        {
             auto sb = root.patchbay.sidebar;
             immutable float canvasW0 = root.patchbay.canvasRect().w;
             click(sb.collapseButton.bounds.center());

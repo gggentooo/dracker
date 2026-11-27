@@ -844,6 +844,78 @@ version (unittest) {
     }
 
     unittest {
+        ModuleInstance fading;
+        ModuleInstance pureBell;
+        assert(ModuleRegistry.createOffRT("synth.spectravoice", ModuleId(1), 44_100.0f, fading));
+        assert(ModuleRegistry.createOffRT("synth.spectravoice", ModuleId(2), 44_100.0f, pureBell));
+        scope (exit) {
+            fading.destroyOffRT();
+            pureBell.destroyOffRT();
+        }
+        assert(pureBell.desc.vtable.setParam(pureBell.state, 0, 3.0f, 44_100.0f, true));
+
+        float[] before = playSpectra(fading.desc, fading.state, 20, true);
+        float[] bellBefore = playSpectra(pureBell.desc, pureBell.state, 20, true);
+        assert(before != bellBefore);
+
+        float[FIXED_BLOCK_FRAMES] rtL = 0.0f;
+        float[FIXED_BLOCK_FRAMES] rtR = 0.0f;
+        ProcessIO rtIo;
+        rtIo.audioOut = [rtL[], rtR[]];
+        ProcessContext rtCtx;
+        rtCtx.sampleRate = 44_100.0f;
+        rtCtx.frames = FIXED_BLOCK_FRAMES;
+        rtCtx.inputSilent = true;
+
+        float[] transition;
+        transition ~= before[$ - FIXED_BLOCK_FRAMES .. $];
+        verifyZeroRtAllocationsNothrow(() @nogc nothrow {
+            assert(fading.desc.vtable.setParam(fading.state, 0, 3.0f, 44_100.0f, true));
+            assert(fading.desc.vtable.process(fading.state, rtIo, rtCtx));
+        });
+        transition ~= rtL[];
+        float[] afterRest = playSpectra(fading.desc, fading.state, 9, false);
+        transition ~= afterRest;
+
+        float maxStep = 0.0f;
+        foreach (i; 1 .. transition.length) {
+            assert(isFinite(transition[i]));
+            immutable float step = fabs(transition[i] - transition[i - 1]);
+            if (step > maxStep) maxStep = step;
+        }
+        assert(maxStep < 0.25f);
+
+        float[] bellAfter = playSpectra(pureBell.desc, pureBell.state, 10, false);
+        float[] tailFading = transition[6 * FIXED_BLOCK_FRAMES .. $];
+        float[] tailBell = bellAfter[5 * FIXED_BLOCK_FRAMES .. $];
+        assert(tailFading.length == tailBell.length);
+        foreach (i; 0 .. tailFading.length) {
+            assert(fabs(tailFading[i] - tailBell[i]) < 1e-5f);
+        }
+
+        ModuleInstance bwFade;
+        assert(ModuleRegistry.createOffRT("synth.spectravoice", ModuleId(3), 44_100.0f, bwFade));
+        scope (exit) bwFade.destroyOffRT();
+        assert(bwFade.desc.vtable.setParam(bwFade.state, 0, 1.0f, 44_100.0f, true));
+        assert(bwFade.desc.vtable.setParam(bwFade.state, 1, 0.05f, 44_100.0f, true));
+        float[] bwBefore = playSpectra(bwFade.desc, bwFade.state, 20, true);
+        float[] bwTrans;
+        bwTrans ~= bwBefore[$ - FIXED_BLOCK_FRAMES .. $];
+        verifyZeroRtAllocationsNothrow(() @nogc nothrow {
+            assert(bwFade.desc.vtable.setParam(bwFade.state, 1, 1.0f, 44_100.0f, true));
+            assert(bwFade.desc.vtable.process(bwFade.state, rtIo, rtCtx));
+        });
+        bwTrans ~= rtL[];
+        bwTrans ~= playSpectra(bwFade.desc, bwFade.state, 5, false);
+        float maxBwStep = 0.0f;
+        foreach (i; 1 .. bwTrans.length) {
+            immutable float step = fabs(bwTrans[i] - bwTrans[i - 1]);
+            if (step > maxBwStep) maxBwStep = step;
+        }
+        assert(maxBwStep < 0.25f);
+    }
+
+    unittest {
         ModuleInstance pdInst;
         assert(ModuleRegistry.createOffRT("ctl.pitch_detector", ModuleId(1), 44_100.0f, pdInst));
         scope (exit) pdInst.destroyOffRT();

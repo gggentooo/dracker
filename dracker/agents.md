@@ -135,14 +135,14 @@ A text option takes the text itself, `@file` to read a file, or `-` to read stan
 | `source/sequencer/` | `note.d`, `pattern.d`, `timeline.d`, `clock.d`, `track_effects.d`, `stream_worker.d`, `engine.d` | RT step `@nogc nothrow`; `stream_worker.d` off-RT worker |
 | `source/io/` | `binary_stream.d`, `project_format.d`, `audio_io.d`, `importers/` (`.mid`, `.xm`, `.sunvox`) | `@safe` off-RT I/O & `audio-formats` (`boost`) |
 | `source/app/` | `session.d`, `history.d`, `keymap.d`, `pattern_ops.d`, `telemetry.d`, `music_theory.d` (keys, scales, note spelling), `skeleton_gen.d` (skeleton project generator: instrument choices, sound-check preview), `chord_progression.d` (chord and progression parser), `pattern_notes.d` (piano-roll note model), `instrument_library.d` (bundled and user preset library), `factory_presets.d` (bundled preset definitions; files in `resources/presets/`), `audio_host.d` + `studio_selftest.d` (macOS), `gui_shell.d` + `gui_gallery.d` + `studio_app.d` (`StudioGUI` only) | Main/UI thread orchestration, undo/redo, native GUI main loop & `--gui-selftest` |
-| `source/compose/`, `source/compose_main.d` | Composition helper `dracker-compose`: `compose/timing.d` (positions and lengths), `compose/module_writer.d` (`ModuleWriter`), `compose_main.d` (command line: subcommands, help, `--json`, exit codes; its `main` exists only in the `compose` configuration) | Off-RT, `@safe`; no GUI, audio-device or macOS platform code (the `compose` configuration excludes them) |
-| `source/gui/` | `renderer.d`, `theme.d`, `layout.d`, `widgets.d`, `views/` (`studio_context.d`, `studio_root.d` + 7 studio views, `appearance_panel.d`, `skeleton_panel.d` (skeleton project generator panel), `piano_roll_view.d`, `drumpad_view.d`, `instrument_sidebar.d`) | Main/UI thread only; toolkit and all views are built and unit-tested in `headless` |
+| `source/compose/`, `source/compose_main.d` | Composition helper `dracker-compose` (agent reference: `docs/composer.md`). Core library: `timing.d` (positions, lengths), `names.d` (name matching, suggestions), `module_writer.d`, `project_writer.d`, `part_writer.d` (sections, parts, notes, cells, phrase editing, arrangement), `chord_writer.d`, `drum_writer.d`, `catalog.d`, `render.d`. Interpreter `script/`: `lexer.d`, `notation.d`, `interpreter.d`, `commands.d` (every command; `restrictForApp()` for the Script tab), `describe.d`. Program `compose_main.d` (subcommands, `--json`, exit codes; its `main` exists only in the `compose` configuration) | Off-RT, `@safe`; no GUI, audio-device or macOS platform code (the `compose` configuration excludes them) |
+| `source/gui/` | `renderer.d`, `theme.d`, `layout.d`, `widgets.d`, `views/` (`studio_context.d`, `studio_root.d` + 7 studio views, `appearance_panel.d`, `skeleton_panel.d` (skeleton project generator panel), `piano_roll_view.d`, `drumpad_view.d`, `instrument_sidebar.d`, `script_view.d` (the pattern editor's Script tab: applies a composition script to the open project as one undo step)) | Main/UI thread only; toolkit and all views are built and unit-tested in `headless` |
 | `source/platform/` | `interfaces.d` + `macos/` (`corefoundation.d`, `coreaudio.d`, `coremidi.d`, `objc_runtime.d`, `objc_blocks_shim.m`, `appkit.d`, `coretext.d`, `metal_renderer.d`) | Only OS FFI boundary in the project |
 | `shaders/` | `ui2d.metal` (Metal 2D instanced UI, Beziers, R8 glyphs) | Compiled to `build/ui2d.metallib` |
 | `resources/` | `fonts/`, `presets/` (bundled `.msym` presets matching `app.factory_presets`) | Read-only app resources |
 | `packaging/macos/`, `ci/` | `Info.plist`, `entitlements.plist`, `bundle_macos.sh`, `macos.yml` | Release bundling & CI automation |
 | `tests/` | `audio_harness.d`, `rt_malloc_trap.d`, `unit/`, `golden/`, `fuzz/` | Offline CI & local verification |
-| `docs/` | `manual.md`, `todo.json` (task list and task guides, the source), `todo.md` and `todo-guides.md` (generated from it; never edited), `changelog.md` | User manual, task tracker (Rule 6), mandatory change log (Rule 4) |
+| `docs/` | `manual.md`, `composer.md` (agent reference for `dracker-compose` and the script language), `todo.json` (task list and task guides, the source), `todo.md` and `todo-guides.md` (generated from it; never edited), `changelog.md` | User manual, task tracker (Rule 6), mandatory change log (Rule 4) |
 | `tools/` | `todo.py` (Python 3, standard library only) | Maintains `docs/todo.json` and writes `docs/todo.md` and `docs/todo-guides.md`; a maintenance tool, not part of the program (Rule 3 covers the program) |
 
 ---
@@ -299,6 +299,8 @@ dub build --compiler=ldc2 --config=headless --build=release
 # Composition helper: the second executable build/dracker-compose (no GUI, audio-device or platform code)
 dub build --compiler=ldc2 --config=compose
 ./build/dracker-compose help                   # subcommands: run, check, catalog, describe, render, help; --json anywhere
+./build/dracker-compose check song.dcs && ./build/dracker-compose run song.dcs -o song.msv
+./build/dracker-compose render song.msv -o song.wav   # offline render with a level report
 
 # Task list: docs/todo.md is generated from docs/todo.json (Rule 6)
 python3 tools/todo.py check

@@ -463,7 +463,7 @@ Editing a curve:
 The pattern editor is where you write music. Time runs downward, one **line** per row. Each **track** is a column of cells.
 
 ### 8.1 The header strip
-- **View bar** (the row above the header): **Tracker**, **Piano roll** and **Drumpad**. The current view's button has a 2-point outline and a bar under its name. Normal patterns offer **Tracker** and **Piano roll** (starting in Tracker); drum patterns offer **Drumpad** and **Tracker** (starting in Drumpad). Views that the current pattern type does not offer are disabled. The chosen view is remembered per pattern while Dracker runs; it is not saved in the project.
+- **View bar** (the row above the header): **Tracker**, **Piano roll**, **Drumpad** and **Script**. The current view's button has a 2-point outline and a bar under its name. Normal patterns offer **Tracker** and **Piano roll** (starting in Tracker); drum patterns offer **Drumpad** and **Tracker** (starting in Drumpad); **Script** is offered for every pattern ([§8.14](#814-the-script-tab)). Views that the current pattern type does not offer are disabled. The chosen view is remembered per pattern while Dracker runs; it is not saved in the project.
 - **Pattern dropdown:** chooses the pattern to edit. Items show the pattern's id in hex followed by `[D] ` for drum patterns and the pattern name. Right-click (or click **`...`**) opens the pattern menu (`New Pattern`, `New Drum Pattern`, `Convert to drum pattern` / `Convert to normal pattern`, `Duplicate Pattern`, `Delete Pattern`).
 - **Renaming a pattern:** double-click the pattern dropdown. A text field opens over it with the current name selected. Type the new name and press **Return** (or click elsewhere) to confirm, or **Escape** to cancel. If another pattern already has that name, a number is added to the end (Drums, Drums1, Drums2, …). An empty name is ignored. Renaming is undoable. You can also rename from the timeline ([§9.3](#93-editing-clips)).
 - **Trk:** number of tracks, 1–64 (shown in **Tracker** view only). On a drum pattern, adding or removing tracks adds or removes drum lanes up to 64 lanes.
@@ -675,6 +675,32 @@ A **drum pattern** keeps the normal pattern cell grid while storing a lane table
 - **Lanes:** each row shows the lane name and a lane menu button (`▾`). Click a lane name to audition that drum. Use the lane menu to change **Module**, pick a GM **Note** or **Set MIDI Note…**, **Rename…**, **Move Up** / **Move Down**, or **Remove Lane**, or click **+ Lane** below the last lane to append one. If a lane's module is missing, its label shows `[unassigned]` and diagonal hatching.
 - **Step pads:** beat and bar spacing follow **SIG**, with bar numbers in the ruler and the playhead column highlighted. Click a pad to toggle a hit; drag across pads to paint or erase as one undo step; drag vertically on a hit to change velocity (or **⌥-click** to cycle soft / medium / loud), which also updates that lane's velocity for new hits. Hits whose cell module or note differs from their lane show a corner mark.
 - **Tracker view & converting:** switch between **Drumpad** and **Tracker** in the view bar at any time (adding/removing tracks in Tracker adds/removes lanes, up to 64 lanes). Open the **`...`** menu or right-click the pattern dropdown to run **Convert to normal pattern** or **Convert to drum pattern** (one undo step each).
+
+### 8.14 The Script tab
+Click **Script** in the view bar to change the open project by typing commands of the composition script language, the same language the `dracker-compose` program reads ([`docs/composer.md`](composer.md) describes every command). The tab works on the whole project, not on the selected pattern.
+
+- **Layout:** a **Handles:** line at the top lists the names the script uses for the project's modules (`out` is the Master Output; other modules use their names with spaces and other characters a handle cannot hold left out, for example `Electric Piano` → `ElectricPiano`; modules added by a script are named by their handle). Below it is a text editor with line numbers, the **Apply** button at the top right, and a message line at the bottom.
+- **Typing:** the editor takes several lines. Arrow keys, ⌥-arrows (by word), Home/End, Page Up/Down, Shift to select, ⌘A, ⌘X/⌘C/⌘V and Tab (four spaces) work as in other text editors. Text in the editor is kept while Dracker runs, when you switch tabs or patterns; it is not saved in the project.
+- **Apply** (or **⌘Return**) runs every line against the open project:
+  - When **every line succeeds**, all changes are made at once as **one undo step** named "Apply script", the editor is cleared, and the message says how many commands were applied. **⌘Z** takes the whole script back; **⇧⌘Z** applies it again.
+  - When **any line fails**, **nothing is changed**. The text stays, the first failing line is outlined, and the message gives its line, column, reason and, where possible, a "did you mean" suggestion. Fix the line and press Apply again.
+  - Applying while the song plays is allowed; playback continues with the new content.
+- **Commands not available here:** `project`, `open` and `save` are refused with a reason. Use **title** to set the title, **tempo**, **signature** and **key** for the other settings, and the File menu to open or save.
+- **Files:** `sample`, `savemodule` and `module file=` read or write files. A relative path is taken from the folder of the project file; before the project has been saved, write an absolute path. A preset written by `savemodule` is saved only when the whole script succeeds.
+- **Example:** with a new project, type
+
+  ```
+  module bass preset="Electric Bass"
+  connect bass out gain=0.3
+  section verse bars=4
+  part bass module=bass
+  chords bass verse: i VI III VII style=root octave=2
+  arrange verse verse
+  ```
+
+  and press Apply: a bass module named `bass` is added and wired, a pattern "bass · verse" is written with the roots of the progression, and the timeline holds the verse twice.
+
+> **QA note:** the editor shows only committed text from input methods (the composition of a Korean or Japanese character appears when it is committed), has no undo of its own (⌘Z undoes project changes), and does not wrap or scroll long lines sideways.
 
 ---
 
@@ -1072,7 +1098,8 @@ If a chosen font isn't installed, the app falls back to the system font and the 
 - mute and bypass;
 - pattern contents, size, add, duplicate and delete;
 - clips and lanes; loop; tempo;
-- samples, key ranges and loop points.
+- samples, key ranges and loop points;
+- a script applied in the Script tab (one step for the whole script).
 
 **Not undoable:**
 - solo;
@@ -1313,6 +1340,19 @@ dracker --write-factory-presets=<dir>    write the bundled presets as .msym file
 dracker --help
 ```
 
+**The composition helper** `dracker-compose` is a second program built from the same source. It writes projects and module presets from a script, so that an agent (or you) can compose without the GUI. The script language is the one the Script tab uses ([§8.14](#814-the-script-tab)); [`docs/composer.md`](composer.md) is its full reference.
+
+```
+dracker-compose run <script.dcs> [-o <file.msv>]   run a script; its save commands, or -o, write the project
+dracker-compose check <script.dcs>                 run a script without writing anything, to find errors
+dracker-compose catalog [topic]                    module types and their parameters, presets, chords, keys, commands
+dracker-compose describe <file.msv|file.msym>      print an existing project or preset as a script
+dracker-compose render <file.msv> -o <file.wav>    play a project offline into a WAV file with a level report
+dracker-compose help [subcommand]
+```
+
+Every subcommand takes `--json`. Exit codes: 0 success, 1 the script or a file has errors, 2 wrong usage.
+
 - **Sound check:** `--sound-check` needs no audio device and writes a 26-second stereo WAV in C major at 120 BPM (I–vi–ii–V7, one chord per bar): bars 1–4 the default bass alone, bars 5–8 the default piano alone, bars 9–12 both. These are the sounds the planned skeleton project generator will use when no other instrument is chosen.
 - **Preset sound check:** `--sound-check-presets` renders 20 WAV files into `<dir>` at 120 BPM (four bars plus a 3-second tail each): "*Group* - *Name*.wav" for the twelve instruments (basses a bass line, Drum Kit and Kick a beat, the others the chords C, Am, Dm, G7), and two separate files "*Effects - Name* (dry).wav" and "*Effects - Name* (wet).wav" for each effect (short Electric Piano chords with rests for Room Reverb and Tempo Delay, a dynamic Drum Kit beat for Bus Compressor, and the Electric Bass line for Warm Overdrive).
 - **Running self-tests:** run them with `caffeinate -dims` so the display doesn't sleep. They keep a floating window open, and you shouldn't use the mouse or keyboard while they run.
@@ -1323,6 +1363,7 @@ dracker --help
 
 ```zsh
 dub build --compiler=ldc2 --config=app --build=debug   # studio app → ./build/dracker
+dub build --compiler=ldc2 --config=compose              # composition helper → ./build/dracker-compose
 dub test  --compiler=ldc2 --config=headless            # headless unit + fuzz tests
 dub test  --compiler=ldc2 --config=app                 # macOS platform tests
 ```

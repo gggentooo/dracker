@@ -41,29 +41,36 @@ jobs:
           head -n 60 /tmp/dub-describe.json
           grep -q '"rootConfiguration": "boost"' /tmp/dub-describe.json
 
-      - name: Run headless tests (unit, bundled presets, rt_malloc_trap, golden WAV, fuzz smoke)
+      - name: Build dracker-compose binary before headless tests
+        run: dub build --compiler=ldc2 --config=compose
+
+      - name: Run headless tests (unit, bundled presets, rt_malloc_trap, golden WAV, end-to-end, fuzz smoke)
         run: dub test --compiler=ldc2 --config=headless
 
       - name: Verify headless release build
         run: dub build --compiler=ldc2 --config=headless --build=release
 
-      - name: Build dracker-compose and run one script through it
+      - name: Run dracker-compose CLI end-to-end verification
         run: |
-          dub build --compiler=ldc2 --config=compose
           ./build/dracker-compose help > /dev/null
           ./build/dracker-compose --json help | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ok"] and len(d["subcommands"]) == 6'
-          printf 'project "CI"\ntempo 120\n' > /tmp/ci-script.dcs
-          set +e
-          ./build/dracker-compose --json check /tmp/ci-script.dcs > /tmp/ci-check.json
-          code=$?
-          set -e
-          python3 - "$code" <<'PY'
-          import json, sys
-          code = int(sys.argv[1])
-          doc = json.load(open("/tmp/ci-check.json"))
-          pending = code == 1 and doc["error"]["code"] == "not_available"
-          assert (code == 0 and doc["ok"]) or pending, (code, doc)
+          ./build/dracker-compose --json catalog | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ok"] and len(d["modules"]) >= 30 and len(d["presets"]) == 16'
+          python3 - <<'PY'
+          src = open("sample-projects/neon_drift.dcs", "r", encoding="utf-8").read()
+          src = src.replace("sample-projects/neon_drift_lead.msym", "/tmp/ci-neon-lead.msym")
+          src = src.replace("sample-projects/neon_drift.msv", "/tmp/ci-neon.msv")
+          open("/tmp/ci-neon.dcs", "w", encoding="utf-8").write(src)
           PY
+          rm -f /tmp/ci-neon-lead.msym /tmp/ci-neon.msv /tmp/ci-neon.wav /tmp/ci-neon-desc.dcs /tmp/ci-neon-rt.msv
+          ./build/dracker-compose --json check /tmp/ci-neon.dcs | python3 -c 'import json,sys,os; d=json.load(sys.stdin); assert d["ok"] and not os.path.exists("/tmp/ci-neon.msv") and not os.path.exists("/tmp/ci-neon-lead.msym")'
+          ./build/dracker-compose --json run /tmp/ci-neon.dcs | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ok"] and len(d["written"]) == 2'
+          ./build/dracker-compose --json render /tmp/ci-neon.msv -o /tmp/ci-neon.wav | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ok"] and len(d["silentBars"]) == 0 and not d["limiterReached"] and d["arrangementBars"] == 16'
+          ./build/dracker-compose --json describe /tmp/ci-neon.msv > /tmp/ci-neon-desc.json
+          python3 -c 'import json; d=json.load(open("/tmp/ci-neon-desc.json")); assert d["ok"] and d["kind"] == "project"; open("/tmp/ci-neon-desc.dcs", "w", encoding="utf-8").write(d["script"])'
+          ./build/dracker-compose --json check /tmp/ci-neon-desc.dcs | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ok"]'
+          ./build/dracker-compose --json run /tmp/ci-neon-desc.dcs -o /tmp/ci-neon-rt.msv | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ok"]'
+          cmp -s /tmp/ci-neon.msv /tmp/ci-neon-rt.msv
+          rm -f /tmp/ci-neon.dcs /tmp/ci-neon-lead.msym /tmp/ci-neon.msv /tmp/ci-neon.wav /tmp/ci-neon-desc.json /tmp/ci-neon-desc.dcs /tmp/ci-neon-rt.msv
           set +e
           ./build/dracker-compose check /tmp/no-such-script.dcs
           missing=$?

@@ -4,7 +4,7 @@
  * Phase:        Phase 4.9 (Tier 2) — Additive Harmonic / FFT Wavetable Synth
  *
  * Purpose:
- *   Synthesizes harmonic spectra via off-RT inverse FFT wavetable synthesis and plays polyphonic voices through VoicePool. prepare() precomputes every Profile x Bandwidth harmonic table into an unmanaged SpectraTableBank off the audio thread so Profile and Bandwidth take effect immediately from the rack, automation, MIDI or loading; an attached slot-0 SpectraTableAsset overrides the bank.
+ *   Synthesizes harmonic spectra via off-RT inverse FFT wavetable synthesis and plays polyphonic voices through VoicePool. prepare() precomputes every Profile x Bandwidth harmonic table into an unmanaged SpectraTableBank off the audio thread so Profile and Bandwidth take effect immediately from the rack, automation, MIDI or loading with a short click-free crossfade on held notes (T115); an attached slot-0 SpectraTableAsset overrides the bank.
  *
  * Real-Time & Safety Contract:
  *   @nogc nothrow on process()/handleEvent()/swapAsset(); no harmonic table is ever built on the audio thread; tables live in unmanaged SpectraTableBank and SpectraTableAsset buffers, and serializeExtra prefixes a custom table mark so old stored tables are ignored.
@@ -450,6 +450,61 @@ struct SpectraVoiceSlot {
             }
         }
     }
+
+    /**
+     * Renders stereo audio while linearly crossfading from oldTable to newTable over fadeTotal frames.
+     *
+     * Params:
+     *   outL = Destination left accumulation slice.
+     *   outR = Destination right accumulation slice.
+     *   frames = Frame count for this slice.
+     *   oldTable = Previous harmonic wavetable fading out.
+     *   newTable = Target harmonic wavetable fading in.
+     *   fadePos = Starting frame index inside the crossfade ramp.
+     *   fadeTotal = Total crossfade duration in frames (>= 1).
+     *   sampleRate = Active sample rate in Hertz.
+     */
+    void renderAddCrossfade(
+        float[] outL,
+        float[] outR,
+        uint frames,
+        const(float)[] oldTable,
+        const(float)[] newTable,
+        uint fadePos,
+        uint fadeTotal,
+        float sampleRate
+    ) {
+        if (newTable.length < 2) {
+            env_.reset();
+            return;
+        }
+        if (oldTable.length < 2 || fadeTotal == 0) {
+            renderAdd(outL, outR, frames, newTable, sampleRate);
+            return;
+        }
+        immutable double newLen = cast(double) newTable.length;
+        immutable double oldLen = cast(double) oldTable.length;
+        immutable double ratio = oldLen / newLen;
+        immutable double sr = (!isFinite(sampleRate) || sampleRate < 1.0f) ? 44_100.0 : cast(double) sampleRate;
+        immutable double step = freqHz_ * newLen / sr;
+        immutable float invTotal = 1.0f / cast(float) fadeTotal;
+
+        foreach (i; 0 .. frames) {
+            immutable uint stepIdx = fadePos + i;
+            immutable float t = stepIdx + 1 < fadeTotal ? cast(float)(stepIdx + 1) * invTotal : 1.0f;
+            immutable float newS = sampleBufferWrapped(newTable, phasePos_, true);
+            immutable double oldPos = oldTable.length == newTable.length ? phasePos_ : phasePos_ * ratio;
+            immutable float oldS = sampleBufferWrapped(oldTable, oldPos, true);
+            immutable float a = env_.next();
+            immutable float s = (oldS * (1.0f - t) + newS * t) * a * velocity_;
+            outL[i] += s;
+            outR[i] += s;
+            phasePos_ += step;
+            if (phasePos_ >= newLen) {
+                phasePos_ -= floor(phasePos_ / newLen) * newLen;
+            }
+        }
+    }
 }
 
 /**
@@ -466,6 +521,7 @@ struct SpectraVoice {
     ];
 
     static immutable ubyte[4] CUSTOM_TABLE_MAGIC = ['S', 'V', 'T', '1'];
+    enum float TABLE_CROSSFADE_MS = 5.0f;
 
     @Param("Profile", 0.0f, 3.0f, 0.0f, "", ParamScale.discrete,
         ["Organ", "Brass", "Choir", "Bell"])
@@ -483,6 +539,12 @@ struct SpectraVoice {
     private VoicePool!(SpectraVoiceSlot, 16) voices_;
     private SpectraTableAsset* tableAsset_ = null;
     private SpectraTableBank* bank_ = null;
+    private const(float)* currentTablePtr_ = null;
+    private size_t currentTableLen_ = 0;
+    private const(float)* fadeFromPtr_ = null;
+    private size_t fadeFromLen_ = 0;
+    private uint fadePos_ = 0;
+    private uint fadeTotal_ = 0;
     private float sampleRate_ = 44_100.0f;
     private float pitchBendSemitones_ = 0.0f;
 
@@ -624,6 +686,12 @@ struct SpectraVoice {
     void reset() {
         voices_.resetAll();
         pitchBendSemitones_ = 0.0f;
+        currentTablePtr_ = null;
+        currentTableLen_ = 0;
+        fadeFromPtr_ = null;
+        fadeFromLen_ = 0;
+        fadePos_ = 0;
+        fadeTotal_ = 0;
     }
 
     /**
@@ -717,8 +785,14 @@ struct SpectraVoice {
     bool process(const(float[])[2] audioIn, float[][2] audioOut, ref ProcessContext ctx) {
         cast(void) audioIn;
         voices_.deactivateFinished();
-        const(float)[] tbl = activeTable();
-        if (!voices_.hasActiveVoices() || tbl.length < 2) {
+        const(float)[] target = activeTable();
+        if (!voices_.hasActiveVoices() || target.length < 2) {
+            currentTablePtr_ = target.ptr;
+            currentTableLen_ = target.length;
+            fadeFromPtr_ = null;
+            fadeFromLen_ = 0;
+            fadePos_ = 0;
+            fadeTotal_ = 0;
             audioOut[0][0 .. ctx.frames] = 0.0f;
             audioOut[1][0 .. ctx.frames] = 0.0f;
             return false;
@@ -732,10 +806,45 @@ struct SpectraVoice {
         immutable float sr = ctx.sampleRate > 0.0f ? ctx.sampleRate : sampleRate_;
         immutable uint frames = ctx.frames;
 
-        voices_.forEachActive((ref SpectraVoiceSlot v, NoteId id) @nogc nothrow {
-            cast(void) id;
-            v.renderAdd(outL, outR, frames, tbl, sr);
-        });
+        if (currentTablePtr_ is null || currentTableLen_ < 2) {
+            currentTablePtr_ = target.ptr;
+            currentTableLen_ = target.length;
+            fadeFromPtr_ = null;
+            fadeFromLen_ = 0;
+            fadePos_ = 0;
+            fadeTotal_ = 0;
+        } else if (target.ptr !is currentTablePtr_ || target.length != currentTableLen_) {
+            fadeFromPtr_ = currentTablePtr_;
+            fadeFromLen_ = currentTableLen_;
+            currentTablePtr_ = target.ptr;
+            currentTableLen_ = target.length;
+            fadePos_ = 0;
+            immutable uint fadeFrames = cast(uint)(sr * (TABLE_CROSSFADE_MS * 0.001f) + 0.5f);
+            fadeTotal_ = fadeFrames > 0 ? fadeFrames : 1;
+        }
+
+        const(float)[] curTbl = currentTablePtr_[0 .. currentTableLen_];
+        if (fadeTotal_ > 0 && fadePos_ < fadeTotal_ && fadeFromPtr_ !is null && fadeFromLen_ >= 2) {
+            const(float)[] oldTbl = fadeFromPtr_[0 .. fadeFromLen_];
+            immutable uint fPos = fadePos_;
+            immutable uint fTotal = fadeTotal_;
+            voices_.forEachActive((ref SpectraVoiceSlot v, NoteId id) @nogc nothrow {
+                cast(void) id;
+                v.renderAddCrossfade(outL, outR, frames, oldTbl, curTbl, fPos, fTotal, sr);
+            });
+            fadePos_ += frames;
+            if (fadePos_ >= fadeTotal_) {
+                fadeFromPtr_ = null;
+                fadeFromLen_ = 0;
+                fadePos_ = 0;
+                fadeTotal_ = 0;
+            }
+        } else {
+            voices_.forEachActive((ref SpectraVoiceSlot v, NoteId id) @nogc nothrow {
+                cast(void) id;
+                v.renderAdd(outL, outR, frames, curTbl, sr);
+            });
+        }
 
         float peak = 0.0f;
         foreach (i; 0 .. frames) {
@@ -762,6 +871,19 @@ struct SpectraVoice {
         oldAsset = null;
         if (slot != 0) {
             return false;
+        }
+        if (tableAsset_ !is null && !tableAsset_.wavetable.empty()) {
+            const(float)* dying = tableAsset_.wavetable.ptr;
+            if (currentTablePtr_ is dying) {
+                currentTablePtr_ = null;
+                currentTableLen_ = 0;
+            }
+            if (fadeFromPtr_ is dying) {
+                fadeFromPtr_ = null;
+                fadeFromLen_ = 0;
+                fadePos_ = 0;
+                fadeTotal_ = 0;
+            }
         }
         oldAsset = tableAsset_;
         tableAsset_ = cast(SpectraTableAsset*) newAsset;

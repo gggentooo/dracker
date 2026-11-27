@@ -1,37 +1,43 @@
 /**
  * File:         source/compose/project_writer.d
  * Module:       compose.project_writer
- * Phase:        Composition helper (dracker-compose) — T76 (Project writer, first part)
+ * Phase:        Composition helper (dracker-compose) — T76 & T96 (Project writer: modules, wires, saving)
  *
  * Purpose:
- *   Holds one project being built: its title, tempo, ticks per line, time signature and key, and the modules
- *   under the handle names a script will use. Master Output exists from the start as "out". Modules are added
- *   from ModuleWriter, renamed, given a displayed name, repositioned (automatic layout when no position is
- *   given) and removed. The writer ends as a LoadedProject, as .msv bytes or as a file, all through the app's
- *   own checks (validateProjectForSave, serializeProject, saveProject). Problems come back as data — kind,
- *   subject, reason and the nearest valid handle or value — so a front end decides how to show them. Wires
- *   (T96), parts (T77) and script text (T83) are not here.
+ *   Holds one project being built: its title, tempo, ticks per line, time signature and key, its modules
+ *   under the handle names a script will use, and the wires between their ports. Master Output exists from
+ *   the start as "out". Modules are added from ModuleWriter, renamed, given a displayed name, repositioned
+ *   (automatic layout when no position is given) and removed (which also drops their wires). Wires are
+ *   checked by handle, port name, direction, port kind compatibility, duplicate check, gain validity and
+ *   GraphCompiler cycle check (rejecting feedback loops unless broken by a Feedback module). Before writing
+ *   .msv bytes or a file, the project runs through both the app's save checks and a trial activation in
+ *   StudioSession. Problems come back as data — kind, subject, reason and the nearest valid handle, port or
+ *   value — so a front end decides how to show them.
  *
  * Real-Time & Safety Contract:
- *   Off-RT. Everything is @safe nothrow; saveProjectFile is the one @trusted adapter because io.project_format
- *   saveProject carries no safety marks although it only hands validated bytes to the file system.
+ *   Off-RT. Public API is @safe nothrow; saveProjectFile, checkGraphWires and activateProjectInSession are
+ *   localized @trusted adapters around GraphCompiler, StudioSession and saveProject.
  *
  * Dependencies:
- *   Internal: app.music_theory (KeyMode, MusicalKey), compose.module_writer (ModuleWriter, ModuleEditResult,
- *             ModuleWriterResult), compose.names (namesMatch, nearestName, trim), compose.timing
- *             (TimeSignature, formatTimeSignature, defaultTimeSignature), io.project_format (LoadedProject,
- *             SavedModule, SavedPattern, limits, validators, serializer, writer), sequencer.note (NoteCell),
- *             sequencer.timeline (TimelineClip)
+ *   Internal: app.music_theory (KeyMode, MusicalKey), app.session (StudioSession), compose.module_writer
+ *             (ModuleWriter, ModuleEditResult, ModuleWriterResult), compose.names (namesMatch, nearestName,
+ *             trim), compose.timing (TimeSignature, formatTimeSignature, defaultTimeSignature),
+ *             foundation.types (ModuleId), graph.module_api (ModuleDescriptor), graph.plan
+ *             (GraphCompileError, GraphCompiler, GraphPlan, NodeSpec, WireSpec), graph.port
+ *             (arePortsCompatible, isAudioPort, PortDescriptor, PortDirection, PortKind), io.project_format
+ *             (LoadedProject, SavedModule, SavedPattern, SavedWire, limits, validators, serializer, writer),
+ *             sequencer.note (NoteCell), sequencer.timeline (TimelineClip)
  *   External: std.math
  *
  * Planned API (Types, Functions & Hooks):
  *   - enum OUTPUT_HANDLE/OUTPUT_TYPE_ID/OUTPUT_MODULE_ID and the layout and starter constants
  *   - enum ProjectProblemKind; struct ProjectProblem; ProjectEditResult; ProjectIdResult; ProjectModuleResult;
- *     ProjectDocumentResult; ProjectBytesResult; ProjectKeyResult
+ *     ProjectWire; ProjectDocumentResult; ProjectBytesResult; ProjectKeyResult
  *   - final class ProjectWriter: title(), tempo(), ticksPerLine(), timeSignature(), key(), moduleCount(),
  *     handles(), hasModule(), moduleId(), moduleOf(), addModule(), addModuleAt(), renameModule(),
- *     setModuleName(), moveModule(), removeModule(), setTitle(), setTempo(), setTicksPerLine(),
- *     setTimeSignature(), setKey(), document(), documentBytes(), writeDocument(), msvBytes(), writeFile()
+ *     setModuleName(), moveModule(), removeModule(), wireCount(), wires(), connect(), disconnect(),
+ *     setTitle(), setTempo(), setTicksPerLine(), setTimeSignature(), setKey(), document(), trialActivate(),
+ *     documentBytes(), writeDocument(), msvBytes(), writeFile()
  *   - isValidHandle(); suggestedHandle(); parseKey()
  *
  * See_Also:
@@ -42,12 +48,17 @@ module compose.project_writer;
 import std.math : isFinite;
 
 import app.music_theory : KeyMode, MusicalKey;
-import compose.module_writer : ModuleEditResult, ModuleWriter, ModuleWriterResult;
+import app.session : StudioSession;
+import compose.module_writer : ModuleEditResult, ModuleProblem, ModuleWriter, ModuleWriterResult;
 import compose.names : namesMatch, nearestName, trim;
 import compose.timing : TimeSignature, formatTimeSignature, defaultTimeSignature;
-import io.project_format : LoadedProject, MAX_MODULES, MAX_PROJECT_BPM, MAX_PROJECT_TPL, MAX_STRING_LEN,
-    MIN_PROJECT_BPM, SavedModule, SavedPattern, isValidKey, isValidTempo, saveProject, serializeProject,
-    validateProjectForSave;
+import foundation.types : ModuleId;
+import graph.module_api : ModuleDescriptor;
+import graph.plan : GraphCompileError, GraphCompiler, GraphPlan, NodeSpec, WireSpec;
+import graph.port : arePortsCompatible, isAudioPort, PortDescriptor, PortDirection, PortKind;
+import io.project_format : LoadedProject, loadProject, loadProjectFile, MAX_MODULES, MAX_PROJECT_BPM,
+    MAX_PROJECT_TPL, MAX_STRING_LEN, MAX_WIRES, MIN_PROJECT_BPM, SavedModule, SavedPattern, SavedWire,
+    isValidKey, isValidTempo, saveProject, serializeProject, validateProjectForSave;
 import sequencer.note : NoteCell;
 import sequencer.timeline : TimelineClip;
 
@@ -103,7 +114,15 @@ enum ProjectProblemKind : ubyte {
     invalidPosition = 11,
     invalidProject = 12,
     writeFailed = 13,
-    invalidName = 14
+    invalidName = 14,
+    unknownPort = 15,
+    invalidPortDirection = 16,
+    incompatiblePorts = 17,
+    duplicateWire = 18,
+    unknownWire = 19,
+    tooManyWires = 20,
+    invalidGain = 21,
+    feedbackLoop = 22
 }
 
 /**
@@ -182,6 +201,52 @@ struct ProjectBytesResult {
  */
 struct ProjectKeyResult {
     MusicalKey key = MusicalKey.init;
+    bool ok = false;
+    ProjectProblem problem = ProjectProblem.init;
+}
+
+/**
+ * One wire in the project, reported with current module handles, port names, ids, port indices and gain.
+ */
+struct ProjectWire {
+    string srcHandle;
+    string srcPort;
+    string dstHandle;
+    string dstPort;
+    uint srcModuleId = 0;
+    ushort srcPortIndex = 0;
+    uint dstModuleId = 0;
+    ushort dstPortIndex = 0;
+    float gain = 1.0f;
+}
+
+/**
+ * Internal stored wire keyed by module ids so renaming a module preserves all its wires.
+ */
+struct WireEntry {
+    uint srcId = 0;
+    ushort srcPort = 0;
+    uint dstId = 0;
+    ushort dstPort = 0;
+    float gain = 1.0f;
+}
+
+/**
+ * Mapping assigned when opening an existing .msv file: the saved module id, its derived handle, and its
+ * original displayed name.
+ */
+struct LoadedModuleHandle {
+    uint id = 0;
+    string handle = "";
+    string name = "";
+}
+
+/**
+ * Result of opening an existing project document, bytes, or .msv file into a ProjectWriter.
+ */
+struct ProjectOpenResult {
+    ProjectWriter writer = null;
+    LoadedModuleHandle[] handles;
     bool ok = false;
     ProjectProblem problem = ProjectProblem.init;
 }
@@ -339,19 +404,74 @@ string suggestedHandle(string text) @safe pure nothrow {
 }
 
 /**
- * Reports whether a problem kind is about a module handle or displayed name, which is suggested with
- * "did you mean".
+ * Reports whether a problem kind is about a module handle, displayed name or port name, which is suggested
+ * with "did you mean".
  *
  * Params:
  *   kind = The problem kind.
  *
  * Returns:
- *   True for invalidHandle, duplicateHandle, unknownHandle, protectedModule and invalidName.
+ *   True for handle, name, and port lookup problems.
  */
 private bool isHandleProblem(ProjectProblemKind kind) @safe pure nothrow @nogc {
     return kind == ProjectProblemKind.invalidHandle || kind == ProjectProblemKind.duplicateHandle
         || kind == ProjectProblemKind.unknownHandle || kind == ProjectProblemKind.protectedModule
-        || kind == ProjectProblemKind.invalidName;
+        || kind == ProjectProblemKind.invalidName || kind == ProjectProblemKind.unknownPort
+        || kind == ProjectProblemKind.invalidPortDirection;
+}
+
+/**
+ * Human-readable label for a port kind.
+ *
+ * Params:
+ *   kind = The port kind.
+ *
+ * Returns:
+ *   Short label describing the port kind.
+ */
+private string portKindLabel(PortKind kind) @safe pure nothrow @nogc {
+    final switch (kind) {
+        case PortKind.audioStereo:
+            return "stereo audio";
+        case PortKind.audioMono:
+            return "mono audio";
+        case PortKind.sidechainStereo:
+            return "sidechain";
+        case PortKind.cvControl:
+            return "CV";
+        case PortKind.event:
+            return "event";
+    }
+}
+
+/**
+ * Human-readable label for a GraphCompileError.
+ *
+ * Params:
+ *   err = The compile error.
+ *
+ * Returns:
+ *   Short diagnostic text.
+ */
+private string graphErrorText(GraphCompileError err) @safe pure nothrow @nogc {
+    final switch (err) {
+        case GraphCompileError.none:
+            return "no error";
+        case GraphCompileError.cycleDetected:
+            return "graph contains a feedback loop";
+        case GraphCompileError.invalidNode:
+            return "graph references an invalid module";
+        case GraphCompileError.duplicateNodeId:
+            return "graph contains a duplicate module id";
+        case GraphCompileError.invalidPort:
+            return "graph references an invalid port";
+        case GraphCompileError.invalidDirection:
+            return "wire connects incompatible port directions";
+        case GraphCompileError.incompatiblePorts:
+            return "wire connects incompatible port kinds";
+        case GraphCompileError.outOfMemory:
+            return "out of memory compiling graph";
+    }
 }
 
 /**
@@ -415,7 +535,10 @@ final class ProjectWriter {
     private TimeSignature signature_;
     private MusicalKey key_;
     private ModuleEntry[] entries_;
+    private WireEntry[] wires_;
     private uint nextModuleId_ = OUTPUT_MODULE_ID + 1;
+    private bool hasPreservedBase_ = false;
+    private LoadedProject preservedBase_;
 
     /**
      * Starts a project with the app's defaults ("Untitled", 125.0 bpm, 6 ticks per line, 4/4, C major) and
@@ -424,6 +547,133 @@ final class ProjectWriter {
     this() @safe nothrow {
         ModuleWriterResult master = ModuleWriter.fromType(OUTPUT_TYPE_ID);
         entries_ ~= ModuleEntry(OUTPUT_HANDLE, OUTPUT_MODULE_ID, master.writer, false, 0.0f, 0.0f);
+    }
+
+    /**
+     * Opens an existing LoadedProject into a new ProjectWriter (T82), deriving unique handles from each
+     * module's name and preserving patterns, clips, loop range, author, format version, MIDI mappings,
+     * drum lanes, module extra data, and MetaModule children verbatim.
+     *
+     * Params:
+     *   proj = Parsed or constructed LoadedProject.
+     *
+     * Returns:
+     *   ProjectOpenResult with populated ProjectWriter and handle table, or invalidProject.
+     */
+    static ProjectOpenResult fromLoadedProject(const ref LoadedProject proj) @safe nothrow {
+        string err;
+        if (!validateProjectForSave(proj, err)) {
+            return ProjectOpenResult(null, null, false, ProjectProblem(ProjectProblemKind.invalidProject,
+                proj.title, "the project cannot be opened: " ~ err, ""));
+        }
+        ProjectWriter w = new ProjectWriter();
+        w.entries_ = null;
+        w.wires_ = null;
+        w.title_ = proj.title;
+        w.bpm_ = proj.bpm;
+        w.ticksPerLine_ = proj.ticksPerLine;
+        w.signature_ = TimeSignature(proj.timeSigNumerator, proj.timeSigDenominator);
+        w.key_ = MusicalKey(proj.keyTonic, cast(KeyMode) proj.keyMode);
+        w.hasPreservedBase_ = true;
+        w.preservedBase_ = copyPreservedBase(proj);
+
+        uint maxId = OUTPUT_MODULE_ID;
+        LoadedModuleHandle[] assigned;
+        foreach (ref sm; proj.modules) {
+            ModuleWriterResult modRes = ModuleWriter.fromSavedModule(sm);
+            if (!modRes.ok) {
+                return ProjectOpenResult(null, null, false, ProjectProblem(ProjectProblemKind.invalidProject,
+                    sm.name.length > 0 ? sm.name : sm.typeId, modRes.problem.reason, modRes.problem.suggestion));
+            }
+            string baseHandle;
+            if (sm.id == OUTPUT_MODULE_ID || modRes.writer.descriptor().isOutput) {
+                baseHandle = w.indexOfHandle(OUTPUT_HANDLE) == w.entries_.length
+                    ? OUTPUT_HANDLE : suggestedHandle(sm.name.length > 0 ? sm.name : OUTPUT_HANDLE);
+            } else {
+                baseHandle = suggestedHandle(sm.name);
+            }
+            immutable string handle = w.indexOfHandle(baseHandle) == w.entries_.length
+                ? baseHandle : w.freeHandle(baseHandle);
+            w.entries_ ~= ModuleEntry(handle, sm.id, modRes.writer, true, sm.posX, sm.posY);
+            assigned ~= LoadedModuleHandle(sm.id, handle, sm.name);
+            if (sm.id > maxId) {
+                maxId = sm.id;
+            }
+        }
+        w.nextModuleId_ = maxId + 1;
+        foreach (ref wire; proj.wires) {
+            w.wires_ ~= WireEntry(wire.srcMod, wire.srcPort, wire.dstMod, wire.dstPort, wire.gain);
+        }
+        return ProjectOpenResult(w, assigned, true);
+    }
+
+    /**
+     * Opens serialized .msv bytes into a new ProjectWriter (T82).
+     *
+     * Params:
+     *   bytes = Raw .msv bytes.
+     *
+     * Returns:
+     *   ProjectOpenResult.
+     */
+    static ProjectOpenResult fromBytes(const(ubyte)[] bytes) @safe nothrow {
+        LoadedProject proj;
+        string err;
+        if (!loadProject(bytes, proj, err)) {
+            return ProjectOpenResult(null, null, false, ProjectProblem(ProjectProblemKind.invalidProject,
+                "", "could not open the project: " ~ err, ""));
+        }
+        return fromLoadedProject(proj);
+    }
+
+    /**
+     * Opens an existing .msv file from disk into a new ProjectWriter (T82).
+     *
+     * Params:
+     *   path = Source .msv file path.
+     *
+     * Returns:
+     *   ProjectOpenResult.
+     */
+    static ProjectOpenResult fromFile(string path) @safe nothrow {
+        LoadedProject proj;
+        string err;
+        if (!loadProjectFileSafe(path, proj, err)) {
+            return ProjectOpenResult(null, null, false, ProjectProblem(ProjectProblemKind.invalidProject,
+                path, "could not open '" ~ path ~ "': " ~ err, ""));
+        }
+        return fromLoadedProject(proj);
+    }
+
+    /**
+     * Loads a single saved module verbatim (including extraBlob and MetaModule children) from an
+     * existing .msv file by numeric module id for `module <handle> keep=<file>:<id>` (T87).
+     *
+     * Params:
+     *   path = Source .msv file path.
+     *   modId = Saved module id inside the project.
+     *
+     * Returns:
+     *   ModuleWriterResult wrapping fromSavedModule(sm), or unreadablePreset/unknownModuleType.
+     */
+    static ModuleWriterResult loadKeptModule(string path, uint modId) @safe nothrow {
+        import compose.module_writer : ModuleProblemKind;
+
+        LoadedProject proj;
+        string err;
+        if (!loadProjectFileSafe(path, proj, err)) {
+            return ModuleWriterResult(ModuleWriter.init, false, ModuleProblem(
+                ModuleProblemKind.unreadablePreset, path,
+                "could not open kept module source '" ~ path ~ "': " ~ err, ""));
+        }
+        foreach (ref sm; proj.modules) {
+            if (sm.id == modId) {
+                return ModuleWriter.fromSavedModule(sm);
+            }
+        }
+        return ModuleWriterResult(ModuleWriter.init, false, ModuleProblem(
+            ModuleProblemKind.unreadablePreset, path,
+            "module id " ~ wholeText(modId) ~ " was not found in '" ~ path ~ "'", ""));
     }
 
     /**
@@ -598,6 +848,62 @@ final class ProjectWriter {
     }
 
     /**
+     * Replaces a module's stored ModuleWriter (keeping its handle, module id, layout placement, and wires),
+     * optionally keeping its existing displayed name.
+     *
+     * Params:
+     *   handle = Module handle.
+     *   writer = New writer (copied; must match module type if preserving wires).
+     *   keepDisplayedName = When true, keeps the module's existing displayed name if non-empty.
+     *   problemOut = Optional module problem from name/descriptor validation.
+     *
+     * Returns:
+     *   ok, or unknownHandle / notLoaded.
+     */
+    ProjectEditResult replaceModuleWriter(string handle, ModuleWriter writer, bool keepDisplayedName = true)
+            @safe nothrow {
+        immutable size_t index = indexOfHandle(handle);
+        if (index == entries_.length) {
+            return ProjectEditResult(false, unknownHandleProblem(handle));
+        }
+        if (!writer.loaded()) {
+            return ProjectEditResult(false, ProjectProblem(ProjectProblemKind.notLoaded, handle,
+                "the module writer for '" ~ handle ~ "' holds no module", ""));
+        }
+        immutable string prevName = entries_[index].writer.name();
+        ModuleWriter stored = ModuleWriter(writer);
+        if (keepDisplayedName && prevName.length > 0) {
+            cast(void) stored.setName(prevName);
+        }
+        entries_[index].writer = stored;
+        return ProjectEditResult(true);
+    }
+
+    /**
+     * Sets a parameter on a module by text (decimal number or discrete option name).
+     *
+     * Params:
+     *   handle = Module handle.
+     *   paramName = Parameter display name (matched case/space-insensitively).
+     *   valueText = Parameter value text.
+     *
+     * Returns:
+     *   ok, or unknownHandle / parameter error.
+     */
+    ProjectEditResult setModuleParam(string handle, string paramName, string valueText) @safe nothrow {
+        immutable size_t index = indexOfHandle(handle);
+        if (index == entries_.length) {
+            return ProjectEditResult(false, unknownHandleProblem(handle));
+        }
+        immutable ModuleEditResult res = entries_[index].writer.setParamText(paramName, valueText);
+        if (!res.ok) {
+            return ProjectEditResult(false, ProjectProblem(ProjectProblemKind.invalidName,
+                res.problem.subject, res.problem.reason, res.problem.suggestion));
+        }
+        return ProjectEditResult(true);
+    }
+
+    /**
      * Sets a module's displayed name, which may differ from its handle. The Master Output keeps its name.
      *
      * Params:
@@ -649,7 +955,7 @@ final class ProjectWriter {
     }
 
     /**
-     * Removes a module. The Master Output cannot be removed.
+     * Removes a module and every wire connected to it. The Master Output cannot be removed.
      *
      * Params:
      *   handle = The handle of the module.
@@ -665,6 +971,7 @@ final class ProjectWriter {
         if (entries_[index].id == OUTPUT_MODULE_ID) {
             return ProjectEditResult(false, protectedProblem(handle, "removed"));
         }
+        immutable uint removedId = entries_[index].id;
         ModuleEntry[] kept;
         foreach (i; 0 .. entries_.length) {
             if (i != index) {
@@ -672,6 +979,201 @@ final class ProjectWriter {
             }
         }
         entries_ = kept;
+        WireEntry[] keptWires;
+        foreach (ref w; wires_) {
+            if (w.srcId != removedId && w.dstId != removedId) {
+                keptWires ~= w;
+            }
+        }
+        wires_ = keptWires;
+        return ProjectEditResult(true);
+    }
+
+    /**
+     * Returns how many wires the project currently holds.
+     *
+     * Returns:
+     *   Wire count.
+     */
+    size_t wireCount() const @safe nothrow {
+        return wires_.length;
+    }
+
+    /**
+     * Lists all wires in insertion order using current module handles and port display names.
+     *
+     * Returns:
+     *   Array of ProjectWire snapshots.
+     */
+    ProjectWire[] wires() const @safe nothrow {
+        ProjectWire[] list;
+        list.reserve(wires_.length);
+        foreach (ref w; wires_) {
+            immutable size_t si = indexOfId(w.srcId);
+            immutable size_t di = indexOfId(w.dstId);
+            if (si == entries_.length || di == entries_.length) {
+                continue;
+            }
+            auto sPorts = entries_[si].writer.descriptor().ports;
+            auto dPorts = entries_[di].writer.descriptor().ports;
+            immutable string sPortName = w.srcPort < sPorts.length ? sPorts[w.srcPort].name : "";
+            immutable string dPortName = w.dstPort < dPorts.length ? dPorts[w.dstPort].name : "";
+            list ~= ProjectWire(entries_[si].handle, sPortName, entries_[di].handle, dPortName,
+                w.srcId, w.srcPort, w.dstId, w.dstPort, w.gain);
+        }
+        return list;
+    }
+
+    /**
+     * Connects an output port on srcHandle to an input port on dstHandle with a gain factor.
+     *
+     * Empty srcPort / dstPort default to the first audio output / first audio input port of the module.
+     * Validates handles, port names (with nearest-name suggestions), directions, port kind compatibility,
+     * gain, duplicates, wire limit, and GraphCompiler cycle checks (allowing loops broken by a Feedback module).
+     *
+     * Params:
+     *   srcHandle = Source module handle.
+     *   dstHandle = Destination module handle.
+     *   gain = Linear wire gain (finite, >= 0, default 1.0).
+     *   srcPort = Source output port id or name, or "" for first audio output.
+     *   dstPort = Destination input port id or name, or "" for first audio input.
+     *
+     * Returns:
+     *   ok, or unknownHandle, unknownPort, invalidPortDirection, incompatiblePorts, invalidGain,
+     *   duplicateWire, tooManyWires, feedbackLoop or invalidProject.
+     */
+    ProjectEditResult connect(string srcHandle, string dstHandle, float gain = 1.0f,
+            string srcPort = "", string dstPort = "") @safe nothrow {
+        immutable size_t si = indexOfHandle(srcHandle);
+        if (si == entries_.length) {
+            return ProjectEditResult(false, unknownHandleProblem(srcHandle));
+        }
+        immutable size_t di = indexOfHandle(dstHandle);
+        if (di == entries_.length) {
+            return ProjectEditResult(false, unknownHandleProblem(dstHandle));
+        }
+        if (!isFinite(gain) || gain < 0.0f) {
+            return ProjectEditResult(false, ProjectProblem(ProjectProblemKind.invalidGain, "gain",
+                "wire gain must be a finite number of 0 or more", "1"));
+        }
+
+        ushort srcPortIdx = 0;
+        ProjectProblem portProb;
+        if (!resolvePort(entries_[si], srcPort, PortDirection.output, srcPortIdx, portProb)) {
+            return ProjectEditResult(false, portProb);
+        }
+        ushort dstPortIdx = 0;
+        if (!resolvePort(entries_[di], dstPort, PortDirection.input, dstPortIdx, portProb)) {
+            return ProjectEditResult(false, portProb);
+        }
+
+        immutable auto sDesc = entries_[si].writer.descriptor().ports[srcPortIdx];
+        immutable auto dDesc = entries_[di].writer.descriptor().ports[dstPortIdx];
+        if (!arePortsCompatible(sDesc.kind, dDesc.kind)) {
+            return ProjectEditResult(false, ProjectProblem(ProjectProblemKind.incompatiblePorts,
+                entries_[si].handle ~ " -> " ~ entries_[di].handle,
+                "cannot connect " ~ portKindLabel(sDesc.kind) ~ " port '" ~ sDesc.name ~ "' on '"
+                ~ entries_[si].handle ~ "' to " ~ portKindLabel(dDesc.kind) ~ " port '" ~ dDesc.name
+                ~ "' on '" ~ entries_[di].handle ~ "'", ""));
+        }
+
+        immutable uint sId = entries_[si].id;
+        immutable uint dId = entries_[di].id;
+        foreach (ref existing; wires_) {
+            if (existing.srcId == sId && existing.srcPort == srcPortIdx
+                    && existing.dstId == dId && existing.dstPort == dstPortIdx) {
+                return ProjectEditResult(false, ProjectProblem(ProjectProblemKind.duplicateWire,
+                    entries_[si].handle ~ " -> " ~ entries_[di].handle,
+                    "a wire from '" ~ entries_[si].handle ~ "' (" ~ sDesc.name ~ ") to '"
+                    ~ entries_[di].handle ~ "' (" ~ dDesc.name ~ ") already exists", ""));
+            }
+        }
+        if (wires_.length >= MAX_WIRES) {
+            return ProjectEditResult(false, ProjectProblem(ProjectProblemKind.tooManyWires,
+                entries_[si].handle ~ " -> " ~ entries_[di].handle,
+                "a project holds at most " ~ wholeText(MAX_WIRES) ~ " wires", ""));
+        }
+
+        WireEntry candidate = WireEntry(sId, srcPortIdx, dId, dstPortIdx, gain);
+        GraphCompileError compileErr = GraphCompileError.none;
+        if (!checkGraphWithCandidate(candidate, compileErr)) {
+            if (compileErr == GraphCompileError.cycleDetected) {
+                return ProjectEditResult(false, ProjectProblem(ProjectProblemKind.feedbackLoop,
+                    entries_[si].handle ~ " -> " ~ entries_[di].handle,
+                    "connecting '" ~ entries_[si].handle ~ "' to '" ~ entries_[di].handle
+                    ~ "' creates a feedback loop; break the loop with a Feedback module", ""));
+            }
+            return ProjectEditResult(false, ProjectProblem(ProjectProblemKind.invalidProject,
+                entries_[si].handle ~ " -> " ~ entries_[di].handle,
+                "the graph rejected the wire: " ~ graphErrorText(compileErr), ""));
+        }
+
+        wires_ ~= candidate;
+        return ProjectEditResult(true);
+    }
+
+    /**
+     * Removes an existing wire between srcHandle and dstHandle.
+     *
+     * Empty srcPort / dstPort resolve to the default first audio output / first audio input.
+     *
+     * Params:
+     *   srcHandle = Source module handle.
+     *   dstHandle = Destination module handle.
+     *   srcPort = Source output port id or name, or "" for first audio output.
+     *   dstPort = Destination input port id or name, or "" for first audio input.
+     *
+     * Returns:
+     *   ok, or unknownHandle, unknownPort, invalidPortDirection or unknownWire.
+     */
+    ProjectEditResult disconnect(string srcHandle, string dstHandle,
+            string srcPort = "", string dstPort = "") @safe nothrow {
+        immutable size_t si = indexOfHandle(srcHandle);
+        if (si == entries_.length) {
+            return ProjectEditResult(false, unknownHandleProblem(srcHandle));
+        }
+        immutable size_t di = indexOfHandle(dstHandle);
+        if (di == entries_.length) {
+            return ProjectEditResult(false, unknownHandleProblem(dstHandle));
+        }
+
+        ushort srcPortIdx = 0;
+        ProjectProblem portProb;
+        if (!resolvePort(entries_[si], srcPort, PortDirection.output, srcPortIdx, portProb)) {
+            return ProjectEditResult(false, portProb);
+        }
+        ushort dstPortIdx = 0;
+        if (!resolvePort(entries_[di], dstPort, PortDirection.input, dstPortIdx, portProb)) {
+            return ProjectEditResult(false, portProb);
+        }
+
+        immutable uint sId = entries_[si].id;
+        immutable uint dId = entries_[di].id;
+        size_t matchIdx = wires_.length;
+        foreach (i; 0 .. wires_.length) {
+            if (wires_[i].srcId == sId && wires_[i].srcPort == srcPortIdx
+                    && wires_[i].dstId == dId && wires_[i].dstPort == dstPortIdx) {
+                matchIdx = i;
+                break;
+            }
+        }
+        if (matchIdx == wires_.length) {
+            immutable auto sDesc = entries_[si].writer.descriptor().ports[srcPortIdx];
+            immutable auto dDesc = entries_[di].writer.descriptor().ports[dstPortIdx];
+            return ProjectEditResult(false, ProjectProblem(ProjectProblemKind.unknownWire,
+                entries_[si].handle ~ " -> " ~ entries_[di].handle,
+                "there is no wire from '" ~ entries_[si].handle ~ "' (" ~ sDesc.name ~ ") to '"
+                ~ entries_[di].handle ~ "' (" ~ dDesc.name ~ ")", ""));
+        }
+
+        WireEntry[] kept;
+        kept.reserve(wires_.length - 1);
+        foreach (i; 0 .. wires_.length) {
+            if (i != matchIdx) {
+                kept ~= wires_[i];
+            }
+        }
+        wires_ = kept;
         return ProjectEditResult(true);
     }
 
@@ -781,6 +1283,9 @@ final class ProjectWriter {
      */
     ProjectDocumentResult document() const @safe nothrow {
         ProjectDocumentResult result;
+        if (hasPreservedBase_) {
+            result.project = copyPreservedBase(preservedBase_);
+        }
         result.project.title = title_;
         result.project.bpm = bpm_;
         result.project.ticksPerLine = ticksPerLine_;
@@ -788,6 +1293,8 @@ final class ProjectWriter {
         result.project.timeSigDenominator = cast(ubyte) signature_.denominator;
         result.project.keyTonic = key_.tonic;
         result.project.keyMode = cast(ubyte) key_.mode;
+        result.project.modules = null;
+        result.project.wires = null;
         uint slot = 0;
         foreach (i; 0 .. entries_.length) {
             SavedModule m = entries_[i].writer.savedModule(entries_[i].id);
@@ -804,14 +1311,19 @@ final class ProjectWriter {
             }
             result.project.modules ~= m;
         }
-        SavedPattern starter;
-        starter.patternId = 1;
-        starter.tracks = STARTER_PATTERN_TRACKS;
-        starter.lines = STARTER_PATTERN_LINES;
-        starter.name = STARTER_PATTERN_NAME;
-        starter.cells = new NoteCell[STARTER_PATTERN_TRACKS * STARTER_PATTERN_LINES];
-        result.project.patterns = [starter];
-        result.project.clips = [TimelineClip(1, 1, 0, 0, STARTER_PATTERN_LINES, 0, 0, false, false, false)];
+        foreach (ref w; wires_) {
+            result.project.wires ~= SavedWire(w.srcId, w.srcPort, w.dstId, w.dstPort, w.gain);
+        }
+        if (!hasPreservedBase_) {
+            SavedPattern starter;
+            starter.patternId = 1;
+            starter.tracks = STARTER_PATTERN_TRACKS;
+            starter.lines = STARTER_PATTERN_LINES;
+            starter.name = STARTER_PATTERN_NAME;
+            starter.cells = new NoteCell[STARTER_PATTERN_TRACKS * STARTER_PATTERN_LINES];
+            result.project.patterns = [starter];
+            result.project.clips = [TimelineClip(1, 1, 0, 0, STARTER_PATTERN_LINES, 0, 0, false, false, false)];
+        }
         string err;
         if (!validateProjectForSave(result.project, err)) {
             result.problem = ProjectProblem(ProjectProblemKind.invalidProject, title_,
@@ -823,13 +1335,32 @@ final class ProjectWriter {
     }
 
     /**
-     * Serializes a document through the app's own serializer.
+     * Runs a trial activation of a project in a temporary StudioSession (serialize, parse, compile graph,
+     * instantiate modules, and activate) without touching disk.
+     *
+     * Params:
+     *   project = The document to trial-activate.
+     *
+     * Returns:
+     *   ok, or invalidProject with the session's diagnostic reason.
+     */
+    ProjectEditResult trialActivate(const ref LoadedProject project) const @safe nothrow {
+        string err;
+        if (!activateProjectInSession(project, err)) {
+            return ProjectEditResult(false, ProjectProblem(ProjectProblemKind.invalidProject, project.title,
+                "the project failed trial activation: " ~ err, ""));
+        }
+        return ProjectEditResult(true);
+    }
+
+    /**
+     * Serializes a document through the app's own serializer and verifies it via trial activation.
      *
      * Params:
      *   project = The document to serialize.
      *
      * Returns:
-     *   The .msv bytes, or invalidProject with the validator's reason.
+     *   The .msv bytes, or invalidProject with the validator's or session's reason.
      */
     ProjectBytesResult documentBytes(const ref LoadedProject project) const @safe nothrow {
         ProjectBytesResult result;
@@ -839,12 +1370,19 @@ final class ProjectWriter {
                 "the project cannot be saved: " ~ err, "");
             return result;
         }
+        immutable ProjectEditResult act = trialActivate(project);
+        if (!act.ok) {
+            result.bytes = null;
+            result.problem = act.problem;
+            return result;
+        }
         result.ok = true;
         return result;
     }
 
     /**
-     * Writes a document as an .msv file: first the app's save checks, then the app's own writer.
+     * Writes a document as an .msv file: first the app's save checks, then trial activation in
+     * StudioSession, then the app's own file writer.
      *
      * Params:
      *   project = The document to write.
@@ -858,6 +1396,10 @@ final class ProjectWriter {
         if (!validateProjectForSave(project, err)) {
             return ProjectEditResult(false, ProjectProblem(ProjectProblemKind.invalidProject, project.title,
                 "the project cannot be saved: " ~ err, ""));
+        }
+        immutable ProjectEditResult act = trialActivate(project);
+        if (!act.ok) {
+            return act;
         }
         if (!saveProjectFile(project, path, err)) {
             return ProjectEditResult(false, ProjectProblem(ProjectProblemKind.writeFailed, path,
@@ -1044,6 +1586,246 @@ final class ProjectWriter {
     }
 
     /**
+     * The index of a module by id.
+     *
+     * Params:
+     *   id = Module id.
+     *
+     * Returns:
+     *   Index into entries_, or entries_.length when not found.
+     */
+    private size_t indexOfId(uint id) const @safe nothrow {
+        foreach (i; 0 .. entries_.length) {
+            if (entries_[i].id == id) {
+                return i;
+            }
+        }
+        return entries_.length;
+    }
+
+    /**
+     * Reports whether a loaded project base was preserved when opening an existing file.
+     *
+     * Returns:
+     *   True when constructed via fromLoadedProject/fromBytes/fromFile.
+     */
+    package bool hasPreservedBase() const @safe nothrow {
+        return hasPreservedBase_;
+    }
+
+    /**
+     * Returns an independent copy of the preserved LoadedProject base for PartWriter reconstruction.
+     *
+     * Returns:
+     *   Copied LoadedProject.
+     */
+    package LoadedProject preservedBaseDocument() const @safe nothrow {
+        return copyPreservedBase(preservedBase_);
+    }
+
+    /**
+     * Reports whether a module with the given numeric id currently exists in the project.
+     *
+     * Params:
+     *   id = Numeric module id.
+     *
+     * Returns:
+     *   True when found.
+     */
+    package bool hasModuleId(uint id) const @safe nothrow {
+        return indexOfId(id) != entries_.length;
+    }
+
+    /**
+     * Returns the handle string assigned to module id, or empty string if absent.
+     *
+     * Params:
+     *   id = Numeric module id.
+     *
+     * Returns:
+     *   Handle name or "".
+     */
+    package string handleForId(uint id) const @safe nothrow {
+        immutable size_t idx = indexOfId(id);
+        return idx < entries_.length ? entries_[idx].handle : "";
+    }
+
+    /**
+     * Resolves a port name (or empty string for the first audio port) on a module for the expected direction.
+     *
+     * Params:
+     *   entry = Module entry.
+     *   portName = Requested port id or display name, or "" for default audio port.
+     *   expectedDir = PortDirection.output for wire sources, PortDirection.input for destinations.
+     *   portIndex = Receives resolved port index when true is returned.
+     *   problem = Receives unknownPort or invalidPortDirection when false is returned.
+     *
+     * Returns:
+     *   True when a matching port in expectedDir was resolved.
+     */
+    private bool resolvePort(const ref ModuleEntry entry, string portName, PortDirection expectedDir,
+            out ushort portIndex, out ProjectProblem problem) const @safe nothrow {
+        auto ports = entry.writer.descriptor().ports;
+        immutable string clean = trim(portName);
+        immutable string dirWord = expectedDir == PortDirection.output ? "output" : "input";
+
+        if (clean.length == 0) {
+            string fallback;
+            foreach (i, ref p; ports) {
+                if (p.dir == expectedDir) {
+                    if (isAudioPort(p.kind)) {
+                        portIndex = cast(ushort) i;
+                        return true;
+                    }
+                    if (fallback.length == 0) {
+                        fallback = p.name;
+                    }
+                }
+            }
+            problem = ProjectProblem(ProjectProblemKind.unknownPort, entry.handle,
+                "module '" ~ entry.handle ~ "' has no audio " ~ dirWord ~ " port", fallback);
+            return false;
+        }
+
+        foreach (i, ref p; ports) {
+            if (p.dir == expectedDir && (namesMatch(p.id, clean) || namesMatch(p.name, clean))) {
+                portIndex = cast(ushort) i;
+                return true;
+            }
+        }
+
+        string[] validNames;
+        foreach (ref p; ports) {
+            if (p.dir == expectedDir) {
+                validNames ~= p.name;
+                if (!namesMatch(p.id, p.name)) {
+                    validNames ~= p.id;
+                }
+            }
+        }
+
+        foreach (ref p; ports) {
+            if (p.dir != expectedDir && (namesMatch(p.id, clean) || namesMatch(p.name, clean))) {
+                immutable string oppositeWord = expectedDir == PortDirection.output ? "input" : "output";
+                immutable string roleWord = expectedDir == PortDirection.output ? "source" : "destination";
+                immutable string suggestion = nearestPortDisplayName(clean, ports, expectedDir, validNames);
+                problem = ProjectProblem(ProjectProblemKind.invalidPortDirection, clean,
+                    "port '" ~ p.name ~ "' on '" ~ entry.handle ~ "' is an " ~ oppositeWord
+                    ~ " port and cannot be used as a wire " ~ roleWord, suggestion);
+                return false;
+            }
+        }
+
+        immutable string suggestion = nearestPortDisplayName(clean, ports, expectedDir, validNames);
+        problem = ProjectProblem(ProjectProblemKind.unknownPort, clean,
+            "module '" ~ entry.handle ~ "' has no " ~ dirWord ~ " port '" ~ clean ~ "'", suggestion);
+        return false;
+    }
+
+    /**
+     * Finds the display name of the nearest port in expectedDir to query.
+     *
+     * Params:
+     *   query = Requested port name.
+     *   ports = Module port descriptors.
+     *   expectedDir = Direction to filter by.
+     *   candidates = Pre-collected candidate ids and names in expectedDir.
+     *
+     * Returns:
+     *   Display name of the nearest port, or "" when none exists.
+     */
+    private static string nearestPortDisplayName(string query, immutable(PortDescriptor)[] ports,
+            PortDirection expectedDir, const(string)[] candidates) @safe pure nothrow {
+        immutable string hit = nearestName(query, candidates);
+        if (hit.length > 0) {
+            foreach (ref p; ports) {
+                if (p.dir == expectedDir && (namesMatch(p.name, hit) || namesMatch(p.id, hit))) {
+                    return p.name;
+                }
+            }
+            return hit;
+        }
+        foreach (ref p; ports) {
+            if (p.dir == expectedDir) {
+                return p.name;
+            }
+        }
+        return "";
+    }
+
+    /**
+     * Runs GraphCompiler.compile() on the current modules and wires plus one candidate wire to enforce
+     * exact cycle and graph-topology validation. Localized @trusted adapter because GraphCompiler takes
+     * raw NodeSpec.state pointers (which compile() checks for non-null and never dereferences) and returns
+     * a manually freed GraphPlan*.
+     *
+     * Params:
+     *   candidate = Additional wire to test.
+     *   compileErr = Receives GraphCompileError when compilation fails.
+     *
+     * Returns:
+     *   True when GraphCompiler accepts the graph.
+     */
+    private bool checkGraphWithCandidate(const ref WireEntry candidate, out GraphCompileError compileErr)
+            const @trusted nothrow {
+        ubyte sentinel = 1;
+        void* sentinelPtr = cast(void*) &sentinel;
+        NodeSpec[] nodes = new NodeSpec[entries_.length];
+        foreach (i; 0 .. entries_.length) {
+            nodes[i] = NodeSpec(ModuleId(entries_[i].id), entries_[i].writer.descriptor(), sentinelPtr,
+                false, false);
+        }
+        WireSpec[] specs = new WireSpec[wires_.length + 1];
+        foreach (i; 0 .. wires_.length) {
+            specs[i] = WireSpec(ModuleId(wires_[i].srcId), wires_[i].srcPort,
+                ModuleId(wires_[i].dstId), wires_[i].dstPort, wires_[i].gain);
+        }
+        specs[wires_.length] = WireSpec(ModuleId(candidate.srcId), candidate.srcPort,
+            ModuleId(candidate.dstId), candidate.dstPort, candidate.gain);
+
+        GraphPlan* plan = null;
+        bool ok = false;
+        try {
+            ok = GraphCompiler.compile(nodes, specs, plan, compileErr);
+        } catch (Exception) {
+            compileErr = GraphCompileError.outOfMemory;
+            ok = false;
+        }
+        if (plan !is null) {
+            GraphPlan.destroyOffRT(plan);
+        }
+        return ok;
+    }
+
+    /**
+     * Performs a trial activation in a short-lived StudioSession. Localized @trusted adapter because
+     * StudioSession manages an unmanaged RT Engine and carries no @safe/nothrow attributes.
+     *
+     * Params:
+     *   project = Project document to activate.
+     *   err = Receives diagnostic text on failure.
+     *
+     * Returns:
+     *   True when StudioSession initialized and activated the project cleanly.
+     */
+    private bool activateProjectInSession(const ref LoadedProject project, out string err) const @trusted nothrow {
+        try {
+            StudioSession session = new StudioSession();
+            if (!session.initialize(44_100.0f)) {
+                err = "Failed to initialize StudioSession for trial activation";
+                return false;
+            }
+            scope (exit) {
+                session.shutdown();
+            }
+            return session.openProjectFromMemory(project, err);
+        } catch (Exception ex) {
+            err = ex.msg.length > 0 ? ex.msg : "Trial activation failed";
+            return false;
+        }
+    }
+
+    /**
      * Writes a validated project with io.project_format saveProject. That function carries no @safe or
      * nothrow marks although it only hands validated bytes to the file system and catches its own file
      * exceptions, so this adapter is @trusted and turns any exception into a reason.
@@ -1063,6 +1845,67 @@ final class ProjectWriter {
             err = ex.msg.length > 0 ? ex.msg : "Failed writing .msv project file";
             return false;
         }
+    }
+
+    /**
+     * Loads a .msv project file using io.project_format.loadProjectFile via a localized @trusted
+     * adapter because loadProjectFile carries no @safe/nothrow attributes.
+     *
+     * Params:
+     *   path = Source .msv file path.
+     *   proj = Receives parsed LoadedProject.
+     *   err = Receives diagnostic text on failure.
+     *
+     * Returns:
+     *   True when loaded cleanly.
+     */
+    private static bool loadProjectFileSafe(string path, out LoadedProject proj, out string err) @trusted nothrow {
+        try {
+            return loadProjectFile(path, proj, err);
+        } catch (Exception ex) {
+            err = ex.msg.length > 0 ? ex.msg : "Failed reading .msv project file";
+            return false;
+        }
+    }
+
+    /**
+     * Deep-copies preserved LoadedProject metadata (patterns, cells, drum lanes, clips, loop range,
+     * author, formatVersion, and MIDI mappings) so repeated document() calls stay independent.
+     *
+     * Params:
+     *   src = Source LoadedProject.
+     *
+     * Returns:
+     *   Independent copy with cloned slices.
+     */
+    private static LoadedProject copyPreservedBase(const ref LoadedProject src) @safe pure nothrow {
+        LoadedProject dst;
+        dst.formatVersion = src.formatVersion;
+        dst.title = src.title;
+        dst.author = src.author;
+        dst.bpm = src.bpm;
+        dst.ticksPerLine = src.ticksPerLine;
+        dst.loopStartLine = src.loopStartLine;
+        dst.loopEndLine = src.loopEndLine;
+        dst.timeSigNumerator = src.timeSigNumerator;
+        dst.timeSigDenominator = src.timeSigDenominator;
+        dst.keyTonic = src.keyTonic;
+        dst.keyMode = src.keyMode;
+        dst.patterns.reserve(src.patterns.length);
+        foreach (ref p; src.patterns) {
+            SavedPattern cp;
+            cp.patternId = p.patternId;
+            cp.tracks = p.tracks;
+            cp.lines = p.lines;
+            cp.name = p.name;
+            cp.kind = p.kind;
+            cp.cells = p.cells.dup;
+            cp.lanes = p.lanes.dup;
+            dst.patterns ~= cp;
+        }
+        dst.clips = src.clips.dup;
+        dst.midiMappings = src.midiMappings.dup;
+        return dst;
     }
 }
 

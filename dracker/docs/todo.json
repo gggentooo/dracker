@@ -94,198 +94,211 @@
       "area": "Compose",
       "title": "Sections, parts, and their patterns",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/part_writer.d` (new), `source/app/pattern_notes.d`, `tests/unit/compose_part_test.d` (new)",
       "task": "Sections and parts per T68, without notes yet: a section has a name and a length in bars; a part is a name bound to one module handle of the project writer; each part gets one pattern per section it plays in, named \"*part* · *section*\", created on first use and sized from the section length and the time signature; the implicit section for scripts that name none. Lookups by name without regard to case or spaces, with the nearest name in every refusal. Tests: pattern names, sizes in 4/4, 3/4 and 6/8; two parts never share a pattern; a section longer than a pattern can hold is refused; unknown and duplicate names.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added compose.part_writer (PartWriter) implementing T68 sections, parts bound to ProjectWriter module handles, lazy per-(part, section) patterns named '<part> · <section>' sized from bars and time signature, implicit section for scripts without sections, case/space-insensitive lookups with nearest-name suggestions, and MAX_LINES overflow checks. Recorded in docs/changelog.md (2026-11-27 08:16:13 KST).",
       "needs": [
         "T68",
         "T76"
-      ]
+      ],
+      "closed": 90
     },
     {
       "id": "T83",
       "area": "Compose/script",
       "title": "Script language: lexer, interpreter core, project commands",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/script/lexer.d`, `source/compose/script/interpreter.d`, `source/compose/script/commands.d` (all new), `tests/unit/compose_script_test.d` (new), `tests/fuzz/compose_script_fuzz.d` (new)",
       "task": "The interpreter per T67, first part. Lexer: one command per line, `//` comments (not inside quotes), `\\` line continuation, double-quoted text, `name=value` options, with line and column for every token. Interpreter: a command table with typed arguments and named options, the state between commands (a project writer), and problems as data (line, column, what was expected, the nearest valid name). It takes one command at a time from any source and never prints (the seam for the app's script tab, T112). Commands of this task: `project`, `tempo`, `signature`, `key`, `save`. Tests for every token rule, every command and every error; a fuzz test that no input crashes the lexer or the interpreter.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added compose.script.{lexer,interpreter,commands} implementing the T67 script lexer (double-slash comments outside quotes, backslash line continuations, double-quoted escapes, name=value options, exact 1-based line/column), silent one-command-at-a-time interpreter with typed command table and nearest-name diagnostics, and project/tempo/signature/key/save commands with unit tests and a 20,000-iteration fuzz test. Recorded in docs/changelog.md (2026-11-27 08:16:13 KST).",
       "needs": [
         "T67",
         "T76"
-      ]
+      ],
+      "closed": 91
     },
     {
       "id": "T86",
       "area": "Compose/program",
       "title": "Render and report",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/render.d` (new), `source/compose_main.d`, `source/main.d` (`renderProjectToWav`, to share), `tests/unit/compose_render_test.d` (new)",
       "task": "`render`: play a project offline from the start to the end of the arrangement (plus a tail) and write a WAV. The report gives length, peak and average level overall and per bar, bars that are silent, whether the output limiter was reached, and per module whether it produced sound. Text and `--json` forms. Shares the offline render code with the app's sound check.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added compose.render sharing renderProjectToWav() with source/main.d and implementing renderProjectWithReport() (peak, RMS, per-bar levels, silent bars, limiter reached, per-module sound) in text and JSON forms. Recorded in docs/changelog.md (2026-11-27 08:40:17 KST).",
       "needs": [
         "T66",
         "T72",
         "T96"
-      ]
+      ],
+      "closed": 98
     },
     {
       "id": "T78",
       "area": "Compose",
       "title": "Chords for parts: timing, basic styles, voicing in root position",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/chord_writer.d` (new), `source/app/chord_progression.d`, `tests/unit/compose_chord_test.d` (new)",
       "task": "Writing a progression into a part per T69, first part: chord lengths (one bar by default, `Dm7:2`, `Dm7:1/2`, `|` between bars); the styles `hold`, `pulse` (with `every=`), `root` and `root5`; `octave=` and `voices=3|4` in root position; preset progressions by name; Roman numerals follow the project key. Uses `app.chord_progression` for parsing and chord notes. Tests: note-by-note results for each style in a major and a minor key and in 3/4; a bass part (`root`) and a keys part (`hold`) written from the same progression agree on the roots.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added compose.chord_writer (parseTimedProgression, presetTimedProgression, realizeChords, writeChords, writePresetChords for hold/pulse/root/root5, octave/voices=3|4 root voicing, and Roman numerals in key) with note-by-note major/minor/3/4/preset tests. Recorded in docs/changelog.md (2026-11-27 09:02:13 KST).",
       "needs": [
         "T69",
         "T97"
-      ]
+      ],
+      "closed": 101
     },
     {
       "id": "T79",
       "area": "Compose",
       "title": "Drum parts",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/drum_writer.d` (new), `tests/unit/compose_drum_test.d` (new)",
       "task": "Drum parts as drum patterns: lanes by name bound to a module and note (with the default kit names for a DrumSynth), hits written as step strings per lane (`kick: x---x---x---x---`, with accents) or at positions, velocities, and fills over a range of bars. Tests: the result opens in the app's drumpad model (`patternKind`, `patternLanes`, `drumHitAt`) with the expected hits.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added compose.drum_writer (DrumWriter) supporting DrumSynth default kits, multi-module lanes, step strings, position hits, and bar-range fills verified via StudioSession patternKind/patternLanes/drumHitAt and audio render tests. Recorded in docs/changelog.md (2026-11-27 08:40:17 KST).",
       "needs": [
         "T77"
-      ]
+      ],
+      "closed": 94
     },
     {
       "id": "T80",
       "area": "Compose",
       "title": "Tracker-level writing",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/part_writer.d`, `tests/unit/compose_part_test.d`",
       "task": "The exact level for cases the part level cannot express: write a cell at a given track and line of a pattern (note, velocity, module, effect command and value, note-off and other note commands), read cells back, and mix both levels in one pattern without the part level overwriting hand-placed cells.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added tracker-level pattern/cell writing and reading (addRawPattern, writeCell, writeParamCell, cellAt, isHandPlaced, and hand-placed protection in part-level writeNote/writeNotes) in compose.part_writer with unit tests. Recorded in docs/changelog.md (2026-11-27 09:02:13 KST).",
       "needs": [
         "T97"
-      ]
+      ],
+      "closed": 102
     },
     {
       "id": "T81",
       "area": "Compose",
       "title": "Phrase editing",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/part_writer.d`, `tests/unit/compose_part_test.d`",
       "task": "Operations an agent needs to work economically: copy a range of a part to another position or section, repeat a range a number of times, transpose a range (by semitones, or by scale steps in the project key), scale velocities, and clear a range. Tests for each, including ranges that cross the end of a section.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added atomic phrase-editing operations (copyRange, repeatRange, transposeRange, transposeRangeScaleSteps, scaleVelocities, clearRange) with section-end refusal guards in compose.part_writer and unit tests. Recorded in docs/changelog.md (2026-11-27 09:02:13 KST).",
       "needs": [
         "T97"
-      ]
+      ],
+      "closed": 103
     },
     {
       "id": "T82",
       "area": "Compose",
       "title": "Opening existing files: modules, wires, and everything kept",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/project_writer.d`, `source/compose/module_writer.d`, `tests/unit/compose_project_test.d`",
       "task": "Load a `.msv` into the project writer per T71, first part: properties, modules and wires get handles derived from the module names (made unique and reported), and everything the writer does not understand or change (patterns, clips, MIDI mappings, drum lanes, module extra data, MetaModule children, unknown future data the reader keeps) is preserved untouched through to the saved file. (`.msym` files already load through `ModuleWriter.fromPresetFile()`.) Tests: open and save without changes gives a file that plays identically, for the sample projects and for a project with a MetaModule, a sample and MIDI mappings; open, change a parameter and add a module, save, open in `StudioSession`.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added ModuleWriter.fromSavedModule() and ProjectWriter.fromLoadedProject()/fromBytes()/fromFile() preserving patterns, clips, MIDI mappings, drum lanes, extra data, and MetaModule children verbatim; verified bit-identical renders on sample-projects/midnight_pulse.msv and lobby_waltz.msv plus MetaModule+Sampler round-trips. Recorded in docs/changelog.md (2026-11-27 08:40:17 KST).",
       "needs": [
         "T71",
         "T96"
-      ]
+      ],
+      "closed": 95
     },
     {
       "id": "T85",
       "area": "Compose/program",
       "title": "Catalog",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/catalog.d` (new), `source/compose_main.d`, `tests/unit/compose_catalog_test.d` (new)",
       "task": "`catalog`: list module types by category; for one type its ports and its parameters with range, default, unit and option names; bundled and user presets by group; chord syntax and qualities; preset progressions; keys; and the script commands with their arguments (generated from the command table, so it cannot go out of date). Text and `--json` forms. Tests: every registered module and every command appears; the JSON parses.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added compose.catalog (runCatalog) and JsonWriter.valueDouble listing registered modules, ports, parameters/options, presets, chords, progressions, 24 keys, and live command table entries in text and JSON forms. Recorded in docs/changelog.md (2026-11-27 08:40:17 KST).",
       "needs": [
         "T66",
         "T83"
-      ]
+      ],
+      "closed": 97
     },
     {
       "id": "T84",
       "area": "Compose/script",
       "title": "Script language: note notation",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/script/notation.d` (new), `tests/unit/compose_notation_test.d` (new)",
       "task": "The note notation of T67 as pure functions, independent of the interpreter: `<pitch>[:<length>][@<velocity>]`, `-` for a rest (with a length), `[C4 E4 G4]:2` for notes together, pitches spelled as in the app (`app.music_theory`, C4 = middle C), lengths through `compose.timing`. The result is a list of events (offset in lines, length in lines, pitches, velocity); a note without a length takes the length of the note before it (the first: one beat). Every problem is data with the offset of the offending note inside the text and the nearest valid spelling. Tests: every form in 4/4 and 6/8; every refusal with its offset; all three-token sequences from a small alphabet never crash.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Implemented pure note notation parser and formatter compose.script.notation (parsePitch, formatPitch, parseNotes, DEFAULT_NOTE_VELOCITY, NotationError, NoteEvent, PitchResult, NotationResult) in source/compose/script/notation.d for notes, chords, rests, carried lengths via compose.timing, non-carried velocities, and structured refusals (P1-P8, V1-V4, S1-S8, L) with byte offsets and suggestions; added 6 unit test blocks covering all keys, 4/4 and 6/8 acceptance rows, suggestion round-trips, and the 3-token sweep in tests/unit/compose_notation_test.d. Recorded in docs/changelog.md (2026-11-27 07:56:40 KST).",
       "needs": [
         "T67",
         "T73"
       ],
       "guide": "**Goal.** A new pure module `compose.script.notation` turns note text such as `C4:1 E4:1/2 [C4 E4 G4]:2@0.6 -` into a list of events (offset in lines, length in lines, MIDI pitches, velocity) for a time signature. Every problem is data with its offset in the text. It writes no patterns and knows no commands, parts or `#` comments (T83).\n\n**Read first.**\n1. `source/compose/timing.d`: `TimeSignature` (84), `TimingError` (128), `LengthResult` (147), `linesPerBeat` (190), `parseLength` (481-570), `indexOf` (696). Learn the result shape and the sentinel: not found is `text.length`.\n2. `source/app/music_theory.d`: `noteName` (234-241), `accidentalText` (328-341). The spelling: letter, `#`/`##`/`b`/`bb`, octave; MIDI 60 is `C4`, 0 is `C-1`, 127 is `G9`. Nothing in the app parses a note name; you write it.\n3. `source/sequencer/note.d`: `NoteCell` (75-88), `encodeVelocity` (152), `normalizedVelocity` (280). Notes are MIDI 0..127; velocity is a float 0..1; without one a cell plays at 0.8.\n4. `source/app/pattern_notes.d`: `RollNote` (47-54), `addNote` (186-201, velocity in (0, 1]).\n5. `tests/unit/compose_timing_test.d`: 27-55 (layout), 406-426 (sweep).\n\n**Existing code to use.**\n\n```d\nstruct TimeSignature {\n    uint numerator = DEFAULT_TIME_SIG_NUMERATOR;\n    uint denominator = DEFAULT_TIME_SIG_DENOMINATOR;\n    bool isValid() const @safe pure nothrow @nogc\n}\nstruct Length {\n    uint lines = 0;\n}\nstruct TimingError {\n    size_t offset = 0;\n    size_t length = 0;\n    string reason = \"\";\n    string suggestion = \"\";\n}\nstruct LengthResult {\n    Length length = Length();\n    bool ok = false;\n    TimingError error = TimingError();\n}\nenum ulong MAX_POSITION_LINES = MAX_LINES;\nuint linesPerBeat(TimeSignature sig) @safe pure nothrow @nogc\nLengthResult parseLength(string text, TimeSignature sig) @safe pure nothrow\nstring formatTimeSignature(TimeSignature sig) @safe pure nothrow\nstring noteName(int midi, MusicalKey key) @safe pure nothrow\nbool isSpaceChar(char c) @safe pure nothrow @nogc\n```\n\n- `linesPerBeat` (timing.d:190) returns 0 for an invalid signature.\n- `parseLength` (timing.d:481): on failure `ok` is false and `error.offset` counts from the start of the length text. Empty text is refused. The result is 1 to 4096 lines.\n- `MAX_POSITION_LINES` (timing.d:55) is 4096 (`io/project_format.d:59`).\n- `noteName` (music_theory.d:234) with `MusicalKey()` spells in C major. `isSpaceChar` is `compose/names.d:220`.\n- `RollNote.init.velocity` (pattern_notes.d:52) is 0.8f. Use it; write no second 0.8.\n- `LETTER_PITCH` (music_theory.d:62) and `LETTER_PC` (chord_progression.d:128) are private.\n\n**Write.** Grammar, declarations, rules, and every refusal:\n\n```\nsequence = [ item { SPACES item } ]\nitem     = rest | note | chord\nrest     = \"-\" [ \":\" length ]\nnote     = pitch [ \":\" length ] [ \"@\" velocity ]\nchord    = \"[\" pitch { SPACES pitch } \"]\" [ \":\" length ] [ \"@\" velocity ]\npitch    = LETTER [ \"#\" | \"##\" | \"b\" | \"bb\" ] [ \"-\" ] DIGIT { DIGIT }\nvelocity = DIGIT { DIGIT } [ \".\" DIGIT { DIGIT } ]     at most 3 digits before the dot, 6 after\nlength   = any text compose.timing.parseLength accepts\nLETTER   = \"A\" .. \"G\" (capitals only)\nSPACES   = one or more characters for which isSpaceChar is true\n```\n\n```d\nmodule compose.script.notation;\n\nimport app.music_theory : MusicalKey, noteName;\nimport app.pattern_notes : RollNote;\nimport compose.names : isSpaceChar;\nimport compose.timing : formatTimeSignature, LengthResult, linesPerBeat, MAX_POSITION_LINES, parseLength,\n    TimeSignature;\n\nenum float DEFAULT_NOTE_VELOCITY = RollNote.init.velocity;\n\nstruct NotationError {\n    size_t offset = 0;\n    size_t length = 0;\n    string reason = \"\";\n    string suggestion = \"\";\n}\n\nstruct NoteEvent {\n    uint offset = 0;\n    uint length = 0;\n    ubyte[] pitches;\n    float velocity = DEFAULT_NOTE_VELOCITY;\n    size_t textOffset = 0;\n    size_t textLength = 0;\n}\n\nstruct PitchResult {\n    ubyte midi = 0;\n    bool ok = false;\n    NotationError error = NotationError();\n}\n\nstruct NotationResult {\n    NoteEvent[] events;\n    uint totalLines = 0;\n    bool ok = false;\n    NotationError error = NotationError();\n}\n\nPitchResult parsePitch(string text) @safe pure nothrow\nstring formatPitch(ubyte midi) @safe pure nothrow\nNotationResult parseNotes(string text, TimeSignature sig) @safe pure nothrow\n\nprivate struct VelocityResult {\n    float value = DEFAULT_NOTE_VELOCITY;\n    bool ok = false;\n    NotationError error = NotationError();\n}\nprivate VelocityResult parseVelocity(string text) @safe pure nothrow\nprivate size_t itemEnd(string text, size_t start) @safe pure nothrow @nogc\nprivate size_t findChar(string text, char needle, size_t from) @safe pure nothrow @nogc\nprivate immutable int[7] LETTER_SEMITONES = [9, 11, 0, 2, 4, 5, 7];\n```\n\n```\nparsePitch     MIDI = (octave + 1) * 12 + LETTER_SEMITONES[letter - 'A'] + accidental\n               accidental is +1 for each \"#\", -1 for each \"b\"; accepted when 0 <= MIDI <= 127\n               error offsets count from the start of the pitch text\nformatPitch    noteName(midi, MusicalKey()); \"\" when midi > 127\nparseVelocity  scaled = all digits read as one ulong; divisor = 10 for each digit after the dot\n               accepted when 0 < scaled <= divisor\n               value = cast(float)(cast(double) scaled / cast(double) divisor)\nfindChar       index of needle at or after from; text.length when absent\nitemEnd        item starts with \"[\": the first space after its first \"]\"; text.length when there is no \"]\"\n               any other item: the first space at or after start; text.length when there is none\nparseNotes     1. linesPerBeat(sig) == 0: refuse (S1).\n               2. carried = linesPerBeat(sig); offset = 0 (ulong).\n               3. Skip spaces; take the next item [start .. itemEnd).\n               4. head = \"[\" up to and including \"]\" for a chord; otherwise the text before the first \":\" or \"@\".\n                  The rest of the item is the suffix: [\":\" length][\"@\" velocity].\n               5. head == \"-\" is a rest. Otherwise parsePitch(head), or parsePitch of each pitch inside \"[ ]\".\n               6. A written length: parseLength; carried = its lines. No written length: length = carried.\n                  This holds for notes, chords and rests alike.\n               7. \"@velocity\" applies to the whole chord. No \"@\": DEFAULT_NOTE_VELOCITY. Velocity is never carried.\n               8. offset + length > MAX_POSITION_LINES: refuse (S8).\n               9. Note or chord: append NoteEvent(offset, length, pitches in written order, velocity, start, item length).\n                  Rest: append nothing.\n               10. offset += length; go to 3. At the end: ok = true, totalLines = offset.\n               Empty or all-space text: ok, no events, totalLines 0.\n               First problem: return ok = false, events empty, the error with offsets in the whole text.\n```\n\n```\nid  case                             (offset, length)        reason                                                  suggestion\nP1  empty pitch                      (0, 0)                  \"a pitch needs a note letter\"                           \"C4\"\nP2  first letter a..g                (0, 1)                  \"note letters are capitals (A to G)\"                    capital spelling if it parses, else \"\"\nP3  other first character            (0, 1)                  \"a pitch starts with a note letter (A to G)\"            \"\"\nP4  over two accidentals, or # and b (1, run of # and b)     \"a pitch has at most two sharps (#) or two flats (b)\"   \"\"\nP5  no octave digit                  (where expected, 0)     \"a pitch needs an octave number (C4 is middle C)\"       letter + accidentals + \"4\"\nP6  text after the octave            (there, to end)         \"unexpected text after the octave\"                      text before it if it parses, else \"\"\nP7  MIDI > 127                       (0, whole pitch)        \"the highest note is G9\"                                \"G9\"\nP8  MIDI < 0                         (0, whole pitch)        \"the lowest note is C-1\"                                octave <= -2: pitch without \"-\" if it parses; else \"C-1\"\nV1  empty velocity                   (0, 0)                  \"a velocity needs a number from 0 to 1\"                 \"0.8\"\nV2  not as in the grammar            (0, whole velocity)     \"a velocity is a number such as 0.8\"                    \"0.8\"\nV3  above 1                          (0, whole velocity)     \"a velocity is at most 1\"                               \"1\"\nV4  zero                             (0, whole velocity)     \"a velocity is above 0\"                                 \"0.1\"\nS1  linesPerBeat(sig) == 0           (0, text.length)        \"the time signature \" ~ formatTimeSignature(sig) ~ \" is not one this project accepts\"   \"4/4\"\nS2  \"[\" without \"]\"                  (item start, item)      \"a chord needs a closing ]\"                             \"\"\nS3  chord without pitches            (item start, to \"]\")    \"a chord needs at least one pitch\"                      \"[C4 E4 G4]\"\nS4  same MIDI twice in a chord       (second pitch, its length) \"the chord has this note twice\"                      \"\"\nS5  after \"]\" not \":\", \"@\" or end    (there, 1)              \"after ] comes :length or @velocity\"                    \"\"\nS6  \":\" after \"@\"                    (that \":\", 1)           \"the length is written before the velocity\"             \"\"\nS7  rest with \"@\"                    (\"@\", to end of item)   \"a rest has no velocity\"                                \"-\"\nS8  offset + length > 4096           (item start, item)      \"the notes are longer than the longest pattern\"         \"\"\nL   parseLength refused              (lengthStart + e.offset, e.length)   e.reason                                   e.suggestion\n```\n\n**Steps.** After each step run Gate 2 of `qwen-inkling.md` on both files.\n1. Create `source/compose/script/notation.d`: header block (shape of `timing.d:1-39`), imports, types, `LETTER_SEMITONES`, and the public functions as stubs returning `.init` values. Create the test file with its header and one `unittest`: `DEFAULT_NOTE_VELOCITY == 0.8f`.\n2. `parsePitch`, `formatPitch`, pitch tests.\n3. `parseVelocity`, `findChar`, `itemEnd`.\n4. `parseNotes` for rests and single notes; sequence tests.\n5. Chords; chord tests.\n6. Refusal tests and the sweep. Then Gates 3 and 1.\n\n**Acceptance table.** Lines per beat = 16 / denominator (timing.d:194): 4 in 4/4, 2 in 6/8. Bars: 16 and 12 lines. Events are (offset, length, pitches, velocity); errors are (offset, length, suggestion).\n\n| input | working | expected |\n| :-- | :-- | :-- |\n| `C4` `A4` `Bb3` `E#4` | 5·12+0, 5·12+9, 4·12+11−1, 5·12+4+1 | 60, 69, 58, 65 |\n| `C-1` `G9` `B#-2` | 0·12+0, 10·12+7, −1·12+11+1 | 0, 127, 0 |\n| `C4:1 E4:1/2 G4:1/2@0.6` in 4/4 | 4, 4/2=2, 2 | (0,4,[60],0.8) (4,2,[64],0.8) (6,2,[67],0.6); total 8; textOffset 0,5,12 |\n| same in 6/8 | 2, 2/2=1, 1 | (0,2) (2,1) (3,1); total 4 |\n| `C4 D4 E4` | one beat each | 4/4: (0,4) (4,4) (8,4), total 12. 6/8: (0,2) (2,2) (4,2), total 6 |\n| `C4:2 D4 - E4:3l F4` in 4/4 | 8, carried 8, rest carried 8, 3, carried 3 | (0,8) (8,8) (24,3) (27,3); total 30 |\n| `[C4 E4 G4]:2` | 2·4; 2·2 | 4/4: (0,8,[60,64,67],0.8). 6/8: length 4 |\n| `C4:1b -:1b [A3 C#4]@0.5` in 6/8 | bar=12; chord carries 12; 4·12+9, 5·12+1 | (0,12,[60]) (24,12,[57,61],0.5); total 36 |\n| `-` in 4/4; empty text | one beat | ok, no events, total 4; total 0 |\n| `C4@1` `C4@0.05` | 1/1, 5/100 | velocity 1.0, 0.05 |\n| `C4 c4` | P2, second item | (3,1,`C4`) |\n| `H4` `C###4` `C#b4` | P3, P4, P4 | (0,1,\"\") (1,3,\"\") (1,2,\"\") |\n| `C`; `C4 F#` | P5 | (1,0,`C4`); (5,0,`F#4`) |\n| `C4x`; `[C4:1 E4]` | P6; the pitch starts at 1 | (2,1,`C4`); (3,2,`C4`) |\n| `G#9` `Cb-1` `C-4` | 120+8=128; 0−1=−1; −3·12=−36 | (0,3,`G9`) (0,4,`C-1`) (0,3,`C4`) |\n| `C4:`; `C4:1/3` in 4/4; `C4:1/4` in 6/8 | L; 4/3 lines, nearest 1; 2/4 lines, nearest 1 | (3,0,`1`); (3,3,`1/4`); (3,3,`1/2`) |\n| `C4:257b` in 4/4 | 257·16=4112 > 4096; 4096/16=256 | (3,4,`256b`) |\n| `C4@` `C4@x` `C4@1.5` `C4@0` | V1, V2, V3, V4 | (3,0,`0.8`) (3,1,`0.8`) (3,3,`1`) (3,1,`0.1`) |\n| `C4@0.6:1`; `-@0.5` | S6; S7 | (6,1,\"\"); (1,4,`-`) |\n| `[C4 E4` `[]` `[C4]x` | S2, S3, S5 | (0,6,\"\") (0,2,`[C4 E4 G4]`) (4,1,\"\") |\n| `[C4 C4]` `[C#4 Db4]` | S4; 61 twice | (4,2,\"\") (5,3,\"\") |\n| `C4:256b -:1l` in 4/4 | 4096+1 > 4096 | S8 (8,4,\"\") |\n| `C4`, `TimeSignature(4, 3)` | linesPerBeat = 0 | S1 (0,2,`4/4`) |\n\n**Tests.** `tests/unit/compose_notation_test.d`, module `tests.unit.compose_notation_test`, all inside `version (unittest)` as `compose_timing_test.d:29`. No registration is needed. Blocks:\n1. The two pitch rows; `formatPitch` of 60, 0, 127 gives `C4`, `C-1`, `G9`.\n2. Round trip: for every key of `allKeys()` (music_theory.d:75) and midi 0..127, `parsePitch(noteName(midi, key)).midi == midi`.\n3. Every sequence row, with literal values.\n4. Every refusal row: `!ok`, offset, length, suggestion, non-empty reason, no events.\n5. Every non-empty P, V, S suggestion is accepted: `parsePitch(s)`, `parseNotes(\"C4@\" ~ s, sig)`, or `parseNotes(s, sig)`.\n6. Sweep as `compose_timing_test.d:406`: tokens `C4`, `-`, `[C4 E4]`, `[`, `]`, `:1`, `@0.5`, `x`; all three-token texts joined with `\" \"` and with `\"\"`, in both signatures; assert `r.ok || r.error.reason.length > 0` and `r.error.offset <= text.length`.\n\nCompare velocities with `fabs(a - b) < 1e-6f`.\n\n**Pitfalls.**\n- `-` is a rest and also the minus of `C-1`. A rest is only `head == \"-\"`.\n- The pattern editor shows middle C as `C-4` (`gui/views/pattern_editor.d:123`). Here `C-4` means octave −4.\n- Octave arithmetic is `int`; `uint` wraps at octave −1. Stop adding octave digits once the number passes 99.\n- Add offsets as `ulong`; compare with `MAX_POSITION_LINES` before `cast(uint)`.\n- `parseLength` offsets are relative: add the start of the length text.\n- Compare \"not found\" with `text.length`.\n- Each event needs its own `pitches` array.\n- `std.conv.to` and `std.format` do not compile in `nothrow`; `indexOf` and `isDigit` in `timing.d` are private. Write loops.\n\n**Do not.** Do not edit `timing.d`, `music_theory.d`, `names.d`, `pattern_notes.d` or `dub.json`. Do not accept lowercase letters, `♯`/`♭` or MIDI numbers. Do not check notes against a section or module (T97).\n\n**Done when.**\n- Every function has DDoc.\n- Every table row is an assertion with its literal value.\n- Gates 1, 2 and 3 pass, with the printed lines recorded.\n\n**Decided by the owner (2026-11-26).**\n1. Comments in the script language start with `//`, not `#` (T67 was changed), so `#` in a note is always a sharp. This module never sees comments; nothing to do here.\n2. Only the `app.music_theory` spelling is accepted (`C4`; `C-1` is MIDI 0). The tracker spelling `C-4` is refused with the suggestion `C4`.\n3. A rest's written length is carried to the next item like a note's.\n4. Velocity is 0 < v ≤ 1, default 0.8, never carried between notes.",
       "guide_author": "Claude Fable 5.2",
-      "guide_date": "2026-11-26"
+      "guide_date": "2026-11-26",
+      "closed": 87
     },
     {
       "id": "T87",
       "area": "Compose/script",
       "title": "Describe: modules, properties, and wires",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/script/describe.d` (new), `source/compose_main.d`, `tests/unit/compose_describe_test.d` (new)",
       "task": "`describe` per T71, first part: print a `.msym` as `module` and `set` commands, and the properties, modules and wires of a `.msv` as a script, with `keep` references for module data the language cannot express (extra data, MetaModule children). The `describe` subcommand answers for `.msym` files and for projects without patterns. Tests: a helper-written project without music describes to a script that writes a byte-identical file; every bundled preset describes and runs back to the same parameter values.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Implemented compose.script.describe for presets and project properties/modules/wires (including keep=<file>:<id> via ProjectWriter.loadKeptModule), enabled dracker-compose describe in text/JSON modes, updated compose_program_test.d, and verified byte-identical helper round-trips, all 16 resources/presets/*.msym files, and keep= payload preservation in tests/unit/compose_describe_test.d.",
       "needs": [
         "T71",
         "T101",
         "T103"
-      ]
+      ],
+      "closed": 107
     },
     {
       "id": "T88",
       "area": "Tests",
       "title": "End-to-end check of the composition helper",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`tests/unit/compose_end_to_end_test.d` (new), `sample-projects/` (a helper-written example with its script), `ci/macos.yml`",
       "task": "A complete song written only as a script (several sections, bass, keys, lead, drums, an effect chain, a custom module saved as `.msym` and reused): `check`, `run`, `render` with a clean report, then open the result in `StudioSession` and compare with the script's intent; `describe` it and run the description again. Run the built program itself, not only the library. **Open until the owner has opened a helper-written project in the app** and confirmed it looks and sounds right, and until an agent has written a piece using only `docs/composer.md` and the catalog.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27 (the owner opened the helper-written sample project neon_drift in the app and confirmed it looks and sounds right). A complete song written only as a script: `sample-projects/neon_drift.dcs` (D minor, 104 BPM, four sections, bass, keys, a custom lead saved as `neon_drift_lead.msym` and reused for a harmony part, drums, delay, reverb and a sidechained bus compressor) with its `.msv`, and `tests/unit/compose_end_to_end_test.d` running `catalog`, `check`, `run`, `render`, `describe` and a second run in process and through the built program. The second close condition (an agent writes a piece from `docs/composer.md` and the catalog alone) is checked by T89, which writes that document. Recorded in `docs/changelog.md` (2026-11-27 09:49:45 KST).",
       "needs": [
         "T85",
         "T86",
         "T107",
         "T102"
-      ]
+      ],
+      "closed": 112
     },
     {
       "id": "T89",
       "area": "Docs",
       "title": "Composition helper: reference and guides",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`docs/composer.md` (new), `docs/manual.md` (Appendix D), `../architecture.md` (§10), `agents.md` (package map, build and test commands), `docs/changelog.md`",
       "task": "`docs/composer.md`, written for an agent as its only source: how to call the program, the script language with every command, the note and chord notation, worked examples from a four-bar idea to a full arrangement, how to use the catalog, how to read errors and the render report, and the limits of T70 and T71. Update the manual, the architecture section (now marked as planned) and the agent guide. Check that every build task has its changelog entry.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. `docs/composer.md` (about 11,800 words): the program, script syntax, musical time, every command with options and defaults, notation, chords, drums, cells, phrase editing, modules and gain staging, three worked examples that were run and rendered, the render report, real error messages, limits and a cheat sheet. Every example was run through the built program. An independent agent then wrote a 32-bar piece (\"Glass Harbor\": five sections, bass, keys, lead, drums, delay and reverb) using only this document and the program, with every `check` passing on the first try; its findings were folded in (gain starting points for a full band, bass-root octaves, preset inspection, describe output forms, limiter wording). Manual Appendix D lists the program, `../architecture.md` §10 is rewritten as built, `agents.md` names the new files and commands. Every composition build task T72–T115 has its changelog entry. Program bugs found while writing it are T116–T119. Recorded in `docs/changelog.md` (2026-11-27 10:24:22 KST).",
       "needs": [
         "T88"
-      ]
+      ],
+      "closed": 114
     },
     {
       "id": "T74",
@@ -1436,188 +1449,200 @@
       "area": "Compose",
       "title": "Project writer: wires and trial activation",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/project_writer.d`, `tests/unit/compose_project_test.d`",
       "task": "Split from T76. Wires by handle and port name, with defaults (a module's first audio output to the target's first audio input) and gain; removing a wire; removing a module removes its wires. Before saving, a trial activation in a `StudioSession` so a saved file always opens and plays. Tests: wiring errors as data (unknown handle, unknown port with the nearest name, incompatible port kinds, an input used as a source, a duplicate wire, feedback loops as the graph compiler reports them); a written file opens in `StudioSession` and its render is not silent.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added wires (connect, disconnect, wires, wireCount, cascade removal on removeModule, preserved across renameModule) and StudioSession trial activation (trialActivate invoked before saving in documentBytes/writeDocument) to compose.project_writer, with GraphCompiler cycle detection allowing Feedback-module loops and full structured problem diagnostics; verified including rendered non-silent audio smoke test. Recorded in docs/changelog.md (2026-11-27 08:16:13 KST).",
       "needs": [
         "T76"
-      ]
+      ],
+      "closed": 89
     },
     {
       "id": "T97",
       "area": "Compose",
       "title": "Writing notes for a part",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/part_writer.d`, `source/app/pattern_notes.d`, `tests/unit/compose_part_test.d`",
       "task": "Split from T77. Write notes into a part's section pattern at positions (`compose.timing`, counted from the start of the section, T90) with lengths and velocities; several notes at once and rests; a note that ends writes its note-off as the piano roll does; tracks are chosen with `app.pattern_notes` so nothing collides, and added when needed. Read the notes of a part back. Tests: notes land on the right lines in 4/4, 3/4 and 6/8; polyphony adds tracks; overlapping notes of the same pitch are refused; a note past the end of the section is refused with the last position that fits; a render has sound from the part.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Implemented note writing/reading in compose.part_writer (writeNote, atomic writeNotes, notesOfPart with implicit-section growth, polyphonic track allocation, overlap/out-of-range refusals, and 4/4/3/4/6/8 playback tests). Recorded in docs/changelog.md (2026-11-27 08:40:17 KST).",
       "needs": [
         "T77",
         "T73",
         "T90"
-      ]
+      ],
+      "closed": 92
     },
     {
       "id": "T98",
       "area": "Compose",
       "title": "Arrangement: clips, lanes, and the loop",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/part_writer.d`, `tests/unit/compose_part_test.d`",
       "task": "Split from T77. `arrange` per T68: the sections in order; each part gets its own timeline lane; a section that appears twice reuses the same pattern as a clone clip; the loop covers the whole arrangement unless set otherwise; a part that does not play in a section leaves a gap. The implicit section is arranged once. Tests: clip positions and lengths in lines; clone clips share the pattern; the loop range; arranging twice replaces the first arrangement; the saved file opens in `StudioSession` and each part sounds in its sections only.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Implemented song arrangement, timeline clips, cloneSourceId reuse, part lanes/gaps, custom/default loops, and buildDocument() in compose.part_writer with StudioSession multi-section render tests. Recorded in docs/changelog.md (2026-11-27 08:40:17 KST).",
       "needs": [
         "T77"
-      ]
+      ],
+      "closed": 93
     },
     {
       "id": "T99",
       "area": "Compose",
       "title": "Chords for parts: arpeggio, rhythm strings, close voicing",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/chord_writer.d`, `tests/unit/compose_chord_test.d`",
       "task": "Split from T78. The rest of T69: `arp` (`dir=up|down|updown`, `every=`), `rhythm=\"x-x-x---\"` combined with `hold`, `root` or `pulse`, and `voicing=close` (keep notes near the previous chord, choosing the inversion with the least movement). Tests: note-by-note results; a rhythm string of the wrong length for the bar is refused; close voicing never moves a voice further than the root-position version would.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added ChordStyle.arp (up/down/updown, every=), rhythm= sixteenth patterns for hold/root/pulse, and ChordVoicing.close voice leading to compose.chord_writer with exact unit tests in tests/unit/compose_chord_test.d.",
       "needs": [
         "T78"
-      ]
+      ],
+      "closed": 108
     },
     {
       "id": "T100",
       "area": "Compose",
       "title": "Opening existing files: parts, sections, and the arrangement",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/project_writer.d`, `source/compose/part_writer.d`, `tests/unit/compose_project_test.d`",
       "task": "Split from T82. After a `.msv` is opened, its patterns become parts and sections where possible (T71): a pattern whose cells all name one module becomes that module's part in a section named after the pattern; drum patterns become drum parts; names are invented from the pattern and module names and reported. Patterns that fit no part stay reachable at the tracker level (T80). The existing clips become the arrangement when they are what `arrange` would produce; otherwise they are kept as they are until the script arranges again. Tests: a helper-written project opens with the same parts, sections and arrangement it was written with; the sample projects open and save with identical playback; open, add a part with notes, save, open in `StudioSession`.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added PartWriter.openFromProject() and unified buildDocument() reconstructing parts, sections, drum parts, raw patterns, and arranged clips with preserved-clips fallback; verified sample-project identical playback and new-part round-trips. Recorded in docs/changelog.md (2026-11-27 09:02:13 KST).",
       "needs": [
         "T82",
         "T97",
         "T98",
         "T79"
-      ]
+      ],
+      "closed": 104
     },
     {
       "id": "T101",
       "area": "Compose/script",
       "title": "Script language: module and wire commands",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/script/commands.d`, `tests/unit/compose_script_test.d`, `tests/fuzz/compose_script_fuzz.d`",
       "task": "Split from T83. The commands `module` (from a type, `preset=`, or `file=`), `set`, `preset`, `sample` (T75), `savemodule`, `connect` (with `gain=`), `disconnect` and `remove`, through the module writer and the project writer. Errors keep the module writer's reason and suggestion and add the line and column of the offending word. Tests for every command and error; the fuzz test covers the new commands.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Registered module, set, preset, sample, savemodule, connect, disconnect, and remove commands in compose.script.{interpreter,commands} with atomic option validation, cached InstrumentLibrary, unit tests, and 20k-iteration fuzz coverage. Recorded in docs/changelog.md (2026-11-27 08:40:17 KST).",
       "needs": [
         "T83",
         "T75",
         "T96"
-      ]
+      ],
+      "closed": 96
     },
     {
       "id": "T102",
       "area": "Compose/program",
       "title": "The run and check subcommands",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose_main.d`, `tests/unit/compose_program_test.d`, `ci/macos.yml`",
       "task": "Split from T83. `dracker-compose run <script> [-o <file>]` and `check <script>` (T66) run the file through the interpreter: `check` writes nothing; a failed `run` writes no file; errors are printed with line and column as text or as `--json`; exit codes 0 and 1. Remove the \"not available in this build yet\" answer for the two (`builtBy`), and make the CI step expect success. Tests through `runProgram()` with the file delegates, and one real file on disk.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Wired run (two-pass check before disk writes), check, catalog, and render subcommands in source/compose_main.d (keeping describe on T87), updated compose_program_test.d, and updated ci/macos.yml. Recorded in docs/changelog.md (2026-11-27 08:40:17 KST).",
       "needs": [
         "T72",
         "T83"
-      ]
+      ],
+      "closed": 99
     },
     {
       "id": "T103",
       "area": "Compose/script",
       "title": "Script language: the open command",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/script/commands.d`, `tests/unit/compose_script_test.d`",
       "task": "Split from T83. `open \"file.msv\"` starts the script from an existing project (T82) instead of an empty one; the handles it derives are usable by the following commands; `open` after other commands is refused. The interpreter can also be started from a document in memory, which is what the app's script tab uses (T113). Tests: open, change, save; the refusals; starting from a document.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added 'open <path>' script command and createInterpreterFromDocument() for loading existing .msv files or in-memory LoadedProjects into ScriptInterpreter with full handle access and order refusals. Recorded in docs/changelog.md (2026-11-27 09:02:13 KST).",
       "needs": [
         "T83",
         "T82"
-      ]
+      ],
+      "closed": 105
     },
     {
       "id": "T104",
       "area": "Compose/script",
       "title": "Script language: section, part, notes, arrange, loop",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/script/commands.d`, `tests/unit/compose_script_test.d`, `tests/fuzz/compose_script_fuzz.d`",
       "task": "Split from T84. The commands `section` (`bars=`), `part` (`module=`), `notes <part> [<section>] [at=<position>]: <notation>`, `arrange` and `loop`, on top of T77, T97, T98 and the notation of T84. An error inside the notation points at the offending note in the line. Tests for every command and error; a script with two sections and two parts runs, saves and renders with sound.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added section, part, notes (at= and notation span diagnostics), arrange, and loop script commands with unified buildDocument() saving in commands.d and compose_main.d plus unit/fuzz/render tests. Recorded in docs/changelog.md (2026-11-27 09:02:13 KST).",
       "needs": [
         "T83",
         "T84",
         "T97",
         "T98"
-      ]
+      ],
+      "closed": 106
     },
     {
       "id": "T105",
       "area": "Compose/script",
       "title": "Script language: chords and drums",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/script/commands.d`, `tests/unit/compose_script_test.d`, `tests/fuzz/compose_script_fuzz.d`",
       "task": "Split from T84. The commands `chords <part> [<section>]: <progression> [style= octave= voices= voicing= every= dir= rhythm= preset=]` (T78, T99) and `drums <part> [<section>] <lane>: <steps>` with drum parts and lanes (T79). An error inside a progression or a step string points at the offending chord or step. Tests for every option and error; **the example script of T67 runs unchanged, saves and renders with sound**.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added part drums=, chords, and drums script commands to compose.script.commands (with DrumProblem step offset coordinates and preset= support), updated command table tests (26 commands), and verified the T67 Night Drive script saves and renders non-silent audio.",
       "needs": [
         "T104",
         "T78",
         "T99",
         "T79"
-      ]
+      ],
+      "closed": 110
     },
     {
       "id": "T106",
       "area": "Compose/script",
       "title": "Script language: cells and phrase commands",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/script/commands.d`, `tests/unit/compose_script_test.d`, `tests/fuzz/compose_script_fuzz.d`",
       "task": "Split from T84. The commands `cells` (tracker-level writing, T80) and `copy`, `repeat`, `transpose` (`by=` semitones or `steps=` in the key), `clear` (T81). Tests for every command and error.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added cells, copy, repeat, transpose, clear, module keep=/name=, and arrange clip=... (via PartWriter.addRawClip) to compose.script.commands; expanded tests/unit/compose_script_test.d and tests/fuzz/compose_script_fuzz.d.",
       "needs": [
         "T104",
         "T80",
         "T81"
-      ]
+      ],
+      "closed": 109
     },
     {
       "id": "T107",
       "area": "Compose/script",
       "title": "Describe: music",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/compose/script/describe.d`, `source/compose_main.d`, `tests/unit/compose_describe_test.d`",
       "task": "Split from T87. Print the patterns and the arrangement of a `.msv`: part-level `notes` commands where the cells are exactly what they would write, `drums` for drum patterns, and tracker-level `cells` otherwise, so nothing is lost; then `arrange` and `loop`. Tests enforce the guarantee of T71: helper-written projects describe to a script that writes a byte-identical file; the sample projects describe to a script whose result plays identically.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Extended compose.script.describe to emit sections, parts, drum parts/lanes, simulation-verified notes with lossless cells fallback, raw patterns, drum step sequences, arrange/arrange clip=, and loop; verified byte-identical song round-trips and sample-for-sample audio equality on sample-projects/midnight_pulse.msv and sample-projects/lobby_waltz.msv in tests/unit/compose_describe_test.d.",
       "needs": [
         "T87",
         "T100",
         "T105",
         "T106"
-      ]
+      ],
+      "closed": 111
     },
     {
       "id": "T108",
@@ -1650,15 +1675,16 @@
       "area": "GUI/widgets",
       "title": "Multi-line text editor widget",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/gui/widgets.d`, `tests/unit/widgets_textarea_test.d` (new; uses the `Harness` of `tests/unit/gui_test.d`), `source/app/gui_gallery.d` (compiled in the `app` configuration only)",
       "task": "A `TextArea` widget for the script tab (T112); the toolkit has only the single-line `TextField`, which has no selection, word movement or clipboard. Monospace text of many lines; caret movement by character, word, line, page and to the ends; selection by keyboard and mouse (drag, double-click a word); typing, Return, Tab as spaces, Backspace and Delete; cut, copy, paste and select all through two clipboard delegates (T112 connects them to the app clipboard); vertical scrolling that follows the caret; line numbers in a gutter; one line can be marked (for an error) with an outline, not color alone; committed IME text is accepted as `TextField` accepts it. Colors come from theme tokens only. Tests for every editing operation, scrolling, the marked line, and that sizes follow the theme; a gallery entry.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added multi-line monospace TextArea widget (plus TextPos, TextAreaMetrics, textPosBefore, isWordChar, decimalDigits, and KeyCode x/c/v) in source/gui/widgets.d with caret/word/page/end movement, keyboard and mouse selection, clipboard delegates, vertical scrolling, line-number gutter, error-marked line outline, and theme-token-only drawing; added gallery showcase in source/app/gui_gallery.d and 7 unit test blocks covering all acceptance rows in tests/unit/widgets_textarea_test.d. Recorded in docs/changelog.md (2026-11-27 07:56:40 KST).",
       "needs": [],
       "guide": "**Goal.** `source/gui/widgets.d` gets a `TextArea` widget: monospace multi-line editing with caret, selection, clipboard delegates, vertical scrolling, a line-number gutter and one marked line. A new test file covers it and the gallery shows one. Left out: undo, word wrap, horizontal scrolling (long lines are clipped), a draggable scrollbar, caret blink, and drawing of uncommitted IME text.\n\n**Read first.**\n1. `agents.md` Rule 1 (14 to 37) and `qwen-inkling.md`: the gates.\n2. `source/gui/widgets.d`: `KeyCode` (67), the event structs (113 to 170), `class Widget` (268 to 820): the hooks to override.\n3. Same file, `class TextField` (3080 to 3360): the style to copy. It has **no** selection range, clipboard code, word movement or blink.\n4. Same file, `UiContext.handleKeyDown` (1596 to 1632): `false` for Tab lets the context move focus. `GroupedList.scrollTo` (3893), `ScrollBarModel` (4838): the scroll pattern.\n5. `source/gui/theme.d` 98 to 224 (tokens, metrics), `scaled()` (409).\n6. `source/gui/views/transport_bar.d` 137: a lit state is a stroke of `2.0f * theme.borderWidth`.\n7. `tests/unit/gui_test.d`: `FakeRasterizer` (49), `Harness` (314 to 509), the `TextField` test (2336 to 2397), the stroke search (2293 to 2298).\n8. `source/app/gui_gallery.d`: the `GalleryScene` constructor (147 to 202).\n\n**Existing code to use.**\n```d\nclass Widget {\n    string id;\n    RectF bounds;\n    Point2F preferredSize;\n    bool focusable = false;\n    final UiContext context();\n    final bool isFocused();\n    final void invalidate();\n    Point2F measure(ITextMeasurer m, const ref StudioTheme theme);\n    void layoutChildren();\n    void paint(IRenderer2D r, const ref StudioTheme theme);\n    bool onMouseDown(const ref MouseEvent e);\n    bool onMouseUp(const ref MouseEvent e);\n    bool onMouseMove(const ref MouseEvent e);\n    bool onScroll(const ref ScrollEvent e);\n    bool onKeyDown(const ref KeyEvent e);\n    bool onKeyUp(const ref KeyEvent e);\n    bool onTextInput(dchar c);\n    void onCaptureLost();\n}\n```\n`context()` is `null` outside a tree. Hooks return `true` for \"handled\". A handled `onMouseDown` captures the mouse.\n```d\nfloat measureTextOr(ITextMeasurer m, const(char)[] text, FontId font, float size);\nfloat lineHeightOr(ITextMeasurer m, FontId font, float size);\nbool hasModifier(uint mods, KeyModifiers flag) @safe nothrow pure @nogc;\nfloat clampf(float v, float lo, float hi);\n```\nWith `m` null these fall back to 0.6 em and 1.2 em. `clampf` and `Axis` are already imported.\n```d\nfinal class UiContext {\n    StudioTheme theme;\n    ITextMeasurer measurer();\n    bool setFocus(Widget w);\n    void setTheme(const ref StudioTheme t);\n}\nstruct ScrollBarModel {\n    Axis axis; RectF track; float contentLength; float viewportLength; float offset; float minThumb;\n    RectF thumbRect() const;\n}\n```\n`measurer()` can be `null`. `MouseEvent.clickCount` is 2 on a double-click. Test Option and Command with `hasModifier(e.modifiers, KeyModifiers.alt)` and `KeyModifiers.command`.\n```d\nvoid pushClip(RectF rect);\nvoid popClip();\nvoid fillRect(RectF rect, ColorRGBA color);\nvoid fillRoundedRect(RectF rect, float radius, ColorRGBA color);\nvoid strokeRoundedRect(RectF rect, float radius, float width, ColorRGBA color);\nvoid drawText(Point2F origin, const(char)[] text, FontId font, float size, ColorRGBA color);\n```\n`IRenderer2D` is also an `ITextMeasurer`. Shapes outside the clip are not recorded. The font is `FontId.mono` at `theme.fontSizeMono`. Tokens: `textDim` for line numbers, `selection`, `accentHot` for the caret, `danger` for the marked line.\n\n**Write.** Storage is an array of lines, `dchar[][] lines_`, never empty, without newline characters. A column is a code-point index, as in `TextField.caret()`. Reason: movement, gutter and drawing work per line, and a `dchar` index cannot land inside \"é\" or \"가\". Nothing in `TextField` can be extracted as a helper; copy only its `onTextInput` filter (3205) and its drawing calls (3315 to 3338). All else is new.\n\nAdd `x = 7, c = 8, v = 9` to `KeyCode` (the codes of `source/app/keymap.d` 248 to 250). Add `import std.uni : isAlpha, isNumber;`. Put the new code after `openTextEditor()` (ends at line 3384).\n```d\nstruct TextPos {\n    size_t line = 0;\n    size_t col = 0;\n}\n\nbool textPosBefore(TextPos a, TextPos b) @safe nothrow pure @nogc {\n    return a.line < b.line || (a.line == b.line && a.col < b.col);\n}\n\nbool isWordChar(dchar c) @safe nothrow pure @nogc {\n    return c == '_' || isAlpha(c) || isNumber(c);\n}\n\nsize_t decimalDigits(size_t n) @safe nothrow pure @nogc {\n    size_t d = 1;\n    while (n >= 10) {\n        n /= 10;\n        d++;\n    }\n    return d;\n}\n\nstruct TextAreaMetrics {\n    float pad = 0.0f;\n    float lineH = 0.0f;\n    float gutterW = 0.0f;\n    float textX = 0.0f;\n    float textTop = 0.0f;\n    float viewH = 0.0f;\n}\n\nclass TextArea : Widget {\n    enum size_t TAB_SPACES = 4;\n    enum size_t GUTTER_MIN_DIGITS = 2;\n    enum size_t DEFAULT_ROWS = 8;\n    enum size_t NO_MARK = size_t.max;\n\n    void delegate() onChange;\n    void delegate() onSubmit;\n    string delegate() clipboardRead;\n    bool delegate(string) clipboardWrite;\n    private dchar[][] lines_;\n    private TextPos caret_;\n    private TextPos anchor_;\n    private size_t wantCol_ = 0;\n    private size_t markedLine_ = NO_MARK;\n    private float scrollY_ = 0.0f;\n    private bool dragging_ = false;\n\n    this(string initial = \"\");\n    string text() const;\n    void setText(string t);\n    void clear();\n    size_t lineCount() const;\n    size_t caretLine() const;\n    size_t caretColumn() const;\n    void setCaret(size_t line, size_t col, bool extend = false);\n    bool hasSelection() const;\n    string selectedText() const;\n    void selectAll();\n    void insertText(string s);\n    void markLine(size_t line);\n    void clearMark();\n    size_t markedLine() const;\n    float scrollOffset() const;\n    bool scrollTo(float y);\n    size_t visibleLineCount();\n    float gutterWidth();\n    RectF lineRect(size_t line);\n    TextAreaMetrics metricsFor(ITextMeasurer m, const ref StudioTheme theme) const;\n}\n```\n`setText` resets caret, selection, mark and scroll, and does not call `onChange`. The selection lies between `anchor_` and `caret_`; equal means none. `markLine(n)` with `n >= lineCount()` stores `NO_MARK`; every edit clears the mark. `scrollTo` returns `true` only when the offset changed. Gutter width: `max(decimalDigits(lineCount()), GUTTER_MIN_DIGITS)` times the width of `\"0\"`, plus `2 * spacingSm`.\n\nKeys: Escape, Shift+Tab and unknown Command keys return `false`, so the parent and application shortcuts still work. Tab inserts `TAB_SPACES` spaces. Option+Left/Right move by word. Page keys move `visibleLineCount()` lines. Shift extends the selection. Cmd+Return calls `onSubmit`.\n\nGive every public member and free function a DDoc block. Overrides and private helpers follow `TextField` (none).\n\n**Steps.** After each step run Gate 2 with `source/gui/widgets.d tests/unit/widgets_textarea_test.d`. Run Gate 1 after steps 4, 7 and 9. Write each step's tests in that step.\n\n1. Storage. Add the `KeyCode` entries, the import, the free functions, both structs, the class with fields and getters, and these bodies. `clear()` is `setText(\"\")`. Leave `ensureCaretVisible()` empty for now.\n```d\nthis(string initial = \"\") {\n    focusable = true;\n    setText(initial);\n}\n\nstring text() const {\n    string s;\n    foreach (i, ln; lines_) {\n        if (i > 0) {\n            s ~= '\\n';\n        }\n        s ~= toUTF8(ln);\n    }\n    return s;\n}\n\nvoid setText(string t) {\n    lines_ = splitLines(t);\n    caret_ = TextPos(0, 0);\n    anchor_ = caret_;\n    wantCol_ = 0;\n    markedLine_ = NO_MARK;\n    scrollY_ = 0.0f;\n    invalidate();\n}\n\nvoid setCaret(size_t line, size_t col, bool extend = false) {\n    moveCaret(clampPos(TextPos(line, col)), extend);\n}\n\nbool hasSelection() const {\n    return anchor_ != caret_;\n}\n\nprivate static dchar[][] splitLines(string s) {\n    dchar[][] result;\n    dchar[] cur;\n    bool afterCr = false;\n    foreach (dchar c; s) {\n        if (c == '\\n' && afterCr) {\n            afterCr = false;\n            continue;\n        }\n        afterCr = c == '\\r';\n        if (c == '\\n' || c == '\\r') {\n            result ~= cur;\n            cur = null;\n        } else if (c == '\\t') {\n            foreach (k; 0 .. TAB_SPACES) {\n                cur ~= ' ';\n            }\n        } else if (c >= 0x20 && c != 0x7F) {\n            cur ~= c;\n        }\n    }\n    result ~= cur;\n    return result;\n}\n\nprivate TextPos selStart() const {\n    return textPosBefore(anchor_, caret_) ? anchor_ : caret_;\n}\n\nprivate TextPos selEnd() const {\n    return textPosBefore(anchor_, caret_) ? caret_ : anchor_;\n}\n\nprivate TextPos clampPos(TextPos p) const {\n    if (p.line >= lines_.length) {\n        p.line = lines_.length - 1;\n    }\n    if (p.col > lines_[p.line].length) {\n        p.col = lines_[p.line].length;\n    }\n    return p;\n}\n\nprivate void moveCaret(TextPos p, bool extend) {\n    caret_ = p;\n    if (!extend) {\n        anchor_ = p;\n    }\n    wantCol_ = p.col;\n    ensureCaretVisible();\n    invalidate();\n}\n```\n2. Metrics and scrolling. `gutterWidth()` returns `liveMetrics().gutterW`.\n```d\nTextAreaMetrics metricsFor(ITextMeasurer m, const ref StudioTheme theme) const {\n    TextAreaMetrics k;\n    immutable size_t digits = decimalDigits(lines_.length);\n    k.pad = theme.spacingSm;\n    k.lineH = lineHeightOr(m, FontId.mono, theme.fontSizeMono);\n    k.gutterW = cast(float)(digits > GUTTER_MIN_DIGITS ? digits : GUTTER_MIN_DIGITS)\n        * measureTextOr(m, \"0\", FontId.mono, theme.fontSizeMono) + 2.0f * k.pad;\n    k.textX = bounds.x + k.gutterW + k.pad;\n    k.textTop = bounds.y + k.pad;\n    k.viewH = bounds.h - 2.0f * k.pad;\n    return k;\n}\n\nprivate TextAreaMetrics liveMetrics() {\n    auto ctx = context();\n    if (ctx is null) {\n        immutable StudioTheme def = StudioTheme.init;\n        return metricsFor(null, def);\n    }\n    return metricsFor(ctx.measurer(), ctx.theme);\n}\n\nbool scrollTo(float y) {\n    immutable TextAreaMetrics k = liveMetrics();\n    immutable float content = cast(float) lines_.length * k.lineH;\n    immutable float maxY = content > k.viewH && k.viewH > 0.0f ? content - k.viewH : 0.0f;\n    immutable float ny = clampf(y, 0.0f, maxY);\n    if (ny == scrollY_) {\n        return false;\n    }\n    scrollY_ = ny;\n    invalidate();\n    return true;\n}\n\nsize_t visibleLineCount() {\n    immutable TextAreaMetrics k = liveMetrics();\n    if (!(k.lineH > 0.0f) || !(k.viewH >= k.lineH)) {\n        return 1;\n    }\n    return cast(size_t)(k.viewH / k.lineH);\n}\n\nRectF lineRect(size_t line) {\n    immutable TextAreaMetrics k = liveMetrics();\n    return RectF(bounds.x, k.textTop + cast(float) line * k.lineH - scrollY_, bounds.w, k.lineH);\n}\n\nprivate void ensureCaretVisible() {\n    immutable TextAreaMetrics k = liveMetrics();\n    if (!(k.viewH > 0.0f)) {\n        return;\n    }\n    immutable float top = cast(float) caret_.line * k.lineH;\n    if (top < scrollY_) {\n        scrollTo(top);\n    } else if (top + k.lineH > scrollY_ + k.viewH) {\n        scrollTo(top + k.lineH - k.viewH);\n    }\n}\n\noverride bool onScroll(const ref ScrollEvent e) {\n    return scrollTo(scrollY_ - e.deltaY);\n}\n\noverride void layoutChildren() {\n    scrollTo(scrollY_);\n}\n\noverride Point2F measure(ITextMeasurer m, const ref StudioTheme theme) {\n    if (preferredSize.x > 0.0f && preferredSize.y > 0.0f) {\n        return preferredSize;\n    }\n    immutable TextAreaMetrics k = metricsFor(m, theme);\n    return Point2F(k.gutterW + 40.0f * measureTextOr(m, \"0\", FontId.mono, theme.fontSizeMono) + 2.0f * k.pad,\n        cast(float) DEFAULT_ROWS * k.lineH + 2.0f * k.pad);\n}\n```\n3. Caret keys. This is the final `onKeyDown`; in this step leave out its first four cases and the `onCommandKey` call. `onKeyUp` returns `true`.\n```d\nprivate void moveVertical(ptrdiff_t delta, bool extend) {\n    immutable size_t keep = wantCol_;\n    immutable ptrdiff_t target = cast(ptrdiff_t) caret_.line + delta;\n    if (target < 0) {\n        moveCaret(TextPos(0, 0), extend);\n    } else if (target >= cast(ptrdiff_t) lines_.length) {\n        moveCaret(TextPos(lines_.length - 1, lines_[$ - 1].length), extend);\n    } else {\n        moveCaret(clampPos(TextPos(cast(size_t) target, keep)), extend);\n        wantCol_ = keep;\n    }\n}\n\nprivate TextPos charLeft(TextPos p) const {\n    if (p.col > 0) {\n        return TextPos(p.line, p.col - 1);\n    }\n    return p.line > 0 ? TextPos(p.line - 1, lines_[p.line - 1].length) : p;\n}\n\nprivate TextPos charRight(TextPos p) const {\n    if (p.col < lines_[p.line].length) {\n        return TextPos(p.line, p.col + 1);\n    }\n    return p.line + 1 < lines_.length ? TextPos(p.line + 1, 0) : p;\n}\n\nprivate TextPos wordLeft(TextPos p) const {\n    if (p.col == 0) {\n        return charLeft(p);\n    }\n    const(dchar)[] ln = lines_[p.line];\n    size_t c = p.col;\n    while (c > 0 && !isWordChar(ln[c - 1])) {\n        c--;\n    }\n    while (c > 0 && isWordChar(ln[c - 1])) {\n        c--;\n    }\n    return TextPos(p.line, c);\n}\n\nprivate TextPos wordRight(TextPos p) const {\n    const(dchar)[] ln = lines_[p.line];\n    if (p.col == ln.length) {\n        return charRight(p);\n    }\n    size_t c = p.col;\n    while (c < ln.length && !isWordChar(ln[c])) {\n        c++;\n    }\n    while (c < ln.length && isWordChar(ln[c])) {\n        c++;\n    }\n    return TextPos(p.line, c);\n}\n\noverride bool onKeyDown(const ref KeyEvent e) {\n    immutable bool shift = e.shift();\n    immutable bool alt = hasModifier(e.modifiers, KeyModifiers.alt);\n    if (e.keyCode == KeyCode.escape || (e.keyCode == KeyCode.tab && shift)) {\n        return false;\n    }\n    if (hasModifier(e.modifiers, KeyModifiers.command)) {\n        return onCommandKey(e.keyCode, shift);\n    }\n    switch (e.keyCode) {\n    case KeyCode.returnKey:\n    case KeyCode.keypadEnter:\n        insertText(\"\\n\");\n        break;\n    case KeyCode.tab:\n        insertText(\"\\t\");\n        break;\n    case KeyCode.deleteBackward:\n        deleteBackward();\n        break;\n    case KeyCode.forwardDelete:\n        deleteForward();\n        break;\n    case KeyCode.left:\n        if (!shift && hasSelection()) {\n            moveCaret(selStart(), false);\n        } else {\n            moveCaret(alt ? wordLeft(caret_) : charLeft(caret_), shift);\n        }\n        break;\n    case KeyCode.right:\n        if (!shift && hasSelection()) {\n            moveCaret(selEnd(), false);\n        } else {\n            moveCaret(alt ? wordRight(caret_) : charRight(caret_), shift);\n        }\n        break;\n    case KeyCode.up:\n        moveVertical(-1, shift);\n        break;\n    case KeyCode.down:\n        moveVertical(1, shift);\n        break;\n    case KeyCode.pageUp:\n        moveVertical(-cast(ptrdiff_t) visibleLineCount(), shift);\n        break;\n    case KeyCode.pageDown:\n        moveVertical(cast(ptrdiff_t) visibleLineCount(), shift);\n        break;\n    case KeyCode.home:\n        moveCaret(TextPos(caret_.line, 0), shift);\n        break;\n    case KeyCode.end:\n        moveCaret(TextPos(caret_.line, lines_[caret_.line].length), shift);\n        break;\n    default:\n        break;\n    }\n    return true;\n}\n```\n4. Typing and deleting. This covers IME: committed text arrives one code point at a time through `onTextInput`. `deleteForward()` is `deleteBackward()` with `charRight`.\n```d\nvoid insertText(string s) {\n    deleteSelectionRaw();\n    dchar[][] ins = splitLines(s);\n    dchar[] tail = lines_[caret_.line][caret_.col .. $].dup;\n    dchar[] head = lines_[caret_.line][0 .. caret_.col].dup;\n    if (ins.length == 1) {\n        lines_[caret_.line] = head ~ ins[0] ~ tail;\n        caret_.col = head.length + ins[0].length;\n    } else {\n        immutable size_t lastLen = ins[$ - 1].length;\n        ins[0] = head ~ ins[0];\n        ins[$ - 1] = ins[$ - 1] ~ tail;\n        lines_ = lines_[0 .. caret_.line] ~ ins ~ lines_[caret_.line + 1 .. $];\n        caret_ = TextPos(caret_.line + ins.length - 1, lastLen);\n    }\n    textChanged();\n}\n\noverride bool onTextInput(dchar c) {\n    if (c < 0x20 || c == 0x7F || (c >= 0xF700 && c <= 0xF8FF)) {\n        return true;\n    }\n    deleteSelectionRaw();\n    dchar[] ln = lines_[caret_.line];\n    lines_[caret_.line] = ln[0 .. caret_.col] ~ c ~ ln[caret_.col .. $];\n    caret_.col++;\n    textChanged();\n    return true;\n}\n\nprivate bool deleteSelectionRaw() {\n    if (!hasSelection()) {\n        return false;\n    }\n    immutable TextPos a = selStart();\n    immutable TextPos b = selEnd();\n    dchar[] joined = lines_[a.line][0 .. a.col] ~ lines_[b.line][b.col .. $];\n    lines_ = lines_[0 .. a.line] ~ joined ~ lines_[b.line + 1 .. $];\n    caret_ = a;\n    anchor_ = a;\n    return true;\n}\n\nprivate void deleteBackward() {\n    if (!hasSelection()) {\n        immutable TextPos p = charLeft(caret_);\n        if (p == caret_) {\n            return;\n        }\n        anchor_ = p;\n    }\n    deleteSelectionRaw();\n    textChanged();\n}\n\nprivate void textChanged() {\n    anchor_ = caret_;\n    wantCol_ = caret_.col;\n    markedLine_ = NO_MARK;\n    scrollTo(scrollY_);\n    ensureCaretVisible();\n    invalidate();\n    if (onChange !is null) {\n        onChange();\n    }\n}\n```\n5. Selection and clipboard.\n```d\nvoid selectAll() {\n    anchor_ = TextPos(0, 0);\n    caret_ = TextPos(lines_.length - 1, lines_[$ - 1].length);\n    wantCol_ = caret_.col;\n    ensureCaretVisible();\n    invalidate();\n}\n\nstring selectedText() const {\n    immutable TextPos a = selStart();\n    immutable TextPos b = selEnd();\n    if (a.line == b.line) {\n        return toUTF8(lines_[a.line][a.col .. b.col]);\n    }\n    string s = toUTF8(lines_[a.line][a.col .. $]);\n    foreach (i; a.line + 1 .. b.line) {\n        s ~= '\\n';\n        s ~= toUTF8(lines_[i]);\n    }\n    s ~= '\\n';\n    s ~= toUTF8(lines_[b.line][0 .. b.col]);\n    return s;\n}\n\nprivate bool onCommandKey(uint code, bool shift) {\n    switch (code) {\n    case KeyCode.a:\n        selectAll();\n        return true;\n    case KeyCode.c:\n    case KeyCode.x:\n        if (hasSelection() && clipboardWrite !is null) {\n            clipboardWrite(selectedText());\n            if (code == KeyCode.x) {\n                deleteSelectionRaw();\n                textChanged();\n            }\n        }\n        return true;\n    case KeyCode.v:\n        if (clipboardRead !is null) {\n            immutable string s = clipboardRead();\n            if (s.length > 0) {\n                insertText(s);\n            }\n        }\n        return true;\n    case KeyCode.returnKey:\n    case KeyCode.keypadEnter:\n        if (onSubmit !is null) {\n            onSubmit();\n        }\n        return true;\n    case KeyCode.left:\n        moveCaret(TextPos(caret_.line, 0), shift);\n        return true;\n    case KeyCode.right:\n        moveCaret(TextPos(caret_.line, lines_[caret_.line].length), shift);\n        return true;\n    case KeyCode.up:\n    case KeyCode.home:\n        moveCaret(TextPos(0, 0), shift);\n        return true;\n    case KeyCode.down:\n    case KeyCode.end:\n        moveCaret(TextPos(lines_.length - 1, lines_[$ - 1].length), shift);\n        return true;\n    default:\n        return false;\n    }\n}\n```\n6. Mouse.\n```d\noverride bool onMouseMove(const ref MouseEvent e) {\n    if (!dragging_) {\n        return false;\n    }\n    moveCaret(posAt(e.pos), true);\n    return true;\n}\n\noverride bool onMouseUp(const ref MouseEvent e) {\n    dragging_ = false;\n    return true;\n}\n\noverride void onCaptureLost() {\n    dragging_ = false;\n}\n\noverride bool onMouseDown(const ref MouseEvent e) {\n    if (e.button != MouseButton.left) {\n        return false;\n    }\n    immutable TextPos p = posAt(e.pos);\n    if (e.clickCount >= 2) {\n        selectWordAt(p);\n    } else {\n        moveCaret(p, e.shift());\n        dragging_ = true;\n    }\n    return true;\n}\n\nprivate TextPos posAt(Point2F p) {\n    auto ctx = context();\n    ITextMeasurer m = ctx is null ? null : ctx.measurer();\n    immutable StudioTheme theme = ctx is null ? StudioTheme.init : ctx.theme;\n    immutable TextAreaMetrics k = metricsFor(m, theme);\n    immutable float rel = p.y - k.textTop + scrollY_;\n    size_t line = rel > 0.0f && k.lineH > 0.0f ? cast(size_t)(rel / k.lineH) : 0;\n    if (line >= lines_.length) {\n        line = lines_.length - 1;\n    }\n    const(dchar)[] ln = lines_[line];\n    float prev = 0.0f;\n    foreach (c; 0 .. ln.length) {\n        immutable float next = measureTextOr(m, toUTF8(ln[0 .. c + 1]), FontId.mono, theme.fontSizeMono);\n        if (p.x < k.textX + (prev + next) * 0.5f) {\n            return TextPos(line, c);\n        }\n        prev = next;\n    }\n    return TextPos(line, ln.length);\n}\n\nprivate void selectWordAt(TextPos p) {\n    const(dchar)[] ln = lines_[p.line];\n    if (ln.length == 0) {\n        moveCaret(p, false);\n        return;\n    }\n    immutable size_t i = p.col < ln.length ? p.col : ln.length - 1;\n    size_t s = i;\n    size_t e = i + 1;\n    if (isWordChar(ln[i])) {\n        while (s > 0 && isWordChar(ln[s - 1])) {\n            s--;\n        }\n        while (e < ln.length && isWordChar(ln[e])) {\n            e++;\n        }\n    }\n    anchor_ = TextPos(p.line, s);\n    caret_ = TextPos(p.line, e);\n    wantCol_ = e;\n    invalidate();\n}\n```\n7. Drawing and the marked line. `clearMark()` stores `NO_MARK` the same way.\n```d\nvoid markLine(size_t line) {\n    markedLine_ = line < lines_.length ? line : NO_MARK;\n    invalidate();\n}\n\noverride void paint(IRenderer2D r, const ref StudioTheme theme) {\n    immutable TextAreaMetrics k = metricsFor(r, theme);\n    immutable float size = theme.fontSizeMono;\n    r.fillRoundedRect(bounds, theme.radiusSm, theme.panelRaised);\n    r.pushClip(bounds.inset(theme.borderWidth));\n    r.fillRect(RectF(bounds.x, bounds.y, k.gutterW, bounds.h), theme.panelSunken);\n    r.fillRect(RectF(bounds.x + k.gutterW - theme.borderWidth, bounds.y, theme.borderWidth, bounds.h), theme.border);\n    immutable size_t first = k.lineH > 0.0f ? cast(size_t)(scrollY_ / k.lineH) : 0;\n    immutable TextPos a = selStart();\n    immutable TextPos b = selEnd();\n    foreach (i; first .. lines_.length) {\n        immutable float y = k.textTop + cast(float) i * k.lineH - scrollY_;\n        if (y > bounds.bottom()) {\n            break;\n        }\n        if (hasSelection() && i >= a.line && i <= b.line) {\n            immutable size_t c0 = i == a.line ? a.col : 0;\n            immutable size_t c1 = i == b.line ? b.col : lines_[i].length;\n            immutable float x0 = k.textX + r.measureText(toUTF8(lines_[i][0 .. c0]), FontId.mono, size);\n            float x1 = k.textX + r.measureText(toUTF8(lines_[i][0 .. c1]), FontId.mono, size);\n            if (i < b.line) {\n                x1 += r.measureText(\"0\", FontId.mono, size);\n            }\n            r.fillRect(RectF(x0, y, x1 - x0, k.lineH), theme.selection);\n        }\n        immutable string num = to!string(i + 1);\n        immutable float nw = r.measureText(num, FontId.mono, size);\n        r.drawText(Point2F(bounds.x + k.gutterW - k.pad - nw, y), num, FontId.mono, size, theme.textDim);\n        r.drawText(Point2F(k.textX, y), toUTF8(lines_[i]), FontId.mono, size, theme.text);\n        if (i == markedLine_) {\n            r.strokeRoundedRect(RectF(bounds.x, y, bounds.w, k.lineH).inset(theme.borderWidth), 0.0f,\n                2.0f * theme.borderWidth, theme.danger);\n        }\n        if (i == caret_.line && isFocused()) {\n            immutable float cx = k.textX + r.measureText(toUTF8(lines_[i][0 .. caret_.col]), FontId.mono, size);\n            r.fillRect(RectF(cx, y, 1.5f, k.lineH), theme.accentHot);\n        }\n    }\n    immutable float content = cast(float) lines_.length * k.lineH;\n    if (content > k.viewH && k.viewH > 0.0f) {\n        ScrollBarModel bar;\n        bar.axis = Axis.vertical;\n        bar.track = RectF(bounds.right() - theme.scrollbarThickness, bounds.y, theme.scrollbarThickness, bounds.h);\n        bar.contentLength = content;\n        bar.viewportLength = k.viewH;\n        bar.offset = scrollY_;\n        bar.minThumb = theme.scrollbarMinThumb;\n        r.fillRect(bar.track, theme.scrollTrack);\n        r.fillRoundedRect(bar.thumbRect(), theme.radiusSm, theme.scrollThumb);\n    }\n    r.popClip();\n    if (isFocused()) {\n        r.strokeRoundedRect(bounds, theme.radiusSm, theme.focusRingWidth, theme.focusRing);\n    } else {\n        r.strokeRoundedRect(bounds, theme.radiusSm, theme.borderWidth, theme.border);\n    }\n}\n```\n8. Gallery. In `source/app/gui_gallery.d` add `TextArea` to the `gui.widgets` import (38), add `private string clipText_;` after `status_` (137), and insert this block before line 193. The file compiles only in the `app` configuration. Check with `dub build --compiler=ldc2 --config=app --build=debug 2>&1 | tail -5`.\n```d\ncontrols.add(new Label(\"Text area\"));\nTextArea area = controls.add(new TextArea(\"tempo 120\\nplay C-4\\n  wait 4\"));\narea.preferredSize = Point2F(240, 110);\narea.markLine(1);\narea.clipboardRead = () => clipText_;\narea.clipboardWrite = (string s) { clipText_ = s; return true; };\narea.onChange = () { setStatus(format(\"text area: %s lines\", area.lineCount())); };\narea.onSubmit = () { setStatus(\"text area: submit\"); };\n```\n9. Update both file headers (`widgets.d` Controls list at 18 to 21, Planned API, External; the gallery's Purpose). Run all gates. Write the changelog.\n\n**Acceptance table.** Every row uses this rig:\n```d\nauto root = new Panel();\nauto h = new Harness(root, RectF(0, 0, 400, 300));\nauto ta = root.add(new TextArea(\"\"));\nta.bounds = RectF(10, 10, 300, 83);\nh.ctx.setFocus(ta);\n```\nThe fake font is 0.5 em wide and 1.25 em high (`gui_test.d` 69, 93). `fontSizeMono` is 12, `spacingSm` 4, `borderWidth` 1 (`theme.d` 211, 195, 204). So a character is 6 wide and a line 15 high. Caret is (line, column) from 0. A quoted text as input means `setText`.\n\n| Input | Working | Expected |\n| --- | --- | --- |\n| the rig | gutter 2·6 + 2·4; (83 − 8) / 15 | `gutterWidth()` 20, `visibleLineCount()` 5, `lineRect(0)` (10, 14, 300, 15) |\n| type `ab`, Return, type `cd`; then Home, Backspace | split at column 2; join at old length 2 | `\"ab\\ncd\"` (1, 2); then `\"abcd\"` (0, 2) |\n| `\"ab\\ncd\"`, `setCaret(0, 2)`, Delete | line 1 pulled up | `\"abcd\"` (0, 2) |\n| `\"\"`, Backspace | refusal: nothing to delete | unchanged, no `onChange` |\n| `\"é가x\"`, `setCaret(0, 3)`, Left, Backspace, type `가` | \"가\" goes whole, then returns; bytes 2 + 3 + 1 | `\"éx\"` (0, 1), then `\"é가x\"` (0, 2), `text().length` 6 |\n| `\"one\\ntwo\\nthree\"`, `setCaret(0, 1)`, Shift+Down, Shift+Right, type `X` | selection `\"ne\\ntw\"` | `\"oXo\\nthree\"` (0, 2) |\n| `\"ab\"`, `setCaret(0, 1)`, clipboard `\"1\\r\\n2\\t3\\n\"`, Cmd+V | CRLF is one break; tab is 4 spaces | `\"a1\\n2    3\\nb\"` (2, 0) |\n| `\"hello world\"`, Shift+Right twice, Cmd+C, Cmd+X | columns 0 to 2 | clipboard `\"he\"`; `\"llo world\"` (0, 0) |\n| `\"foo bar_baz  qux\"`, Option+Right ×3, Option+Left ×2 | `_` is a word character | columns 3, 11, 16, then 13, 4 |\n| `\"abcdef\\nab\\nabcd\"`, `setCaret(0, 5)`, Down ×3, Up ×3 | lengths 2 and 4; Up on line 0 gives column 0 | (1, 2), (2, 4), (2, 4), then (0, 0) |\n| then End, Shift+Home, Tab | `TAB_SPACES` = 4 | `\"    \\nab\\nabcd\"` (0, 4) |\n| 20 lines `L`, Page Down ×2, `h.scroll(50, 50, 0, -10000)` | 6·15 − 75; 11·15 − 75; 20·15 − 75 | (5, 0) scroll 15; (10, 0) scroll 90; scroll 225 |\n| 100 lines | 3·6 + 8 | `gutterWidth()` 26 |\n| `\"hello world\\nsecond\"`, `h.click(53, 31)` | text x 10 + 20 + 4; (53 − 34) / 6 = 3.17; (31 − 14) / 15 = 1 | (1, 3) |\n| `h.doubleClick(77, 16)` | (77 − 34) / 6 = 7.17 | `selectedText()` `\"world\"`, (0, 11) |\n| `h.drag(40, 16, 46, 31)` | (0, 1) to (1, 2) | `selectedText()` `\"ello world\\nse\"` |\n| `markLine(1)`, `h.ctx.renderFrame(h.renderer, 1.0f)` | row (10, 29, 300, 15) inset 1 | shape rect [11, 30, 298, 13], `borderWidth` 2, border color `danger` |\n| `markLine(5)` on 2 lines; an edit after `markLine(1)` | refusal; edits clear | `markedLine() == TextArea.NO_MARK` |\n| `h.ctx.setTheme(t.scaled(2.0f))` | line 30; 2·12 + 16; (83 − 16) / 30 | `lineRect(0).h` 30, `gutterWidth()` 40, `visibleLineCount()` 2 |\n| Escape, Shift+Tab, Cmd+S (code 1) to `ta.onKeyDown` | refusal: not editor keys | `false` each |\n\nEvery row was run on a prototype of this code with the real `Harness`.\n\n**Tests.** `tests/unit/widgets_textarea_test.d` does not exist; create it. Copy the header shape of `tests/unit/gui_test.d` (1 to 33) and start as below. `dub` finds the file itself. Imitate the `TextField` test at `gui_test.d` 2336 (`h.type(\"ab\"d)`, `h.key(KeyCode.left, KeyModifiers.shift)`). Then write one block per step:\n```d\nmodule tests.unit.widgets_textarea_test;\n\nversion (unittest) {\n    import gui.layout;\n    import gui.renderer;\n    import gui.theme;\n    import gui.widgets;\n    import platform.interfaces : KeyModifiers;\n    import tests.unit.gui_test : countKind, Harness, near, nearRect;\n\n    unittest {\n        auto root = new Panel();\n        auto h = new Harness(root, RectF(0, 0, 400, 300));\n        auto ta = root.add(new TextArea(\"\"));\n        ta.bounds = RectF(10, 10, 300, 83);\n        string clip;\n        ta.clipboardRead = () => clip;\n        ta.clipboardWrite = (string s) { clip = s; return true; };\n        h.ctx.setFocus(ta);\n        h.type(\"ab\"d);\n        assert(ta.text() == \"ab\" && ta.caretLine() == 0 && ta.caretColumn() == 2);\n    }\n}\n```\n1. free functions, storage round trip, clamping;\n2. metrics, scrolling, `scaled`, `measure` without `preferredSize` (268 by 128);\n3. caret keys, word jumps, page keys;\n4. typing, deleting, the filter (`h.type(\"\\r\\t\"d)` changes nothing), `onChange` counts;\n5. selection, clipboard (also null delegates), unconsumed keys, `onSubmit`;\n6. mouse;\n7. drawing: marked-line stroke, selection fill, caret only with focus.\n\n**Pitfalls.**\n- `gui.widgets` must not import `gui.views.studio_context` (`IStudioClipboard`). So the hooks are delegates.\n- `size_t` cannot go below 0. Test `col > 0` before subtracting.\n- `moveCaret` sets `wantCol_`; `moveVertical` restores it afterwards. Keep that order.\n- `Harness.key` returns `true` for Shift+Tab because the context moves focus. Call `ta.onKeyDown(ke)` with a local `KeyEvent ke`.\n- A click outside `ta.bounds` removes focus. Call `h.ctx.setFocus(ta)` before a drawing test.\n- No `//` anywhere, also in the test file.\n\n**Do not.**\n- Do not change `TextField`, `UiContext`, other widgets, the theme, `source/platform/`, `gui_shell.d` or the views (the script tab is T112).\n- Do not write a color literal.\n- Do not add undo, wrapping, horizontal scrolling or auto-indent.\n\n**Done when.**\n- `TextArea` is in `widgets.d`; `KeyCode` has `x`, `c`, `v`.\n- `widgets_textarea_test.d` asserts every table row; the headless suite prints one module more.\n- Gate 2 prints only `exit 0`; Gate 3 prints nothing for the three files.\n- The `app` build succeeds; the gallery shows line 2 outlined.\n\n**Decided by the owner (2026-11-26).**\n1. Two clipboard delegates on `TextArea` (T112 connects them to the app clipboard) and a new test file that imports `Harness` from `gui_test.d`, as written above. The task text was corrected to say so.\n2. Only committed IME text is accepted, as `TextField` does.\n3. Columns are code points. The script interpreter reports byte columns; T112 converts them. Nothing to do here.\n4. Any edit clears the marked line; Tab is 4 spaces; Cmd+Z and Cmd+S pass through to the application; the editor has no undo of its own, no word wrap and no horizontal scrolling.",
       "guide_author": "Gemini 4 Neon",
-      "guide_date": "2026-11-26"
+      "guide_date": "2026-11-26",
+      "closed": 86
     },
     {
       "id": "T111",
@@ -1681,27 +1707,28 @@
       "area": "GUI/views",
       "title": "Script tab: the view",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/gui/views/script_view.d` (new), `source/gui/views/pattern_editor.d`, `tests/unit/views_script_test.d` (new)",
       "task": "The fourth tab of the pattern editor's view bar, **Script** (T108): registered like the other views and offered for every pattern; it holds the `TextArea` (T110), an **Apply** button, a list of the project's handles, and a message area. Apply hands the lines to a hook; this task ends with the hook connected to a check-only run of the interpreter (T83), which lists the problems with line and column and marks the first line, or says how many commands are valid. Nothing is changed in the project yet (T113). Tests: the tab appears and keeps its text when the tab or the pattern changes; Apply with a wrong command shows the problem and keeps the text; keyboard focus and ⌘Return.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added fourth PatternEditorView tab Script (gui.views.script_view.ScriptView) offered for every pattern with TextArea, Apply button, Cmd+Return submit, project handles strip, check-only validation, line marking, and headless UI tests. Recorded in docs/changelog.md (2026-11-27 08:40:17 KST).",
       "needs": [
         "T110",
         "T83",
         "T108"
-      ]
+      ],
+      "closed": 100
     },
     {
       "id": "T113",
       "area": "GUI/views",
       "title": "Script tab: applying a script to the open project",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/gui/views/script_view.d`, `source/gui/views/studio_root.d`, `source/compose/script/interpreter.d`, `tests/unit/views_script_test.d`",
       "task": "Apply per T108 and T109: start an interpreter from a copy of the open document (T103), run every line, and when no line failed swap the result in as one undo step (T111) and clear the input; when any line failed, change nothing and keep the input with the problems shown. The commands T109 refuses in the app are refused here. Tests: a script that adds a module, a part and notes changes the project and one undo restores it exactly; a script with an error in its last line changes nothing and keeps the text; applying while playing keeps the transport running; refused commands.",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Apply in the Script tab (`ScriptView.applyToSession`) snapshots the open project with its asset data, starts an interpreter from it in check mode, restricts it for the app (`restrictForApp`: `project`, `open` and `save` refused with a reason; relative paths read from the project folder, refused before the project is saved), runs every line, and only when all succeed writes the presets `savemodule` kept in memory and swaps the document in with `doReplaceDocument` as one undo step \"Apply script\", then clears the input. Any failing line changes nothing on disk or in the project and keeps the input with the line marked. A `title` command was added because T109 assumed one and `project` was the only way to set the title. Handles shown in the tab are the ones the interpreter derives. Tests in `tests/unit/views_script_test.d` (exact undo/redo by serialized bytes, last-line error, refused commands, playback continues, relative paths, presets written only on success); breaking check mode, the refusals or the clearing makes a test fail. Recorded in `docs/changelog.md` (2026-11-27 10:24:22 KST).",
       "needs": [
         "T112",
         "T111",
@@ -1711,7 +1738,8 @@
         "T101",
         "T105",
         "T106"
-      ]
+      ],
+      "closed": 113
     },
     {
       "id": "T114",
@@ -1721,7 +1749,7 @@
       "state": "open",
       "files": "`tests/unit/views_studio_root_test.d`, `source/app/studio_app.d` (`--studio-gui-selftest`), `docs/manual.md`, `../architecture.md` (§10), `agents.md` (package map)",
       "task": "A headless end-to-end test (type the example script of T67 without its `project` and `save` lines into the tab, Apply, check the document, undo, redo, render) and a GUI self-test step. A manual section for the Script tab with the commands refused there, and the decisions T108 and T109 moved into the manual and the architecture document. **Open until the owner has applied a script by hand** in the running app.",
-      "status": null,
+      "status": "Built 2026-11-27: headless end-to-end test (`views_studio_root_test.d`: the T67 example without `project` and `save` typed into the tab, Apply, document checked, render not silent, ⌘Z and ⇧⌘Z restore the exact bytes), GUI self-test step \"script tab (apply, undo)\" (18/18 passed), manual §8.14, §15 and Appendix D, `../architecture.md` §10, `agents.md`. Waiting for the owner to apply a script by hand in the running app.",
       "done": null,
       "needs": [
         "T113"
@@ -1732,14 +1760,63 @@
       "area": "Modules",
       "title": "SpectraVoice: crossfade when the table changes",
       "type": "Build",
-      "state": "open",
+      "state": "done",
       "files": "`source/modules/synths/spectravoice.d`, `tests/unit/modules_test.d`",
       "task": "After T94 a change of *Profile* or *Bandwidth* switches the table at a block boundary, which can click on a held note. Crossfade from the old table to the new one over a few milliseconds, without allocating on the audio thread. Tests: the largest sample-to-sample step during a change on a held note stays below a stated bound; no allocation (`rt_malloc_trap`).",
       "status": null,
-      "done": null,
+      "done": "2026-11-27. Added 5 ms lock-free linear wavetable crossfade to SpectraVoice on held notes when the active table changes, using raw pointer/length tracking (zero GC references, zero RT allocations) with swapAsset safety; verified with Organ->Bell and Brass Bandwidth crossfade unit tests under verifyZeroRtAllocationsNothrow and max step < 0.25. Recorded in docs/changelog.md (2026-11-27 08:16:13 KST).",
       "needs": [
         "T94"
-      ]
+      ],
+      "closed": 88
+    },
+    {
+      "id": "T116",
+      "area": "Compose",
+      "title": "arrange: raw clips and section arrangements together",
+      "type": "Build",
+      "state": "open",
+      "files": "`source/compose/part_writer.d`, `source/compose/script/commands.d`, `tests/unit/compose_part_test.d`, `tests/unit/compose_script_test.d`, `docs/composer.md`",
+      "task": "Found while writing `docs/composer.md` (T89). `arrange clip=…` after `arrange <sections>` moves every section clip to line 0 and the song shrinks to one bar; `arrange <sections>` after `arrange clip=` drops the raw clips. Reproduce: two one-bar sections a and b with notes, a raw pattern made with `cells riff tracks=1 lines=16`, then `arrange a b a` and `arrange clip=riff start=0 len=16 lane=5`; `describe` shows the a and b clips at `start=0` on one lane and `render` reports one bar. Make the two forms combine (raw clips keep their lanes and the section arrangement keeps its positions), or refuse the second form with a clear reason; document the rule. Tests for both orders.",
+      "status": null,
+      "done": null,
+      "needs": []
+    },
+    {
+      "id": "T117",
+      "area": "Compose",
+      "title": "Warnings for scripts that run but make no sound",
+      "type": "Build",
+      "state": "open",
+      "files": "`source/compose/script/interpreter.d`, `source/compose/script/commands.d`, `source/compose_main.d`, `tests/unit/compose_script_test.d`, `docs/composer.md`",
+      "task": "Found while writing `docs/composer.md` (T89). Scripts that are valid but certainly silent pass `check`, `run` and `render` without a word: named sections with notes but no `arrange` (every bar silent), and `remove` of a module that a part plays (the notes stay as cells with no module). Add warnings (not errors) to the result of `run` and `check`, printed after the summary and in `--json`, and shown in the app's Script tab message: sections that are never arranged, parts whose module was removed, parts with no notes. Exit code stays 0. Tests for each warning and for a script that gets none.",
+      "status": null,
+      "done": null,
+      "needs": []
+    },
+    {
+      "id": "T118",
+      "area": "Compose/program",
+      "title": "Render report: limiter detection and the loop",
+      "type": "Build",
+      "state": "open",
+      "files": "`source/compose/render.d`, `tests/unit/compose_render_test.d`, `docs/composer.md`",
+      "task": "Found while writing `docs/composer.md` (T89). (1) \"limiter reached\" is reported only for samples at 0.999 or more after the soft limiter, which starts at 0.95, so a mix driven to about twice full scale still says \"limiter not reached\" (a Saw Lead with 4-voice chords and a Synth Bass, both at gain 1 into `out`). Report when the limiter engages (input above its threshold), with the number of bars affected. (2) `render` follows a custom `loop` (for example `loop verse chorus`), so the end of the arrangement is never heard; T68 says the loop covers the arrangement unless set otherwise. Decide with the owner whether `render` plays the arrangement once from start to end (proposed) or the loop, and state it in the report header. Tests for both.",
+      "status": null,
+      "done": null,
+      "needs": []
+    },
+    {
+      "id": "T119",
+      "area": "Compose/script",
+      "title": "Error messages: wrong suggestions and empty section names",
+      "type": "Build",
+      "state": "open",
+      "files": "`source/compose/script/commands.d`, `source/compose/script/interpreter.d`, `tests/unit/compose_script_test.d`",
+      "task": "Found while writing `docs/composer.md` (T89). (1) A chord progression longer than its section is reported at the command word with \"did you mean '1'?\", a position shown as a name suggestion; report it at the progression with the section length and the number of bars the progression needs. (2) `notes` or `chords` without a section once sections exist says \"there is no section ''; did you mean 'a'?\"; say that a section is needed and list the sections. (3) `describe` prints raw `arrange clip=#id` lines when parts were declared in another order than it uses, although the arrangement is a plain section arrangement; print `arrange <sections>` then. Tests for each message.",
+      "status": null,
+      "done": null,
+      "needs": []
     }
   ],
   "changelog": [
@@ -2131,6 +2208,75 @@
       "changes": [
         "Modified: T76 moved to *Done*.",
         "Modified: Stages recomputed: T77 Stage 1 → 0; T83 Stage 1 → 0; T96 Stage 1 → 0; T86 Stage 2 → 1; T97 Stage 2 → 1; T78 Stage 3 → 2; T79 Stage 2 → 1; T80 Stage 3 → 2; T81 Stage 3 → 2; T82 Stage 2 → 1; T85 Stage 2 → 1; T101 Stage 2 → 1; T103 Stage 3 → 2; T87 Stage 4 → 3; T98 Stage 2 → 1; T100 Stage 3 → 2; T104 Stage 3 → 2; T99 Stage 4 → 3; T105 Stage 5 → 4; T106 Stage 4 → 3; T107 Stage 6 → 5; T102 Stage 2 → 1; T88 Stage 7 → 6; T89 Stage 8 → 7; T112 Stage 2 → 1; T113 Stage 6 → 5; T114 Stage 7 → 6."
+      ]
+    },
+    {
+      "time": "2026-11-27T07:56:40+09:00",
+      "author": "Gemini 4 Neon",
+      "title": "T79, T82, T85, T86, T97, T98, T101, T102, T112 done",
+      "changes": [
+        "Modified: T110 moved to *Done*.",
+        "Modified: T84 moved to *Done*.",
+        "Modified: T115 moved to *Done*.",
+        "Modified: T96 moved to *Done*.",
+        "Modified: Stages recomputed: T86 Stage 1 → 0; T82 Stage 1 → 0; T103 Stage 2 → 1; T87 Stage 3 → 2.",
+        "Modified: T77 moved to *Done*.",
+        "Modified: Stages recomputed: T97 Stage 1 → 0; T78 Stage 2 → 1; T79 Stage 1 → 0; T80 Stage 2 → 1; T81 Stage 2 → 1; T98 Stage 1 → 0; T100 Stage 2 → 1; T104 Stage 2 → 1; T99 Stage 3 → 2; T105 Stage 4 → 3; T106 Stage 3 → 2; T107 Stage 5 → 4; T88 Stage 6 → 5; T89 Stage 7 → 6; T113 Stage 5 → 4; T114 Stage 6 → 5.",
+        "Modified: T83 moved to *Done*.",
+        "Modified: Stages recomputed: T85 Stage 1 → 0; T101 Stage 1 → 0; T102 Stage 1 → 0; T112 Stage 1 → 0.",
+        "Modified: T97 moved to *Done*.",
+        "Modified: Stages recomputed: T78 Stage 1 → 0; T80 Stage 1 → 0; T81 Stage 1 → 0; T99 Stage 2 → 1; T105 Stage 3 → 2; T107 Stage 4 → 3; T88 Stage 5 → 4; T89 Stage 6 → 5; T113 Stage 4 → 3; T114 Stage 5 → 4.",
+        "Modified: T98 moved to *Done*.",
+        "Modified: Stages recomputed: T104 Stage 1 → 0; T106 Stage 2 → 1.",
+        "Modified: T79 moved to *Done*.",
+        "Modified: T82 moved to *Done*.",
+        "Modified: Stages recomputed: T103 Stage 1 → 0; T87 Stage 2 → 1; T100 Stage 1 → 0.",
+        "Modified: T101 moved to *Done*.",
+        "Modified: T85 moved to *Done*.",
+        "Modified: T86 moved to *Done*.",
+        "Modified: T102 moved to *Done*.",
+        "Modified: T112 moved to *Done*."
+      ]
+    },
+    {
+      "time": "2026-11-27T09:02:31+09:00",
+      "author": "Gemini 4 Neon",
+      "title": "T87, T99, T106, T105, T107 done",
+      "changes": [
+        "Modified: T78 moved to *Done*.",
+        "Modified: Stages recomputed: T99 Stage 1 → 0; T105 Stage 2 → 1; T107 Stage 3 → 2; T88 Stage 4 → 3; T89 Stage 5 → 4; T113 Stage 3 → 2; T114 Stage 4 → 3.",
+        "Modified: T80 moved to *Done*.",
+        "Modified: T81 moved to *Done*.",
+        "Modified: T100 moved to *Done*.",
+        "Modified: T103 moved to *Done*.",
+        "Modified: Stages recomputed: T87 Stage 1 → 0.",
+        "Modified: T104 moved to *Done*.",
+        "Modified: Stages recomputed: T106 Stage 1 → 0.",
+        "Modified: T87 moved to *Done*.",
+        "Modified: T99 moved to *Done*.",
+        "Modified: Stages recomputed: T105 Stage 1 → 0; T107 Stage 2 → 1; T88 Stage 3 → 2; T89 Stage 4 → 3; T113 Stage 2 → 1; T114 Stage 3 → 2.",
+        "Modified: T106 moved to *Done*.",
+        "Modified: T105 moved to *Done*.",
+        "Modified: Stages recomputed: T107 Stage 1 → 0; T88 Stage 2 → 1; T89 Stage 3 → 2; T113 Stage 1 → 0; T114 Stage 2 → 1.",
+        "Modified: T107 moved to *Done*.",
+        "Modified: Stages recomputed: T88 Stage 1 → 0; T89 Stage 2 → 1."
+      ]
+    },
+    {
+      "time": "2026-11-27T10:05:05+09:00",
+      "author": "Claude Opus 5.5",
+      "title": "T113 and T89 done; T88 closed; T114 built and waiting for the owner; T116–T119 added",
+      "changes": [
+        "Modified: T88 moved to *Done* (the owner opened the helper-written sample project neon_drift in the app and confirmed it looks and sounds right).",
+        "Modified: Stages recomputed: T89 Stage 1 → 0.",
+        "Added: T116 ([Compose] arrange: raw clips and section arrangements together, Build) in Stage 0.",
+        "Added: T117 ([Compose] Warnings for scripts that run but make no sound, Build) in Stage 0.",
+        "Added: T118 ([Compose/program] Render report: limiter detection and the loop, Build) in Stage 0.",
+        "Added: T119 ([Compose/script] Error messages: wrong suggestions and empty section names, Build) in Stage 0.",
+        "Modified: T113 moved to *Done*.",
+        "Modified: Stages recomputed: T114 Stage 1 → 0.",
+        "Modified: T89 moved to *Done*.",
+        "Modified: T114 status changed."
       ]
     }
   ]

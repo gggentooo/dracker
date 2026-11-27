@@ -38,6 +38,7 @@ import core.sys.posix.signal : SIGINT, SIGTERM, signal;
 import core.sys.posix.time : nanosleep, timespec;
 import std.conv : to;
 
+import compose.render : renderProjectToWav;
 import io.project_format : LoadedProject;
 import std.math : fabs, isFinite, pow;
 import std.stdio : stderr, stdout, writefln, writeln;
@@ -888,60 +889,6 @@ private int runSoundCheck(string path) {
     writefln("Wrote %s (%.1f s, peak %.2f): bars 1-4 bass, 5-8 piano, 9-12 both; I-vi-ii-V7 in C major at %.0f BPM",
         path, seconds, peak, proj.bpm);
     return 0;
-}
-
-/**
- * Renders a project from line 0 offline at 44.1 kHz and writes a stereo WAV. Needs no audio device.
- *
- * Params:
- *   proj = Project to play.
- *   seconds = Length to render.
- *   path = Destination .wav path.
- *   peak = Receives the highest absolute sample.
- *   err = Receives the reason on failure.
- *
- * Returns:
- *   True on success.
- */
-private bool renderProjectToWav(const ref LoadedProject proj, double seconds, string path, out float peak,
-        out string err) {
-    import app.session : StudioSession;
-    import foundation.memory : OwnedBuffer;
-    import io.audio_io : writeWavFile;
-
-    enum uint rate = 44_100;
-    StudioSession s = new StudioSession();
-    if (!s.initialize(cast(float) rate)) {
-        err = "Session initialization failed";
-        return false;
-    }
-    scope (exit) s.shutdown();
-    if (!s.openProjectFromMemory(proj, err)) {
-        err = "Could not build the preview project: " ~ err;
-        return false;
-    }
-    s.engine().reset();
-    s.engine().setTempo(proj.bpm, proj.ticksPerLine);
-    s.engine().seekLine(0);
-    s.engine().setPlaying(true);
-    immutable size_t frames = (cast(size_t)(seconds * rate) / 64 + 1) * 64;
-    OwnedBuffer!float l;
-    OwnedBuffer!float r;
-    if (!s.engine().renderOfflineToBuffer(frames, 64, l, r)) {
-        err = "Offline render failed";
-        return false;
-    }
-    peak = 0.0f;
-    foreach (i; 0 .. l.length) {
-        peak = fabs(l[i]) > peak ? fabs(l[i]) : peak;
-        peak = fabs(r[i]) > peak ? fabs(r[i]) : peak;
-    }
-    const(float)[][2] channels = [l[], r[]];
-    if (!writeWavFile(path, channels[], rate, err)) {
-        err = "Could not write " ~ path ~ ": " ~ err;
-        return false;
-    }
-    return true;
 }
 
 /**

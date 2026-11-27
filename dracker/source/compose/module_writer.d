@@ -55,7 +55,8 @@
  *   - struct ModuleWriter: loaded(), typeId(), name(), descriptor(), paramCount(), paramValues(), setName(),
  *     setPresetName(), valueOf(), textOf(), setParamText(), setParamValue(), resetToDefaults(), savedModule(),
  *     loadedPreset(), presetBytes(), writePresetFile(), loadSampleBytes(), loadSampleFile()
- *   - static ModuleWriter.fromType(), fromDescriptor(), fromPreset(), fromPresetFile(), fromPresetBytes()
+ *   - static ModuleWriter.fromType(), fromDescriptor(), fromPreset(), fromPresetFile(), fromPresetBytes(),
+ *     fromSavedModule()
  *   - findModuleType(); parameterRangeText(), parameterValueText(); suggestedName(); sampleDataFits()
  *
  * See_Also:
@@ -355,6 +356,57 @@ struct ModuleWriter {
                     "could not read the preset data: " ~ err, ""));
         }
         return adoptPreset(preset, fallbackName);
+    }
+
+    /**
+     * Starts a writer from an existing SavedModule loaded from a project file (T82), keeping its
+     * displayed name, extra data, MetaModule child project, macro bindings, flags, and position intact.
+     *
+     * Params:
+     *   saved = SavedModule from a LoadedProject.
+     *
+     * Returns:
+     *   The writer, or unknownModuleType / mismatchedPreset.
+     */
+    static ModuleWriterResult fromSavedModule(const ref SavedModule saved) @safe pure nothrow {
+        const(ModuleDescriptor)* d = registeredType(saved.typeId);
+        if (d is null) {
+            return ModuleWriterResult(ModuleWriter.init, false,
+                ModuleProblem(ModuleProblemKind.unknownModuleType, saved.typeId,
+                    "the project holds a module type that is not registered: '" ~ saved.typeId ~ "'",
+                    nearestTypeName(registeredDescriptors(), saved.typeId)));
+        }
+        if (saved.paramValues.length > d.params.length) {
+            return ModuleWriterResult(ModuleWriter.init, false,
+                ModuleProblem(ModuleProblemKind.mismatchedPreset, saved.typeId,
+                    "the module does not match its module type '" ~ d.displayName ~ "': it has "
+                    ~ to!string(saved.paramValues.length) ~ " parameter values, the type has "
+                    ~ to!string(d.params.length), ""));
+        }
+        ModuleWriter w;
+        w.desc_ = d;
+        w.mod_ = copyModule(saved);
+        if (w.mod_.paramValues.length < d.params.length) {
+            immutable size_t prevLen = w.mod_.paramValues.length;
+            w.mod_.paramValues.length = d.params.length;
+            foreach (i; prevLen .. d.params.length) {
+                w.mod_.paramValues[i] = d.params[i].defaultVal;
+            }
+        }
+        foreach (i, ref p; d.params) {
+            ModuleProblem valueProblem;
+            immutable float value = w.mod_.paramValues[i];
+            if (!checkValue(p, value, valueTextForMessage(p, value), valueProblem)) {
+                return ModuleWriterResult(ModuleWriter.init, false,
+                    ModuleProblem(ModuleProblemKind.mismatchedPreset, p.name,
+                        "the module does not match its module type '" ~ d.displayName ~ "': "
+                        ~ valueProblem.reason, ""));
+            }
+        }
+        if (w.mod_.name.length == 0) {
+            w.mod_.name = d.displayName;
+        }
+        return ModuleWriterResult(w, true);
     }
 
     /**

@@ -44,9 +44,12 @@
 module compose_main;
 
 import std.file : read;
+import std.format : format;
+import std.math : isFinite;
 import std.stdio : stderr, stdout;
 
 import compose.names : nearestName;
+import compose.script.interpreter : ScriptProblem;
 
 /**
  * The name the program is called by.
@@ -73,7 +76,11 @@ enum ExitCode : int {
 enum ErrorCode : string {
     usage = "usage",
     file = "file",
-    notAvailable = "not_available"
+    notAvailable = "not_available",
+    script = "script",
+    catalog = "catalog",
+    describe = "describe",
+    render = "render"
 }
 
 /**
@@ -111,20 +118,20 @@ struct SubcommandInfo {
 immutable SubcommandInfo[] SUBCOMMANDS = [
     SubcommandInfo(Subcommand.run, "run", "run <script> [-o <file>]",
         "runs a script; its own save commands write files, and -o names the file the run writes.",
-        "script", "The script file (.dcs): plain text with one command per line.", 1, 1, true, false, "T83"),
+        "script", "The script file (.dcs): plain text with one command per line.", 1, 1, true, false, ""),
     SubcommandInfo(Subcommand.check, "check", "check <script>",
         "runs a script without writing anything, to look for errors.",
-        "script", "The script file (.dcs).", 1, 1, false, false, "T83"),
+        "script", "The script file (.dcs).", 1, 1, false, false, ""),
     SubcommandInfo(Subcommand.catalog, "catalog", "catalog [topic]",
         "lists what a script can use: module types, parameters, presets, chords and commands.",
         "topic", "One part of the catalog, such as modules; the whole catalog when left out.", 0, 1, false,
-        false, "T85"),
+        false, ""),
     SubcommandInfo(Subcommand.describe, "describe", "describe <file.msv|file.msym>",
         "prints a project (.msv) or a module preset (.msym) as a script.",
-        "file", "A project (.msv) or a preset (.msym) file.", 1, 1, false, false, "T87"),
+        "file", "A project (.msv) or a preset (.msym) file.", 1, 1, false, false, ""),
     SubcommandInfo(Subcommand.render, "render", "render <file.msv> -o <file.wav>",
         "plays a project offline into a WAV file and reports the levels.",
-        "file", "A project (.msv) file.", 1, 1, true, true, "T86"),
+        "file", "A project (.msv) file.", 1, 1, true, true, ""),
     SubcommandInfo(Subcommand.help, "help", "help [subcommand]",
         "shows the help of the program, or of one subcommand.",
         "subcommand", "The subcommand to explain.", 0, 1, false, false, "")
@@ -463,22 +470,264 @@ int runProgram(const(string)[] args, ProgramIo io) @safe {
         }
         return ExitCode.success;
     }
+    ubyte[] inputBytes;
     if (info.minOperands > 0) {
-        ubyte[] bytes;
         string err;
         immutable bool readOk = io.readInputFile is null
-            ? readFileFromDisk(command.operands[0], bytes, err)
-            : io.readInputFile(command.operands[0], bytes, err);
+            ? readFileFromDisk(command.operands[0], inputBytes, err)
+            : io.readInputFile(command.operands[0], inputBytes, err);
         if (!readOk) {
             reportProblem(io, command.json, ErrorCode.file,
                 "could not read '" ~ command.operands[0] ~ "': " ~ err, "", command.subcommand, "");
             return ExitCode.fileError;
         }
     }
-    reportProblem(io, command.json, ErrorCode.notAvailable,
-        "'" ~ info.name ~ "' is not available in this build yet (task " ~ info.builtBy ~ ")", "",
-        command.subcommand, helpHint(command.subcommand));
-    return ExitCode.fileError;
+
+    final switch (command.subcommand) {
+        case Subcommand.catalog:
+            return executeCatalog(io, command);
+        case Subcommand.render:
+            return executeRender(io, command, inputBytes);
+        case Subcommand.check:
+            return executeCheck(io, command, bytesToText(inputBytes));
+        case Subcommand.run:
+            return executeRun(io, command, bytesToText(inputBytes));
+        case Subcommand.describe:
+            return executeDescribe(io, command, inputBytes);
+        case Subcommand.help:
+            return ExitCode.success;
+    }
+}
+
+private int executeDescribe(ProgramIo io, const ref CommandLine command, const(ubyte)[] bytes) @safe {
+    import compose.script.describe : DescribeResult, describeBytes;
+
+    immutable DescribeResult res = describeBytes(bytes, command.operands[0]);
+    if (!res.ok) {
+        reportProblem(io, command.json, ErrorCode.describe, res.error, "",
+            Subcommand.describe, helpHint(Subcommand.describe));
+        return ExitCode.fileError;
+    }
+    if (command.json) {
+        JsonWriter json = JsonWriter();
+        json.beginObject();
+        json.key("ok");
+        json.valueBool(true);
+        json.key("subcommand");
+        json.valueString("describe");
+        json.key("kind");
+        json.valueString(res.kind);
+        json.key("script");
+        json.valueString(res.script);
+        json.endObject();
+        io.writeOutput(json.text() ~ "\n");
+    } else {
+        io.writeOutput(res.script);
+    }
+    return ExitCode.success;
+}
+
+private int executeCatalog(ProgramIo io, const ref CommandLine command) @safe {
+    import compose.catalog : CatalogResult, runCatalog;
+
+    immutable string topic = command.operands.length > 0 ? command.operands[0] : "";
+    CatalogResult res = runCatalog(topic);
+    if (!res.ok) {
+        reportProblem(io, command.json, ErrorCode.catalog, res.error, res.suggestion,
+            Subcommand.catalog, helpHint(Subcommand.catalog));
+        return ExitCode.fileError;
+    }
+    io.writeOutput(command.json ? res.json : res.text);
+    return ExitCode.success;
+}
+
+private int executeRender(ProgramIo io, const ref CommandLine command, const(ubyte)[] bytes) @trusted {
+    import compose.render : renderProjectWithReport, renderReportJson, renderReportText, RenderResult;
+    import io.project_format : LoadedProject, loadProject;
+
+    LoadedProject proj;
+    string err;
+    if (!loadProject(bytes, proj, err)) {
+        reportProblem(io, command.json, ErrorCode.render,
+            "could not load '" ~ command.operands[0] ~ "': " ~ err, "", Subcommand.render, "");
+        return ExitCode.fileError;
+    }
+    RenderResult res = renderProjectWithReport(proj, command.outputPath);
+    if (!res.ok) {
+        reportProblem(io, command.json, ErrorCode.render, res.error, "", Subcommand.render, "");
+        return ExitCode.fileError;
+    }
+    io.writeOutput(command.json ? renderReportJson(res.report) : renderReportText(res.report));
+    return ExitCode.success;
+}
+
+private int executeCheck(ProgramIo io, const ref CommandLine command, string source) @safe {
+    import compose.script.commands : createDefaultInterpreter;
+    import compose.script.interpreter : RunResult, ScriptInterpreter;
+
+    ScriptInterpreter interp = createDefaultInterpreter(true);
+    RunResult res = interp.runScript(source);
+    if (!res.ok) {
+        reportScriptProblems(io, command.json, Subcommand.check, res.problems);
+        return ExitCode.fileError;
+    }
+    if (command.json) {
+        JsonWriter json = JsonWriter();
+        json.beginObject();
+        json.key("ok");
+        json.valueBool(true);
+        json.key("subcommand");
+        json.valueString("check");
+        json.key("commands");
+        json.valueInt(cast(long) res.commandsRun);
+        json.endObject();
+        io.writeOutput(json.text() ~ "\n");
+    } else {
+        io.writeOutput("OK (" ~ decimal(res.commandsRun) ~ " "
+            ~ (res.commandsRun == 1 ? "command" : "commands") ~ " checked).\n");
+    }
+    return ExitCode.success;
+}
+
+private int executeRun(ProgramIo io, const ref CommandLine command, string source) @safe {
+    import compose.project_writer : ProjectEditResult;
+    import compose.script.commands : createDefaultInterpreter;
+    import compose.script.interpreter : RunResult, ScriptInterpreter, ScriptProblem;
+
+    ScriptInterpreter dryRun = createDefaultInterpreter(true);
+    RunResult checkRes = dryRun.runScript(source);
+    if (!checkRes.ok) {
+        reportScriptProblems(io, command.json, Subcommand.run, checkRes.problems);
+        return ExitCode.fileError;
+    }
+    if (command.outputPath.length > 0) {
+        auto dryDoc = dryRun.buildDocument();
+        if (!dryDoc.ok) {
+            reportScriptProblems(io, command.json, Subcommand.run,
+                [ScriptProblem(1, 1, 1, dryDoc.problem.reason, dryDoc.problem.suggestion, false)]);
+            return ExitCode.fileError;
+        }
+        auto outCheck = dryRun.project().documentBytes(dryDoc.project);
+        if (!outCheck.ok) {
+            reportScriptProblems(io, command.json, Subcommand.run,
+                [ScriptProblem(1, 1, 1, outCheck.problem.reason, outCheck.problem.suggestion, false)]);
+            return ExitCode.fileError;
+        }
+    }
+
+    ScriptInterpreter live = createDefaultInterpreter(false);
+    RunResult runRes = live.runScript(source);
+    if (!runRes.ok) {
+        reportScriptProblems(io, command.json, Subcommand.run, runRes.problems);
+        return ExitCode.fileError;
+    }
+
+    string[] written;
+    foreach (p; live.savedPaths()) {
+        written ~= p;
+    }
+    if (command.outputPath.length > 0) {
+        auto liveDoc = live.buildDocument();
+        if (!liveDoc.ok) {
+            reportProblem(io, command.json, ErrorCode.file, liveDoc.problem.reason,
+                liveDoc.problem.suggestion, Subcommand.run, "");
+            return ExitCode.fileError;
+        }
+        immutable ProjectEditResult writeRes = live.project().writeDocument(liveDoc.project, command.outputPath);
+        if (!writeRes.ok) {
+            reportProblem(io, command.json, ErrorCode.file, writeRes.problem.reason,
+                writeRes.problem.suggestion, Subcommand.run, "");
+            return ExitCode.fileError;
+        }
+        written ~= command.outputPath;
+    }
+
+    if (command.json) {
+        JsonWriter json = JsonWriter();
+        json.beginObject();
+        json.key("ok");
+        json.valueBool(true);
+        json.key("subcommand");
+        json.valueString("run");
+        json.key("commands");
+        json.valueInt(cast(long) runRes.commandsRun);
+        json.key("written");
+        json.beginArray();
+        foreach (w; written) {
+            json.valueString(w);
+        }
+        json.endArray();
+        json.endObject();
+        io.writeOutput(json.text() ~ "\n");
+    } else {
+        io.writeOutput("Ran " ~ decimal(runRes.commandsRun) ~ " "
+            ~ (runRes.commandsRun == 1 ? "command" : "commands") ~ ".\n");
+        foreach (w; written) {
+            io.writeOutput("Wrote " ~ w ~ "\n");
+        }
+    }
+    return ExitCode.success;
+}
+
+private void reportScriptProblems(ProgramIo io, bool json, Subcommand sub,
+        const(ScriptProblem)[] problems) @safe {
+    if (json) {
+        JsonWriter writer = JsonWriter();
+        writer.beginObject();
+        writer.key("ok");
+        writer.valueBool(false);
+        if (problems.length > 0) {
+            auto first = problems[0];
+            writer.key("error");
+            writer.beginObject();
+            writer.key("code");
+            writer.valueString(cast(string) ErrorCode.script);
+            writer.key("line");
+            writer.valueInt(first.line);
+            writer.key("column");
+            writer.valueInt(first.column);
+            writer.key("length");
+            writer.valueInt(first.length);
+            writer.key("message");
+            writer.valueString(first.text());
+            if (first.suggestion.length > 0) {
+                writer.key("suggestion");
+                writer.valueString(first.suggestion);
+            }
+            writer.key("subcommand");
+            writer.valueString(subcommandInfo(sub).name);
+            writer.endObject();
+        }
+        writer.key("problems");
+        writer.beginArray();
+        foreach (ref p; problems) {
+            writer.beginObject();
+            writer.key("line");
+            writer.valueInt(p.line);
+            writer.key("column");
+            writer.valueInt(p.column);
+            writer.key("length");
+            writer.valueInt(p.length);
+            writer.key("message");
+            writer.valueString(p.reason);
+            if (p.suggestion.length > 0) {
+                writer.key("suggestion");
+                writer.valueString(p.suggestion);
+            }
+            writer.endObject();
+        }
+        writer.endArray();
+        writer.endObject();
+        io.writeOutput(writer.text() ~ "\n");
+        return;
+    }
+    foreach (ref p; problems) {
+        io.writeError(PROGRAM_NAME ~ ": " ~ p.text() ~ "\n");
+    }
+}
+
+private string bytesToText(const(ubyte)[] bytes) @trusted pure nothrow {
+    return (cast(const(char)[]) bytes).idup;
 }
 
 /**
@@ -595,6 +844,27 @@ struct JsonWriter {
     void valueBool(bool value) @safe pure nothrow {
         beforeValue();
         text_ ~= value ? "true" : "false";
+        afterValue();
+    }
+
+    /**
+     * Writes a finite decimal number.
+     *
+     * Params:
+     *   value = The floating-point value (non-finite maps to 0).
+     */
+    void valueDouble(double value) @safe pure nothrow {
+        beforeValue();
+        if (!isFinite(value)) {
+            text_ ~= "0";
+        } else {
+            try {
+                immutable string s = format("%.6g", value);
+                text_ ~= s == "-0" ? "0" : s;
+            } catch (Exception) {
+                text_ ~= "0";
+            }
+        }
         afterValue();
     }
 

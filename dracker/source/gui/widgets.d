@@ -16,7 +16,7 @@
  *   layer for popups that closes on outside click/Escape (a modal overlay blocks everything below it and an
  *   outside click closes only it and the overlays above it), right-click context-menu providers, and a
  *   needsRedraw/isAnimating pair so the host can sleep when idle. Controls: Panel, Label, Button, Toggle,
- *   Slider, RotaryKnob, NumericDragBox, Dropdown, ContextMenu, ConfirmDialog, GroupedList (collapsible groups of
+ *   Slider, RotaryKnob, NumericDragBox, TextField, TextArea, Dropdown, ContextMenu, ConfirmDialog, GroupedList (collapsible groups of
  *   selectable rows; rows can start drags), ScrollView (with
  *   ScrollBarModel), SplitView, CurveEditor and EnvelopeEditor.
  *
@@ -27,7 +27,7 @@
  *
  * Dependencies:
  *   Internal: gui.renderer, gui.theme, gui.layout, platform.interfaces (PlatformEvent, PlatformEventKind, KeyModifiers)
- *   External: std.math, std.format (format), std.conv (to), std.utf (toUTF8), core.time (MonoTime)
+ *   External: std.math, std.format (format), std.conv (to), std.uni (isAlpha, isNumber), std.utf (toUTF8), core.time (MonoTime)
  *
  * Planned API (Types, Functions & Hooks):
  *   - enum KeyCode / enum MouseButton / struct MouseEvent / struct ScrollEvent / struct KeyEvent
@@ -41,7 +41,8 @@
  *       openOverlay/closeOverlay/closeAllOverlays, topModalIndex(), hitTest(Point2F), setTheme(StudioTheme),
  *       beginDrag()/cancelDrag()/isDragging()/dragPayload()/dragTarget(), dragThreshold; struct DragPayload
  *   - struct ValueRange; abstract class ValueWidget; class Panel / Label / Button / Toggle / Slider / RotaryKnob /
- *       NumericDragBox / TextField (openTextEditor()) / Dropdown (onDoubleClick) / DropdownList / ContextMenu
+ *       NumericDragBox / TextField (openTextEditor()) / TextArea (struct TextPos, struct TextAreaMetrics,
+ *       textPosBefore(), isWordChar(), decimalDigits()) / Dropdown (onDoubleClick) / DropdownList / ContextMenu
  *       (struct MenuItem) / ConfirmDialog (openConfirmDialog(), wrapTextLines()) / GroupedList (struct ListRow,
  *       struct ListGroup) / ScrollView (struct ScrollBarModel) / SplitView / CurveEditor / EnvelopeEditor
  *
@@ -54,6 +55,7 @@ import core.time : MonoTime;
 import std.conv : to;
 import std.format : format;
 import std.math : abs, cos, exp, isFinite, log, PI, round, sin;
+import std.uni : isAlpha, isNumber;
 import std.utf : toUTF8;
 
 import gui.layout : Axis, clampf, clampRectInside, DockLayout, FlexItem, Insets, layoutFlexInto, SplitPaneNode;
@@ -67,6 +69,9 @@ import platform.interfaces : KeyModifiers, PlatformEvent, PlatformEventKind;
 enum KeyCode : uint {
     a = 0,
     s = 1,
+    x = 7,
+    c = 8,
+    v = 9,
     returnKey = 36,
     tab = 48,
     space = 49,
@@ -3381,6 +3386,843 @@ TextField openTextEditor(UiContext ctx, RectF rect, string initial, void delegat
     field.bounds = vp.isEmpty() ? rect : clampRectInside(rect, vp);
     ctx.openOverlay(field);
     return field;
+}
+
+/**
+ * Caret or selection endpoint in a TextArea, indexed by zero-based line and code-point column.
+ */
+struct TextPos {
+    size_t line = 0;
+    size_t col = 0;
+}
+
+/**
+ * Reports whether position a precedes position b in reading order.
+ *
+ * Params:
+ *   a = First text position.
+ *   b = Second text position.
+ *
+ * Returns:
+ *   True when a is on an earlier line, or on the same line at an earlier column.
+ */
+bool textPosBefore(TextPos a, TextPos b) @safe nothrow pure @nogc {
+    return a.line < b.line || (a.line == b.line && a.col < b.col);
+}
+
+/**
+ * Reports whether a code point is part of a word for word-wise navigation and double-click selection.
+ *
+ * Params:
+ *   c = Unicode code point.
+ *
+ * Returns:
+ *   True for underscore, Unicode letters and Unicode numbers.
+ */
+bool isWordChar(dchar c) @safe nothrow pure @nogc {
+    return c == '_' || isAlpha(c) || isNumber(c);
+}
+
+/**
+ * Counts the decimal digits needed to print a non-negative integer.
+ *
+ * Params:
+ *   n = Value to measure (0 returns 1).
+ *
+ * Returns:
+ *   Number of base-10 digits (>= 1).
+ */
+size_t decimalDigits(size_t n) @safe nothrow pure @nogc {
+    size_t d = 1;
+    while (n >= 10) {
+        n /= 10;
+        d++;
+    }
+    return d;
+}
+
+/**
+ * Layout metrics derived from the current measurer, theme and line count of a TextArea.
+ */
+struct TextAreaMetrics {
+    float pad = 0.0f;
+    float lineH = 0.0f;
+    float gutterW = 0.0f;
+    float textX = 0.0f;
+    float textTop = 0.0f;
+    float viewH = 0.0f;
+}
+
+/**
+ * Multi-line monospace text editor widget with caret movement, keyboard and mouse selection,
+ * clipboard delegates, vertical scrolling, a line-number gutter and an error-marked line outline.
+ */
+class TextArea : Widget {
+    enum size_t TAB_SPACES = 4;
+    enum size_t GUTTER_MIN_DIGITS = 2;
+    enum size_t DEFAULT_ROWS = 8;
+    enum size_t NO_MARK = size_t.max;
+
+    /** Invoked after any user edit changes the text. */
+    void delegate() onChange;
+
+    /** Invoked on Cmd+Return / Cmd+Enter. */
+    void delegate() onSubmit;
+
+    /** Delegate supplying clipboard text on Cmd+V; ignored when null. */
+    string delegate() clipboardRead;
+
+    /** Delegate storing clipboard text on Cmd+C and Cmd+X; ignored when null. */
+    bool delegate(string) clipboardWrite;
+
+    private dchar[][] lines_;
+    private TextPos caret_;
+    private TextPos anchor_;
+    private size_t wantCol_ = 0;
+    private size_t markedLine_ = NO_MARK;
+    private float scrollY_ = 0.0f;
+    private bool dragging_ = false;
+
+    /**
+     * Creates a focusable TextArea initialized with initial text.
+     *
+     * Params:
+     *   initial = Initial UTF-8 content (CRLF/CR normalized to LF, tabs expanded to spaces).
+     */
+    this(string initial = "") {
+        focusable = true;
+        setText(initial);
+    }
+
+    /**
+     * Returns the full text joined with '\n'.
+     *
+     * Returns:
+     *   Current UTF-8 content.
+     */
+    string text() const {
+        string s;
+        foreach (i, ln; lines_) {
+            if (i > 0) {
+                s ~= '\n';
+            }
+            s ~= toUTF8(ln);
+        }
+        return s;
+    }
+
+    /**
+     * Replaces the text, resetting caret, selection, marked line and scroll without firing onChange.
+     *
+     * Params:
+     *   t = New UTF-8 content.
+     */
+    void setText(string t) {
+        lines_ = splitLines(t);
+        caret_ = TextPos(0, 0);
+        anchor_ = caret_;
+        wantCol_ = 0;
+        markedLine_ = NO_MARK;
+        scrollY_ = 0.0f;
+        invalidate();
+    }
+
+    /**
+     * Clears the text to an empty single line without firing onChange.
+     */
+    void clear() {
+        setText("");
+    }
+
+    /**
+     * Returns the number of lines (always at least 1).
+     *
+     * Returns:
+     *   Line count.
+     */
+    size_t lineCount() const {
+        return lines_.length;
+    }
+
+    /**
+     * Returns the zero-based line index of the caret.
+     *
+     * Returns:
+     *   Caret line index.
+     */
+    size_t caretLine() const {
+        return caret_.line;
+    }
+
+    /**
+     * Returns the zero-based code-point column of the caret.
+     *
+     * Returns:
+     *   Caret column index.
+     */
+    size_t caretColumn() const {
+        return caret_.col;
+    }
+
+    /**
+     * Moves the caret to a clamped line and column, optionally extending the selection.
+     *
+     * Params:
+     *   line = Target zero-based line index (clamped to the last line).
+     *   col = Target zero-based code-point column (clamped to line length).
+     *   extend = True to keep the selection anchor fixed; false collapses selection.
+     */
+    void setCaret(size_t line, size_t col, bool extend = false) {
+        moveCaret(clampPos(TextPos(line, col)), extend);
+    }
+
+    /**
+     * Reports whether a non-empty selection range is active.
+     *
+     * Returns:
+     *   True when anchor differs from caret.
+     */
+    bool hasSelection() const {
+        return anchor_ != caret_;
+    }
+
+    /**
+     * Returns the currently selected text, or an empty string when there is no selection.
+     *
+     * Returns:
+     *   Selected UTF-8 text.
+     */
+    string selectedText() const {
+        immutable TextPos a = selStart();
+        immutable TextPos b = selEnd();
+        if (a.line == b.line) {
+            return toUTF8(lines_[a.line][a.col .. b.col]);
+        }
+        string s = toUTF8(lines_[a.line][a.col .. $]);
+        foreach (i; a.line + 1 .. b.line) {
+            s ~= '\n';
+            s ~= toUTF8(lines_[i]);
+        }
+        s ~= '\n';
+        s ~= toUTF8(lines_[b.line][0 .. b.col]);
+        return s;
+    }
+
+    /**
+     * Selects the entire buffer from (0, 0) to the end of the last line.
+     */
+    void selectAll() {
+        anchor_ = TextPos(0, 0);
+        caret_ = TextPos(lines_.length - 1, lines_[$ - 1].length);
+        wantCol_ = caret_.col;
+        ensureCaretVisible();
+        invalidate();
+    }
+
+    /**
+     * Replaces the current selection (if any) with s, splitting lines and expanding tabs to spaces.
+     *
+     * Params:
+     *   s = UTF-8 text to insert.
+     */
+    void insertText(string s) {
+        deleteSelectionRaw();
+        dchar[][] ins = splitLines(s);
+        dchar[] tail = lines_[caret_.line][caret_.col .. $].dup;
+        dchar[] head = lines_[caret_.line][0 .. caret_.col].dup;
+        if (ins.length == 1) {
+            lines_[caret_.line] = head ~ ins[0] ~ tail;
+            caret_.col = head.length + ins[0].length;
+        } else {
+            immutable size_t lastLen = ins[$ - 1].length;
+            ins[0] = head ~ ins[0];
+            ins[$ - 1] = ins[$ - 1] ~ tail;
+            lines_ = lines_[0 .. caret_.line] ~ ins ~ lines_[caret_.line + 1 .. $];
+            caret_ = TextPos(caret_.line + ins.length - 1, lastLen);
+        }
+        textChanged();
+    }
+
+    /**
+     * Marks a zero-based line with an error outline; out-of-range indices clear the mark.
+     *
+     * Params:
+     *   line = Zero-based line index to mark.
+     */
+    void markLine(size_t line) {
+        markedLine_ = line < lines_.length ? line : NO_MARK;
+        invalidate();
+    }
+
+    /**
+     * Clears any marked line.
+     */
+    void clearMark() {
+        markedLine_ = NO_MARK;
+        invalidate();
+    }
+
+    /**
+     * Returns the zero-based marked line index, or NO_MARK when none is marked.
+     *
+     * Returns:
+     *   Marked line index or NO_MARK.
+     */
+    size_t markedLine() const {
+        return markedLine_;
+    }
+
+    /**
+     * Returns the current vertical scroll offset in points.
+     *
+     * Returns:
+     *   Vertical scroll offset (>= 0).
+     */
+    float scrollOffset() const {
+        return scrollY_;
+    }
+
+    /**
+     * Scrolls vertically to y, clamped to the valid scroll range.
+     *
+     * Params:
+     *   y = Desired scroll offset in points.
+     *
+     * Returns:
+     *   True when the scroll offset changed.
+     */
+    bool scrollTo(float y) {
+        immutable TextAreaMetrics k = liveMetrics();
+        immutable float content = cast(float) lines_.length * k.lineH;
+        immutable float maxY = content > k.viewH && k.viewH > 0.0f ? content - k.viewH : 0.0f;
+        immutable float ny = clampf(y, 0.0f, maxY);
+        if (ny == scrollY_) {
+            return false;
+        }
+        scrollY_ = ny;
+        invalidate();
+        return true;
+    }
+
+    /**
+     * Returns how many whole text lines fit inside the current viewport height (at least 1).
+     *
+     * Returns:
+     *   Visible whole line count.
+     */
+    size_t visibleLineCount() {
+        immutable TextAreaMetrics k = liveMetrics();
+        if (!(k.lineH > 0.0f) || !(k.viewH >= k.lineH)) {
+            return 1;
+        }
+        return cast(size_t)(k.viewH / k.lineH);
+    }
+
+    /**
+     * Returns the width of the line-number gutter in points.
+     *
+     * Returns:
+     *   Gutter width in points.
+     */
+    float gutterWidth() {
+        return liveMetrics().gutterW;
+    }
+
+    /**
+     * Returns the full-width row rectangle of a zero-based line in window coordinates.
+     *
+     * Params:
+     *   line = Zero-based line index.
+     *
+     * Returns:
+     *   Row rectangle adjusted for vertical scroll.
+     */
+    RectF lineRect(size_t line) {
+        immutable TextAreaMetrics k = liveMetrics();
+        return RectF(bounds.x, k.textTop + cast(float) line * k.lineH - scrollY_, bounds.w, k.lineH);
+    }
+
+    /**
+     * Computes geometry metrics for this TextArea given a text measurer and theme.
+     *
+     * Params:
+     *   m = Text measurer (may be null, falling back to metric defaults).
+     *   theme = Studio theme supplying spacing and monospace font size.
+     *
+     * Returns:
+     *   Computed TextAreaMetrics.
+     */
+    TextAreaMetrics metricsFor(ITextMeasurer m, const ref StudioTheme theme) const {
+        TextAreaMetrics k;
+        immutable size_t digits = decimalDigits(lines_.length);
+        k.pad = theme.spacingSm;
+        k.lineH = lineHeightOr(m, FontId.mono, theme.fontSizeMono);
+        k.gutterW = cast(float)(digits > GUTTER_MIN_DIGITS ? digits : GUTTER_MIN_DIGITS)
+            * measureTextOr(m, "0", FontId.mono, theme.fontSizeMono) + 2.0f * k.pad;
+        k.textX = bounds.x + k.gutterW + k.pad;
+        k.textTop = bounds.y + k.pad;
+        k.viewH = bounds.h - 2.0f * k.pad;
+        return k;
+    }
+
+    override bool onScroll(const ref ScrollEvent e) {
+        return scrollTo(scrollY_ - e.deltaY);
+    }
+
+    override void layoutChildren() {
+        scrollTo(scrollY_);
+    }
+
+    override Point2F measure(ITextMeasurer m, const ref StudioTheme theme) {
+        if (preferredSize.x > 0.0f && preferredSize.y > 0.0f) {
+            return preferredSize;
+        }
+        immutable TextAreaMetrics k = metricsFor(m, theme);
+        return Point2F(k.gutterW + 40.0f * measureTextOr(m, "0", FontId.mono, theme.fontSizeMono) + 2.0f * k.pad,
+            cast(float) DEFAULT_ROWS * k.lineH + 2.0f * k.pad);
+    }
+
+    override bool onKeyUp(const ref KeyEvent e) {
+        cast(void) e;
+        return true;
+    }
+
+    override bool onKeyDown(const ref KeyEvent e) {
+        immutable bool shift = e.shift();
+        immutable bool alt = hasModifier(e.modifiers, KeyModifiers.alt);
+        if (e.keyCode == KeyCode.escape || (e.keyCode == KeyCode.tab && shift)) {
+            return false;
+        }
+        if (hasModifier(e.modifiers, KeyModifiers.command)) {
+            return onCommandKey(e.keyCode, shift);
+        }
+        switch (e.keyCode) {
+        case KeyCode.returnKey:
+        case KeyCode.keypadEnter:
+            insertText("\n");
+            break;
+        case KeyCode.tab:
+            insertText("\t");
+            break;
+        case KeyCode.deleteBackward:
+            deleteBackward();
+            break;
+        case KeyCode.forwardDelete:
+            deleteForward();
+            break;
+        case KeyCode.left:
+            if (!shift && hasSelection()) {
+                moveCaret(selStart(), false);
+            } else {
+                moveCaret(alt ? wordLeft(caret_) : charLeft(caret_), shift);
+            }
+            break;
+        case KeyCode.right:
+            if (!shift && hasSelection()) {
+                moveCaret(selEnd(), false);
+            } else {
+                moveCaret(alt ? wordRight(caret_) : charRight(caret_), shift);
+            }
+            break;
+        case KeyCode.up:
+            moveVertical(-1, shift);
+            break;
+        case KeyCode.down:
+            moveVertical(1, shift);
+            break;
+        case KeyCode.pageUp:
+            moveVertical(-cast(ptrdiff_t) visibleLineCount(), shift);
+            break;
+        case KeyCode.pageDown:
+            moveVertical(cast(ptrdiff_t) visibleLineCount(), shift);
+            break;
+        case KeyCode.home:
+            moveCaret(TextPos(caret_.line, 0), shift);
+            break;
+        case KeyCode.end:
+            moveCaret(TextPos(caret_.line, lines_[caret_.line].length), shift);
+            break;
+        default:
+            break;
+        }
+        return true;
+    }
+
+    override bool onTextInput(dchar c) {
+        if (c < 0x20 || c == 0x7F || (c >= 0xF700 && c <= 0xF8FF)) {
+            return true;
+        }
+        deleteSelectionRaw();
+        dchar[] ln = lines_[caret_.line];
+        lines_[caret_.line] = ln[0 .. caret_.col] ~ c ~ ln[caret_.col .. $];
+        caret_.col++;
+        textChanged();
+        return true;
+    }
+
+    override bool onMouseMove(const ref MouseEvent e) {
+        if (!dragging_) {
+            return false;
+        }
+        moveCaret(posAt(e.pos), true);
+        return true;
+    }
+
+    override bool onMouseUp(const ref MouseEvent e) {
+        cast(void) e;
+        dragging_ = false;
+        return true;
+    }
+
+    override void onCaptureLost() {
+        dragging_ = false;
+    }
+
+    override bool onMouseDown(const ref MouseEvent e) {
+        if (e.button != MouseButton.left) {
+            return false;
+        }
+        immutable TextPos p = posAt(e.pos);
+        if (e.clickCount >= 2) {
+            selectWordAt(p);
+        } else {
+            moveCaret(p, e.shift());
+            dragging_ = true;
+        }
+        return true;
+    }
+
+    override void paint(IRenderer2D r, const ref StudioTheme theme) {
+        immutable TextAreaMetrics k = metricsFor(r, theme);
+        immutable float size = theme.fontSizeMono;
+        r.fillRoundedRect(bounds, theme.radiusSm, theme.panelRaised);
+        r.pushClip(bounds.inset(theme.borderWidth));
+        r.fillRect(RectF(bounds.x, bounds.y, k.gutterW, bounds.h), theme.panelSunken);
+        r.fillRect(RectF(bounds.x + k.gutterW - theme.borderWidth, bounds.y, theme.borderWidth, bounds.h), theme.border);
+        immutable size_t first = k.lineH > 0.0f ? cast(size_t)(scrollY_ / k.lineH) : 0;
+        immutable TextPos a = selStart();
+        immutable TextPos b = selEnd();
+        foreach (i; first .. lines_.length) {
+            immutable float y = k.textTop + cast(float) i * k.lineH - scrollY_;
+            if (y > bounds.bottom()) {
+                break;
+            }
+            if (hasSelection() && i >= a.line && i <= b.line) {
+                immutable size_t c0 = i == a.line ? a.col : 0;
+                immutable size_t c1 = i == b.line ? b.col : lines_[i].length;
+                immutable float x0 = k.textX + r.measureText(toUTF8(lines_[i][0 .. c0]), FontId.mono, size);
+                float x1 = k.textX + r.measureText(toUTF8(lines_[i][0 .. c1]), FontId.mono, size);
+                if (i < b.line) {
+                    x1 += r.measureText("0", FontId.mono, size);
+                }
+                r.fillRect(RectF(x0, y, x1 - x0, k.lineH), theme.selection);
+            }
+            immutable string num = to!string(i + 1);
+            immutable float nw = r.measureText(num, FontId.mono, size);
+            r.drawText(Point2F(bounds.x + k.gutterW - k.pad - nw, y), num, FontId.mono, size, theme.textDim);
+            r.drawText(Point2F(k.textX, y), toUTF8(lines_[i]), FontId.mono, size, theme.text);
+            if (i == markedLine_) {
+                r.strokeRoundedRect(RectF(bounds.x, y, bounds.w, k.lineH).inset(theme.borderWidth), 0.0f,
+                    2.0f * theme.borderWidth, theme.danger);
+            }
+            if (i == caret_.line && isFocused()) {
+                immutable float cx = k.textX + r.measureText(toUTF8(lines_[i][0 .. caret_.col]), FontId.mono, size);
+                r.fillRect(RectF(cx, y, 1.5f, k.lineH), theme.accentHot);
+            }
+        }
+        immutable float content = cast(float) lines_.length * k.lineH;
+        if (content > k.viewH && k.viewH > 0.0f) {
+            ScrollBarModel bar;
+            bar.axis = Axis.vertical;
+            bar.track = RectF(bounds.right() - theme.scrollbarThickness, bounds.y, theme.scrollbarThickness, bounds.h);
+            bar.contentLength = content;
+            bar.viewportLength = k.viewH;
+            bar.offset = scrollY_;
+            bar.minThumb = theme.scrollbarMinThumb;
+            r.fillRect(bar.track, theme.scrollTrack);
+            r.fillRoundedRect(bar.thumbRect(), theme.radiusSm, theme.scrollThumb);
+        }
+        r.popClip();
+        if (isFocused()) {
+            r.strokeRoundedRect(bounds, theme.radiusSm, theme.focusRingWidth, theme.focusRing);
+        } else {
+            r.strokeRoundedRect(bounds, theme.radiusSm, theme.borderWidth, theme.border);
+        }
+    }
+
+    private static dchar[][] splitLines(string s) {
+        dchar[][] result;
+        dchar[] cur;
+        bool afterCr = false;
+        foreach (dchar c; s) {
+            if (c == '\n' && afterCr) {
+                afterCr = false;
+                continue;
+            }
+            afterCr = c == '\r';
+            if (c == '\n' || c == '\r') {
+                result ~= cur;
+                cur = null;
+            } else if (c == '\t') {
+                foreach (k; 0 .. TAB_SPACES) {
+                    cur ~= ' ';
+                }
+            } else if (c >= 0x20 && c != 0x7F) {
+                cur ~= c;
+            }
+        }
+        result ~= cur;
+        return result;
+    }
+
+    private TextPos selStart() const {
+        return textPosBefore(anchor_, caret_) ? anchor_ : caret_;
+    }
+
+    private TextPos selEnd() const {
+        return textPosBefore(anchor_, caret_) ? caret_ : anchor_;
+    }
+
+    private TextPos clampPos(TextPos p) const {
+        if (p.line >= lines_.length) {
+            p.line = lines_.length - 1;
+        }
+        if (p.col > lines_[p.line].length) {
+            p.col = lines_[p.line].length;
+        }
+        return p;
+    }
+
+    private void moveCaret(TextPos p, bool extend) {
+        caret_ = p;
+        if (!extend) {
+            anchor_ = p;
+        }
+        wantCol_ = p.col;
+        ensureCaretVisible();
+        invalidate();
+    }
+
+    private TextAreaMetrics liveMetrics() {
+        auto ctx = context();
+        if (ctx is null) {
+            immutable StudioTheme def = StudioTheme.init;
+            return metricsFor(null, def);
+        }
+        return metricsFor(ctx.measurer(), ctx.theme);
+    }
+
+    private void ensureCaretVisible() {
+        immutable TextAreaMetrics k = liveMetrics();
+        if (!(k.viewH > 0.0f)) {
+            return;
+        }
+        immutable float top = cast(float) caret_.line * k.lineH;
+        if (top < scrollY_) {
+            scrollTo(top);
+        } else if (top + k.lineH > scrollY_ + k.viewH) {
+            scrollTo(top + k.lineH - k.viewH);
+        }
+    }
+
+    private void moveVertical(ptrdiff_t delta, bool extend) {
+        immutable size_t keep = wantCol_;
+        immutable ptrdiff_t target = cast(ptrdiff_t) caret_.line + delta;
+        if (target < 0) {
+            moveCaret(TextPos(0, 0), extend);
+        } else if (target >= cast(ptrdiff_t) lines_.length) {
+            moveCaret(TextPos(lines_.length - 1, lines_[$ - 1].length), extend);
+        } else {
+            moveCaret(clampPos(TextPos(cast(size_t) target, keep)), extend);
+            wantCol_ = keep;
+        }
+    }
+
+    private TextPos charLeft(TextPos p) const {
+        if (p.col > 0) {
+            return TextPos(p.line, p.col - 1);
+        }
+        return p.line > 0 ? TextPos(p.line - 1, lines_[p.line - 1].length) : p;
+    }
+
+    private TextPos charRight(TextPos p) const {
+        if (p.col < lines_[p.line].length) {
+            return TextPos(p.line, p.col + 1);
+        }
+        return p.line + 1 < lines_.length ? TextPos(p.line + 1, 0) : p;
+    }
+
+    private TextPos wordLeft(TextPos p) const {
+        if (p.col == 0) {
+            return charLeft(p);
+        }
+        const(dchar)[] ln = lines_[p.line];
+        size_t c = p.col;
+        while (c > 0 && !isWordChar(ln[c - 1])) {
+            c--;
+        }
+        while (c > 0 && isWordChar(ln[c - 1])) {
+            c--;
+        }
+        return TextPos(p.line, c);
+    }
+
+    private TextPos wordRight(TextPos p) const {
+        const(dchar)[] ln = lines_[p.line];
+        if (p.col == ln.length) {
+            return charRight(p);
+        }
+        size_t c = p.col;
+        while (c < ln.length && !isWordChar(ln[c])) {
+            c++;
+        }
+        while (c < ln.length && isWordChar(ln[c])) {
+            c++;
+        }
+        return TextPos(p.line, c);
+    }
+
+    private bool deleteSelectionRaw() {
+        if (!hasSelection()) {
+            return false;
+        }
+        immutable TextPos a = selStart();
+        immutable TextPos b = selEnd();
+        dchar[] joined = lines_[a.line][0 .. a.col] ~ lines_[b.line][b.col .. $];
+        lines_ = lines_[0 .. a.line] ~ joined ~ lines_[b.line + 1 .. $];
+        caret_ = a;
+        anchor_ = a;
+        return true;
+    }
+
+    private void deleteBackward() {
+        if (!hasSelection()) {
+            immutable TextPos p = charLeft(caret_);
+            if (p == caret_) {
+                return;
+            }
+            anchor_ = p;
+        }
+        deleteSelectionRaw();
+        textChanged();
+    }
+
+    private void deleteForward() {
+        if (!hasSelection()) {
+            immutable TextPos p = charRight(caret_);
+            if (p == caret_) {
+                return;
+            }
+            anchor_ = p;
+        }
+        deleteSelectionRaw();
+        textChanged();
+    }
+
+    private void textChanged() {
+        anchor_ = caret_;
+        wantCol_ = caret_.col;
+        markedLine_ = NO_MARK;
+        scrollTo(scrollY_);
+        ensureCaretVisible();
+        invalidate();
+        if (onChange !is null) {
+            onChange();
+        }
+    }
+
+    private bool onCommandKey(uint code, bool shift) {
+        switch (code) {
+        case KeyCode.a:
+            selectAll();
+            return true;
+        case KeyCode.c:
+        case KeyCode.x:
+            if (hasSelection() && clipboardWrite !is null) {
+                clipboardWrite(selectedText());
+                if (code == KeyCode.x) {
+                    deleteSelectionRaw();
+                    textChanged();
+                }
+            }
+            return true;
+        case KeyCode.v:
+            if (clipboardRead !is null) {
+                immutable string s = clipboardRead();
+                if (s.length > 0) {
+                    insertText(s);
+                }
+            }
+            return true;
+        case KeyCode.returnKey:
+        case KeyCode.keypadEnter:
+            if (onSubmit !is null) {
+                onSubmit();
+            }
+            return true;
+        case KeyCode.left:
+            moveCaret(TextPos(caret_.line, 0), shift);
+            return true;
+        case KeyCode.right:
+            moveCaret(TextPos(caret_.line, lines_[caret_.line].length), shift);
+            return true;
+        case KeyCode.up:
+        case KeyCode.home:
+            moveCaret(TextPos(0, 0), shift);
+            return true;
+        case KeyCode.down:
+        case KeyCode.end:
+            moveCaret(TextPos(lines_.length - 1, lines_[$ - 1].length), shift);
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    private TextPos posAt(Point2F p) {
+        auto ctx = context();
+        ITextMeasurer m = ctx is null ? null : ctx.measurer();
+        immutable StudioTheme theme = ctx is null ? StudioTheme.init : ctx.theme;
+        immutable TextAreaMetrics k = metricsFor(m, theme);
+        immutable float rel = p.y - k.textTop + scrollY_;
+        size_t line = rel > 0.0f && k.lineH > 0.0f ? cast(size_t)(rel / k.lineH) : 0;
+        if (line >= lines_.length) {
+            line = lines_.length - 1;
+        }
+        const(dchar)[] ln = lines_[line];
+        float prev = 0.0f;
+        foreach (c; 0 .. ln.length) {
+            immutable float next = measureTextOr(m, toUTF8(ln[0 .. c + 1]), FontId.mono, theme.fontSizeMono);
+            if (p.x < k.textX + (prev + next) * 0.5f) {
+                return TextPos(line, c);
+            }
+            prev = next;
+        }
+        return TextPos(line, ln.length);
+    }
+
+    private void selectWordAt(TextPos p) {
+        const(dchar)[] ln = lines_[p.line];
+        if (ln.length == 0) {
+            moveCaret(p, false);
+            return;
+        }
+        immutable size_t i = p.col < ln.length ? p.col : ln.length - 1;
+        size_t s = i;
+        size_t e = i + 1;
+        if (isWordChar(ln[i])) {
+            while (s > 0 && isWordChar(ln[s - 1])) {
+                s--;
+            }
+            while (e < ln.length && isWordChar(ln[e])) {
+                e++;
+            }
+        }
+        anchor_ = TextPos(p.line, s);
+        caret_ = TextPos(p.line, e);
+        wantCol_ = e;
+        invalidate();
+    }
 }
 
 /**

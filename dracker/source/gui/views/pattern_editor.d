@@ -80,6 +80,7 @@ import gui.renderer : ColorRGBA, FontId, IRenderer2D, ITextMeasurer, Point2F, Re
 import gui.theme : StudioTheme;
 import gui.views.drumpad_view : DrumpadView;
 import gui.views.piano_roll_view : PianoRollView;
+import gui.views.script_view : ScriptView;
 import gui.views.studio_context : StudioContext;
 import gui.widgets : Button, Dropdown, KeyCode, KeyEvent, lineHeightOr, measureTextOr, MenuItem, MouseButton,
     MouseEvent, NumericDragBox, openTextEditor, ScrollEvent, TextField, ValueRange, Widget;
@@ -504,7 +505,8 @@ final class PatternDimensionBox : NumericDragBox {
 enum PatternViewKind : ubyte {
     tracker = 0,
     pianoRoll = 1,
-    drumpad = 2
+    drumpad = 2,
+    script = 3
 }
 
 /**
@@ -536,8 +538,10 @@ final class ViewTabButton : Button {
 
 final class PatternEditorView : Widget, StudioCommandSink {
     enum float VIEW_BAR_H = 28.0f;
-    static immutable string[3] VIEW_NAMES = ["Tracker", "Piano roll", "Drumpad"];
-    static immutable string[3] VIEW_IDS = ["pattern.view.tracker", "pattern.view.pianoRoll", "pattern.view.drumpad"];
+    static immutable string[4] VIEW_NAMES = ["Tracker", "Piano roll", "Drumpad", "Script"];
+    static immutable string[4] VIEW_IDS = [
+        "pattern.view.tracker", "pattern.view.pianoRoll", "pattern.view.drumpad", "pattern.view.script"
+    ];
 
     enum uint MAX_EDIT_STEP = 64;
     enum uint PAGE_LINES = 16;
@@ -552,7 +556,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
     Button deleteButton;
     Button patternMenuButton;
     bool hexLineNumbers = true;
-    ViewTabButton[3] viewButtons;
+    ViewTabButton[4] viewButtons;
 
     private uint shownPattern_ = 0;
     private uint cursorTrack_ = 0;
@@ -577,7 +581,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
     private float cellW_ = 145.0f;
     private float gutterW_ = 37.0f;
     private float headerH_ = 30.0f;
-    private Widget[3] viewWidgets_;
+    private Widget[4] viewWidgets_;
     private PatternViewKind[uint] viewByPattern_;
     private float monoSize_ = 12.0f;
     private float labelTracksX_ = 0.0f;
@@ -640,7 +644,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
         deleteButton.id = "pattern.delete";
         patternMenuButton = add(new Button("...", &openPatternMenu));
         patternMenuButton.id = "pattern.menu";
-        foreach (i; 0 .. 3) {
+        foreach (i; 0 .. 4) {
             viewButtons[i] = add(new ViewTabButton(VIEW_NAMES[i], viewHandler(cast(PatternViewKind) i)));
             viewButtons[i].id = VIEW_IDS[i];
         }
@@ -648,6 +652,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
         if (registerBuiltInViews) {
             registerView(PatternViewKind.pianoRoll, new PianoRollView(ctx));
             registerView(PatternViewKind.drumpad, new DrumpadView(ctx));
+            registerView(PatternViewKind.script, new ScriptView(ctx));
         }
         updateMetrics(null, ctx.theme);
         syncPatternSelection();
@@ -672,6 +677,16 @@ final class PatternEditorView : Widget, StudioCommandSink {
      */
     DrumpadView drumpadView() {
         return cast(DrumpadView) viewWidgets_[PatternViewKind.drumpad];
+    }
+
+    /**
+     * Returns the registered Script view, or null if none is registered.
+     *
+     * Returns:
+     *   ScriptView or null.
+     */
+    ScriptView scriptView() {
+        return cast(ScriptView) viewWidgets_[PatternViewKind.script];
     }
 
     /**
@@ -714,6 +729,8 @@ final class PatternEditorView : Widget, StudioCommandSink {
                 return !drum;
             case PatternViewKind.drumpad:
                 return drum;
+            case PatternViewKind.script:
+                return true;
         }
     }
 
@@ -766,6 +783,11 @@ final class PatternEditorView : Widget, StudioCommandSink {
         syncView();
         if (auto ui = context()) {
             Widget target = kind == PatternViewKind.tracker ? this : viewWidgets_[kind];
+            if (kind == PatternViewKind.script) {
+                if (auto sv = scriptView()) {
+                    target = sv.editor;
+                }
+            }
             ui.setFocus(target.focusable ? target : this);
             layoutChildren();
         }
@@ -1107,12 +1129,12 @@ final class PatternEditorView : Widget, StudioCommandSink {
         immutable float gap = ctx.theme.spacingSm;
         immutable float ch = ctx.theme.controlHeight;
         float vx = bounds.x + gap;
-        static immutable float[3] tabW = [78.0f, 92.0f, 86.0f];
-        foreach (i; 0 .. 3) {
+        static immutable float[4] tabW = [78.0f, 92.0f, 86.0f, 68.0f];
+        foreach (i; 0 .. 4) {
             viewButtons[i].arrange(RectF(vx, bounds.y + 3.0f, tabW[i], VIEW_BAR_H - 6.0f));
             vx += tabW[i] + gap;
         }
-        foreach (i; 1 .. 3) {
+        foreach (i; 1 .. 4) {
             if (viewWidgets_[i] !is null) {
                 viewWidgets_[i].arrange(viewRect());
             }
@@ -1400,7 +1422,7 @@ final class PatternEditorView : Widget, StudioCommandSink {
 
     private void syncView() {
         immutable PatternViewKind view = currentView();
-        foreach (i; 0 .. 3) {
+        foreach (i; 0 .. 4) {
             immutable PatternViewKind k = cast(PatternViewKind) i;
             viewButtons[i].enabled = viewAvailable(k);
             viewButtons[i].lit = k == view;

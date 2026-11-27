@@ -1,0 +1,90 @@
+project "Neon Drift"
+tempo 104
+signature 4/4
+key D minor
+
+module bass preset="Electric Bass"
+module keys preset="Electric Piano"
+set keys Release=280
+
+module lead synth.analog_gen name="Neon Lead"
+set lead Waveform=saw Unison=2 Detune=0.18 Cutoff=2600 Resonance=0.25 Attack=0.01 Decay=0.25 Sustain=0.6 Release=0.18
+savemodule lead "sample-projects/neon_drift_lead.msym"
+
+module harmony file="sample-projects/neon_drift_lead.msym" name="Neon Harmony"
+set harmony Cutoff=1600 Release=0.3
+
+module kit preset="Drum Kit"
+set kit Snappy=0.65
+set kit "Pan Spread" 0.45
+
+module delay fx.delay
+set delay Dry=0.85 Wet=0.28
+set delay "Delay L" 288.5
+set delay "Delay R" 432.7
+
+module reverb fx.reverb
+set reverb Dry=0.85 Wet=0.24
+set reverb "Room Size" 0.62
+set reverb Damping=6000
+
+module bus_comp fx.compressor
+set bus_comp Threshold=-16 Ratio=3 Attack=12 Release=120
+
+connect bass bus_comp gain=0.35
+connect keys reverb gain=0.18
+connect keys bus_comp gain=0.18
+connect lead delay gain=0.32
+connect harmony delay gain=0.22
+connect delay reverb gain=0.50
+connect reverb bus_comp gain=0.55
+connect kit bus_comp gain=0.45
+connect kit bus_comp to=Sidechain gain=0.45
+connect bus_comp out gain=0.60
+
+section intro bars=4
+section verse bars=4
+section chorus bars=4
+section outro bars=4
+
+part bass module=bass
+part keys module=keys
+part lead module=lead
+part harmony module=harmony
+part drums drums=kit
+
+chords keys intro style=hold voicing=close voices=4: i VI III VII
+chords bass intro style=root octave=2: i VI III VII
+notes harmony intro at=3: D4:2 F4:2 C4:2 E4:2
+drums drums intro "Closed Hat" fill=1-4: x.x.x.x.x.x.x.x.
+drums drums intro kick fill=3-4: x.......x.......
+drums drums intro snare fill=4: ....X...x.x.X.X.
+
+chords keys verse style=hold rhythm=X.x.x.x.X.x.x..x voicing=close: i VI III VII
+chords bass verse style=root5 octave=2: i VI III VII
+notes lead verse: A4:1 F4:1 D4:2 Bb4:1 A4:1 G4:2 C5:1 G4:1 E4:2 A4:2 G4:2
+notes harmony verse: F4:2 D4:2 F4:2 D4:2 G4:2 E4:2 E4:2 C4:2
+drums drums verse kick fill=1-4: x..x..x...x.....
+drums drums verse snare fill=1-4: ....X.......X...
+drums drums verse "Closed Hat" fill=1-4: x.x.x.x.x.x.X.x.
+
+chords keys chorus style=arp dir=updown every=1/4 voicing=close: i VI III VII
+chords bass chorus style=root rhythm=X..x..x...x.X... octave=2: i VI III VII
+notes lead chorus: D5:1 F5:1/2 E5:1/2 D5:2 F5:1 D5:1 Bb4:2 E5:1 G5:1/2 F5:1/2 E5:2 G5:2 E5:2
+copy lead chorus from=1 len=4b to=1 part=harmony section=chorus
+transpose harmony chorus from=1 len=4b steps=-2
+drums drums chorus kick fill=1-4: x..x..x.x..x..x.
+drums drums chorus snare fill=1-4: ....X.......X...
+drums drums chorus "Open Hat" fill=1-4: ..x...x...x...x.
+drums drums chorus snare fill=4: ....X..xx.X.XXXX
+
+chords keys outro style=hold voicing=close: i VI VII i
+chords bass outro style=root octave=2: i VI VII i
+notes lead outro: A4:2 D4:2 Bb4:2 F4:2 G4:2 E4:2 D4:4
+notes harmony outro at=1: F4:4
+drums drums outro kick fill=1-2: x.......x.......
+drums drums outro "Closed Hat" fill=1-2: x...x...x...x...
+
+arrange intro verse chorus outro
+loop verse chorus
+save "sample-projects/neon_drift.msv"

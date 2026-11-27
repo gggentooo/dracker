@@ -10,6 +10,232 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
 
 ---
 
+## [2026-11-27 10:24:22 KST]
+- **Author:** Claude Opus 5.5
+- **Task:** T113 (Script tab: applying a script), T114 (end-to-end check, manual, architecture; built, waiting for the owner), T89 (composer reference); T88 closed on the owner's confirmation; T116–T119 added
+- **Affected Files:**
+  - `source/gui/views/script_view.d`, `source/compose/script/commands.d`, `source/compose/script/interpreter.d`, `source/app/studio_app.d`
+  - `tests/unit/views_script_test.d`, `tests/unit/views_studio_root_test.d`, `tests/unit/compose_script_test.d`
+  - `docs/composer.md` (new), `docs/manual.md`, `../architecture.md` (§10; git-ignored, on disk only), `agents.md`
+  - `docs/todo.json`, `docs/todo.md`, `docs/todo-guides.md`, `docs/changelog.md`
+- **Description:**
+  - **T113.** `ScriptView.applyToSession()` is the Script tab's Apply (decisions T108, T109): snapshot of the open project with asset data → `createInterpreterFromDocument(snapshot, true)` → `restrictForApp()` → run every line → when all succeeded, write the presets `savemodule` kept in memory, then `doReplaceDocument(…, "Apply script")` and clear the input. Running in the interpreter's check mode is what makes "nothing applies when any line fails" hold for files too: `savemodule` writes only at the end. Empty scripts change nothing. The handles strip now shows the handles the interpreter derives (`ProjectWriter.fromLoadedProject`, cached by document revision) instead of a second derivation, and is no longer recomputed every frame.
+  - **Interpreter:** `setBaseDirectory()`, `baseDirectory()`, `resolvePath()`; every path a command reads or writes (`sample`, `savemodule`, `module file=`/`keep=`, `preset file=`) goes through it, so the CLI is unchanged (no base folder) and the tab reads relative paths from the project folder and refuses them before the project is saved. `restrictForApp()` replaces `project`, `open` and `save` with handlers that refuse them with a reason before their arguments are read (`APP_REFUSED_COMMANDS`).
+  - **New `title` command** (same handler as `project`): T109 says title, tempo, signature and key "have their own commands", but the title could only be set with `project`, which the tab refuses. `compose_script_test.d` counts 27 commands.
+  - **Tests (T113):** `views_script_test.d` — the T112 checks now use scripts without `project`; Apply adds a module, a part and notes as one undo step labelled "Apply script", undo and redo restore the exact serialized document; an error in the last line changes nothing and keeps the input with the line marked; `project`, `open`, `save` refused at line 2 column 1; playback continues across Apply; relative paths refused before saving and resolved after; a failing script leaves no preset file, a passing one writes it and can load it with `module file=`. Mutation check: running outside check mode, dropping the refusals, or not clearing the input each makes a test fail (lines 344, 288, 147).
+  - **T114 (built):** `views_studio_root_test.d` types the T67 example (without `project` and `save`) into the tab character by character, clicks Apply ("Applied 14 commands"), checks tempo, signature, key, the `bass` and `keys` modules and the four verse clips, renders with sound, and checks ⌘Z / ⇧⌘Z restore the exact bytes. `--studio-gui-selftest` has a new step "script tab (apply, undo)". Manual: §8.1 view bar, new §8.14 *The Script tab*, §15 lists applied scripts as undoable, Appendix D describes `dracker-compose`. `../architecture.md` §10 rewritten from "planned" to built, with the Script tab and the decisions T66–T71, T90, T108, T109. `agents.md`: package map (compose modules, `script_view.d`, `docs/composer.md`) and commands. T114 stays open until the owner applies a script by hand.
+  - **T89.** `docs/composer.md`, the agent reference for `dracker-compose` and the script language, drafted by a helper agent that ran every example through the built program (40 example scripts; the four error examples print the quoted errors). An independent agent given only this document and the program wrote a 32-bar piece with five sections, bass, keys, lead, drums, delay and reverb; every `check` passed first time and the render had no silent bars (peak 0.755, average 0.129). Its findings were added: full-band gains are 20–25% below the per-part starting points; module peaks depend on the material; bass roots from `style=root` do not follow voice leading (B2 above C2 in E minor) and how to fix it; how to see a preset's values without the source tree; when `describe` prints `arrange clip=` lines; that "limiter not reached" does not mean the limiter is idle. Every composition build task T72–T115 has a changelog entry.
+  - **T88** closed: the owner confirmed `neon_drift` in the app; its second condition (an agent writes a piece from the documentation alone) was met by the T89 test above.
+  - **New tasks from the documentation work:** T116 (`arrange clip=` after `arrange <sections>` collapses the song to one bar, and the reverse drops the clips — reproduced), T117 (warnings for scripts that are valid but silent: sections never arranged, parts whose module was removed — the first reproduced), T118 (render report: the limiter flag only fires at 0.999; `render` follows a custom `loop`, so `neon_drift`'s outro is never heard in its render — needs an owner decision), T119 (mislabelled suggestions and empty-section messages; `describe` order).
+- **Verification:**
+  - `dub test --compiler=ldc2 --config=headless` → `55 modules passed unittests`
+  - `dub test --compiler=ldc2 --config=app` → `4 modules passed unittests`
+  - `DFLAGS="-w" dub build --compiler=ldc2 --config=app --build=debug` → linked, no warnings; `ldc2 -w` on the changed D files → exit 0, no output
+  - `caffeinate -dims ./build/dracker --studio-gui-selftest --quick` → `Studio GUI self-test: 18/18 checks passed` (`PASS script tab (apply, undo) … message=Applied 2 commands. Cmd+Z takes the script back.`)
+  - `./build/dracker-compose run` on the unchanged T67 example → `Ran 16 commands.`, exit 0; the manual's §8.14 example → `OK (6 commands checked).`
+  - `grep -n '//'` on the changed D files → matches only inside string literals
+  - `python3 tools/todo.py check` → `ok: 119 tasks (5 open, 114 done), 4 features, 33 changelog entries`
+  - Not run: the CI workflow on GitHub.
+
+---
+
+## [2026-11-27 09:49:45 KST]
+- **Author:** Gemini 4 Neon
+- **Task:** T88 (implementation ready for owner review; left open per T88 close condition)
+- **Affected Files:**
+  - `sample-projects/neon_drift.dcs` (new)
+  - `sample-projects/neon_drift_lead.msym` (new)
+  - `sample-projects/neon_drift.msv` (new)
+  - `tests/unit/compose_end_to_end_test.d` (new)
+  - `source/compose/script/interpreter.d`
+  - `source/compose/script/commands.d`
+  - `source/compose/part_writer.d`
+  - `ci/macos.yml`
+  - `docs/changelog.md`
+- **Description:**
+  - **Example song (`sample-projects/neon_drift.dcs`, `neon_drift_lead.msym`, `neon_drift.msv`):** Authored a complete 16-bar helper-written song (*Neon Drift*, D minor, 104 BPM, 4/4) across 4 sections (`intro`, `verse`, `chorus`, `outro`), `bass`, `keys`, custom `synth.analog_gen` `lead` saved as `.msym` via `savemodule` and reused with parameter tweaks on `harmony` via `file=`, `drums` (`Drum Kit`), a `fx.delay -> fx.reverb -> fx.compressor -> out` effect chain with `kit` sidechain routing, `chords`/`notes`/`drums`/`copy`/`transpose`, `arrange`, and `loop`.
+  - **Virtual preset cache & ID fix (`compose.script.interpreter`, `compose.script.commands`, `compose.part_writer`):** Added `ScriptInterpreter.cacheVirtualPreset`/`findVirtualPreset` so `check` (`checkOnly`) validates `savemodule` followed by `module file=`/`preset file=` without writing `.msym` files to disk; fixed `PartWriter.reservePatternId` to skip only fixed pattern IDs instead of dynamically exported drum IDs, preserving sequential IDs and byte-identical `describe` -> `run` round-trips.
+  - **End-to-end tests & CI (`tests/unit/compose_end_to_end_test.d`, `ci/macos.yml`):** Added in-process (`runProgram`) and compiled-binary (`build/dracker-compose` via `std.process.execute`) end-to-end tests verifying `catalog`, `check` (zero disk writes), `run`, `render` (16 non-silent bars, peak `0.6933`, average `0.1174`, limiter not reached, all 9 modules producing sound), `StudioSession` document/routing/parameter checks, and `describe` -> `run` byte-identical `.msv` round-tripping; updated `ci/macos.yml` to build `dracker-compose` before headless tests and exercise the full CLI round-trip pipeline.
+- **Verification:**
+  - `grep -nE '//|/\*[^*]'` across modified/new `.d` files: zero matches (`GREP_EXIT=1`).
+  - `ldc2 -w -unittest -c -o- ...`: zero warnings.
+  - `DUB_HOME=/Users/leehk/dev/dracker/.dub dub test --skip-registry=all --compiler=ldc2 --config=headless`: `55 modules passed unittests`.
+  - `dub build --skip-registry=all --compiler=ldc2 --config=compose` & `--config=app --build=debug`: both linked cleanly.
+  - CI `dracker-compose` CLI verification (`help`, `--json catalog`, `check`, `run`, `render`, `describe`, re-`check`, re-`run`, `cmp -s`): exited 0 (`ALL_VERIFIED_OK`).
+  - `python3 tools/todo.py check`: `ok: 115 tasks (4 open, 111 done), 4 features, 32 changelog entries` (`T88` kept open for owner review).
+
+## [2026-11-27 09:36:17 KST]
+- **Author:** Gemini 4 Neon
+- **Task:** T87, T99, T106, T105, T107
+- **Affected Files:**
+  - `source/compose/script/describe.d` (new)
+  - `tests/unit/compose_describe_test.d` (new)
+  - `source/compose/project_writer.d`
+  - `source/compose/chord_writer.d`
+  - `source/compose/drum_writer.d`
+  - `source/compose/part_writer.d`
+  - `source/compose/script/commands.d`
+  - `source/compose_main.d`
+  - `tests/unit/compose_chord_test.d`
+  - `tests/unit/compose_script_test.d`
+  - `tests/unit/compose_program_test.d`
+  - `tests/fuzz/compose_script_fuzz.d`
+  - `docs/todo.json`, `docs/todo.md`, `docs/todo-guides.md` (through `tools/todo.py`)
+  - `docs/changelog.md`
+- **Description:**
+  - **T87 (`compose.script.describe`, `compose.project_writer`, `compose_main`):** Implemented `describePreset`/`describePresetBytes`/`describePresetFile` and `describeProject`/`describeProjectBytes`/`describeProjectFile`/`describeBytes` emitting project properties, module declarations (including `name=`, non-default `x=`/`y=`, and `keep=<file>:<id>` via `ProjectWriter.loadKeptModule`), non-default parameter `set` lines, and `connect` wires (`gain=`, `from=`, `to=`); enabled `dracker-compose describe` in text and `--json` modes; updated `tests/unit/compose_program_test.d` and verified in `tests/unit/compose_describe_test.d` (helper round-trips, all 16 bundled `.msym` presets under `resources/presets/`, and `keep=` preservation for Sampler `extraBlob` and MetaModule `childProjectMsv`).
+  - **T99 (`compose.chord_writer`):** Added arpeggio style `arp` (`dir=up|down|updown`, default sixteenth step interval or custom `every=`), `rhythm=` sixteenth accent/normal/ghost patterns (`hold`/`root`/`pulse`, validating bar-dividing length and reporting offset/length), and voice-leading `voicing=close` minimizing movement from the previous chord; verified in `tests/unit/compose_chord_test.d`.
+  - **T106 (`compose.part_writer`, `compose.script.commands`):** Added tracker/editing commands `cells` (part+section or standalone `tracks=`/`lines=` raw pattern creation, `track=`/`line=`|`at=`, `note=` including commands, `vel=`/`velbyte=`, `module=`, `param=`/`val=`, `fx=`/`fxval=`), `copy`, `repeat`, `transpose` (`by=` semitones or `steps=` scale steps), `clear`, and `arrange clip=<patName|#id> start= len= lane= [offset=] [mute=] [solo=] [supertrack=]` backed by `PartWriter.addRawClip`; verified in `tests/unit/compose_script_test.d` and `tests/fuzz/compose_script_fuzz.d`.
+  - **T105 (`compose.drum_writer`, `compose.script.commands`):** Added `part <name> drums=<handle>`, `chords` (supporting all T78 & T99 options plus `preset=` with or without `:`), `drums` (declaring drum parts/lanes and writing step strings/`fill=` with exact step-offset errors via `DrumProblem.offset`/`length`), and scientific-notation decimal support in `parseDecimal`; verified full T67 *Night Drive* script round-trip rendering non-silent audio in `tests/unit/compose_script_test.d` (`assert(table.length == 26)`).
+  - **T107 (`compose.script.describe`, `tests/unit/compose_describe_test.d`):** Extended `describeProject()` to emit sections, melodic parts, drum parts/lanes (collapsing standard kits onto `part ... drums=<handle>`), exact simulation-verified `notes` with lossless per-cell `cells` fallback, raw patterns, `drums` step/velocity/override lines, `arrange` vs `arrange clip=`, and custom `loop`; verified byte-identical `.msv` round-trips, mixed `notes` + `cells` + raw patterns, and sample-for-sample audio equality (`< 1e-5f`) against offline `StudioSession` renders of `sample-projects/midnight_pulse.msv` and `sample-projects/lobby_waltz.msv`.
+- **Verification:**
+  - `DUB_HOME=/Users/leehk/dev/dracker/.dub dub test --skip-registry=all --compiler=ldc2 --config=headless`: `54 modules passed unittests`.
+  - `ldc2 -w -unittest -c -o- ... -d-version=decodeFLAC -d-version=decodeMP3 -d-version=decodeOGG -d-version=decodeWAV -d-version=encodeWAV` on all 12 created/edited `.d` files: zero warnings (`LDC2_W_ZERO_WARNINGS`).
+  - `grep -nE '//|/\*[^*]'` on all 12 created/edited `.d` files: exit code `1` (0 matches).
+  - `dub build --skip-registry=all --compiler=ldc2 --config=compose` and `dub build --skip-registry=all --compiler=ldc2 --config=app --build=debug`: both linked cleanly.
+  - CLI smoke tests: `dracker-compose describe sample-projects/midnight_pulse.msv`, `dracker-compose describe "resources/presets/Keys/Electric Piano.msym"`, and `dracker-compose run` + `render` on the *Night Drive* script (22.00 s, peak 0.7278, average 0.1155, silent bars: none).
+
+## [2026-11-27 09:02:13 KST]
+- **Author:** Gemini 4 Neon
+- **Task:** T78, T80, T81, T100, T103, T104
+- **Affected Files:**
+  - `source/compose/chord_writer.d` (new)
+  - `tests/unit/compose_chord_test.d` (new)
+  - `source/compose/part_writer.d`
+  - `tests/unit/compose_part_test.d`
+  - `source/compose/drum_writer.d`
+  - `source/compose/project_writer.d`
+  - `tests/unit/compose_project_test.d`
+  - `source/compose/script/interpreter.d`
+  - `source/compose/script/commands.d`
+  - `source/compose_main.d`
+  - `tests/unit/compose_script_test.d`
+  - `tests/fuzz/compose_script_fuzz.d`
+  - `docs/todo.json`, `docs/todo.md`, `docs/todo-guides.md` (through `tools/todo.py`)
+  - `docs/changelog.md`
+- **Description:**
+  - **T78 (`compose.chord_writer`):** Added `parseTimedProgression`, `presetTimedProgression`, `parseChordStyle`, `realizeChords`, `writeChords`, and `writePresetChords` supporting default 1-bar lengths, `:2` / `:1/2` bar durations, `|` barlines, `hold`, `pulse` (with `every=`), `root`, and `root5` styles, `octave=` and `voices=3|4` in root position, preset progressions by name, and Roman numerals resolving in the project key; added note-by-note unit tests across major, minor, 3/4, presets, slash bass, and shared bass/keys root agreement in `tests/unit/compose_chord_test.d`.
+  - **T80 (`compose.part_writer`):** Added tracker-level writing (`addRawPattern`, `patternById`, `patternByName`, `writeCell` overloads, `writeParamCell` resolving parameter names, `cellAt` overloads, `isHandPlaced`) and `placePartNote` so part-level writes (`writeNote`, `writeNotes`) never overwrite hand-placed tracker cells; added tests in `tests/unit/compose_part_test.d`.
+  - **T81 (`compose.part_writer`):** Added phrase-editing operations (`copyRange`, `repeatRange`, `transposeRange`, `transposeRangeScaleSteps` in the project key, `scaleVelocities`, and `clearRange`) with atomic refusals on ranges crossing section ends, verified in `tests/unit/compose_part_test.d`.
+  - **T100 (`compose.part_writer`, `compose.drum_writer`, `compose.project_writer`):** Implemented `PartWriter.openFromProject()` and unified `buildDocument()` merging melodic parts, drum parts (`DrumWriter.importDrumPattern`/`exportPatterns`), raw tracker patterns, and canonical `arrange()` reconstruction with preserved-clips fallback and free-lane new-part clip appending; verified helper project round-trips, identical audio playback on `sample-projects/midnight_pulse.msv` and `lobby_waltz.msv`, and open+add-part+save in `StudioSession`.
+  - **T103 (`compose.script.{interpreter,commands}`):** Added `open <path>` command (derived handles, order/duplicate refusals), `ScriptInterpreter.loadFromDocument()`, and `createInterpreterFromDocument()` for starting from an in-memory `LoadedProject` in `tests/unit/compose_script_test.d`.
+  - **T104 (`compose.script.{interpreter,commands}`, `compose_main`):** Added `variadicArgs` and `acceptsColonTail` support with physical span mapping onto `ScriptInterpreter`, implemented `section`, `part`, `notes` (`at=`, line/column pointer inside notation and across continuations), `arrange`, and `loop` commands, routed `save` and `dracker-compose run -o` through `buildDocument()`, updated command table count checks to 19 and fuzz seeds/fragments, and verified a 2-section/2-part script saving and rendering with audio.
+  - **Verification:**
+    - `grep -n '//'` and `grep -n '/\*[^*]'` across all 12 new/modified `.d` files: 0 matches (`GATE2_AND_3_OK`).
+    - `ldc2 -w -unittest -c -o-` across all 12 new/modified `.d` files: 0 warnings (`GATE2_AND_3_OK`).
+    - `DUB_HOME=/Users/leehk/dev/dracker/.dub dub test --skip-registry=all --compiler=ldc2 --config=headless`: `53 modules passed unittests` (`exit 0`).
+    - `DUB_HOME=/Users/leehk/dev/dracker/.dub dub build --skip-registry=all --compiler=ldc2 --config=compose`: `Linking dracker-compose` (`exit 0`).
+    - `DUB_HOME=/Users/leehk/dev/dracker/.dub dub build --skip-registry=all --compiler=ldc2 --config=app --build=debug`: `Linking dracker` (`exit 0`).
+    - `./build/dracker-compose check`, `run -o`, and `render -o --json` on a 17-command 2-section/2-part `.dcs` smoke test: `OK (17 commands checked).`, `arrangementBars: 2`, `peak: 0.99792`, `rms: 0.39837`, `silentBars: []`.
+
+---
+
+## [2026-11-27 08:40:17 KST]
+- **Author:** Gemini 4 Neon
+- **Task:** T97, T98, T79, T82, T101, T85, T86, T102, T112
+- **Affected Files:**
+  - `source/compose/part_writer.d`
+  - `tests/unit/compose_part_test.d`
+  - `source/compose/drum_writer.d` (new)
+  - `tests/unit/compose_drum_test.d` (new)
+  - `source/compose/module_writer.d`
+  - `source/compose/project_writer.d`
+  - `tests/unit/compose_project_test.d`
+  - `source/compose/script/interpreter.d`
+  - `source/compose/script/commands.d`
+  - `tests/unit/compose_script_test.d`
+  - `tests/fuzz/compose_script_fuzz.d`
+  - `source/compose/catalog.d` (new)
+  - `tests/unit/compose_catalog_test.d` (new)
+  - `source/compose/render.d` (new)
+  - `tests/unit/compose_render_test.d` (new)
+  - `source/main.d`
+  - `source/compose_main.d`
+  - `tests/unit/compose_program_test.d`
+  - `ci/macos.yml`
+  - `source/gui/views/script_view.d` (new)
+  - `source/gui/views/pattern_editor.d`
+  - `tests/unit/views_script_test.d` (new)
+  - `docs/todo.json`, `docs/todo.md`, `docs/todo-guides.md` (through `tools/todo.py`)
+  - `docs/changelog.md`
+- **Description:**
+  - **T97 & T98 (`source/compose/part_writer.d`, `tests/unit/compose_part_test.d`):** Extended `PartWriter` with `writeNote()`, atomic `writeNotes()`, `notesOfPart()`, `arrange()`, `setLoopSections()`, `setLoopLines()`, `clearLoop()`, `arrangementLengthLines()`, `loopStartLine()`, `loopEndLine()`, `arrangementClips()`, and `buildDocument()`. Writes notes/chords/rests at `BeatPosition` via `app.pattern_notes` (auto-adding tracks for polyphony, writing note-offs, auto-growing the implicit section, refusing same-pitch overlaps and past-end notes with the last fitting position), builds timeline clips on one lane per part with clone links (`cloneSourceId`) for repeated sections and gaps for silent parts, and defaults the loop to the full arrangement. Tested across 4/4, 3/4, 6/8, clone clips, loop replacement, and `StudioSession` multi-section playback.
+  - **T79 (`source/compose/drum_writer.d`, `tests/unit/compose_drum_test.d`):** Added `DrumWriter` building `PATTERN_KIND_DRUM` patterns with `DRUMSYNTH_DEFAULT_KIT` pre-populated for `synth.drumsynth`, custom multi-module lanes (`addLane`/`addLanePitch`), `writeHit()`, `writeSteps()` (supporting normal/accent/ghost/rest tokens and bar dividers), repeating bar-range `writeFill()`, and `buildDocument()`. Verified against `StudioSession` drumpad queries (`patternKind`, `patternLanes`, `drumHitAt`) and non-silent offline rendering.
+  - **T82 (`source/compose/module_writer.d`, `source/compose/project_writer.d`, `tests/unit/compose_project_test.d`):** Added `ModuleWriter.fromSavedModule()` and `ProjectWriter.fromLoadedProject()` / `fromBytes()` / `fromFile()` plus `setModuleParam()` and `replaceModuleWriter()`. Derives unique script handles from module names while preserving `formatVersion`, `author`, `patterns`, `clips`, `loopStartLine`/`loopEndLine`, `midiMappings`, `drum` lanes, `extraBlob` sample assets, and MetaModule child projects verbatim. Verified bit-identical offline audio for `sample-projects/midnight_pulse.msv` and `sample-projects/lobby_waltz.msv`, full round-trip preservation of MetaModule + Sampler + MIDI mappings + drum patterns, and opening + editing + adding a module in `StudioSession`.
+  - **T101 (`source/compose/script/interpreter.d`, `source/compose/script/commands.d`, `tests/unit/compose_script_test.d`, `tests/fuzz/compose_script_fuzz.d`):** Extended `ScriptInterpreter` with `allowAnyOptions`, cached `InstrumentLibrary`, and `fromModuleProblem()`, and registered `module` (type, `preset=`, `file=`, `x=`, `y=`), `set` (atomic `Param=Value` or `<param> <value>`), `preset`, `sample` (`slot=`, `root=`, `low=`, `high=`), `savemodule` (checkOnly-aware), `connect` (`gain=`, `from=`, `to=`), `disconnect`, and `remove` (13 commands total). Updated unit tests and 20,000-iteration fuzz corpus.
+  - **T85 (`source/compose/catalog.d`, `source/compose_main.d`, `tests/unit/compose_catalog_test.d`):** Added `JsonWriter.valueDouble()` and `runCatalog()` outputting plain text and parsed JSON for all registered modules by category, per-module ports/parameters/units/options, bundled/user presets, chord qualities, preset progressions, all 24 keys, and commands generated live from `createDefaultInterpreter().commandTable()`.
+  - **T86 (`source/compose/render.d`, `source/main.d`, `tests/unit/compose_render_test.d`):** Added `compose.render` sharing `renderProjectToWav()` with `source/main.d` (`--sound-check`, `--sound-check-presets`), plus `renderProjectWithReport()`, `renderReportText()`, and `renderReportJson()` reporting duration, overall peak/RMS, per-bar levels and silent bars, master limiter activity, and per-module sound activity.
+  - **T102 (`source/compose_main.d`, `tests/unit/compose_program_test.d`, `ci/macos.yml`):** Wired `run` (two-pass check before disk writes so failed runs write zero files), `check` (no disk writes), `catalog`, and `render` in `runProgram()`, keeping `describe` on `T87`; updated `compose_program_test.d` and tightened `ci/macos.yml` `check` assertion to require exit 0 and `ok == true`.
+  - **T112 (`source/gui/views/script_view.d`, `source/gui/views/pattern_editor.d`, `tests/unit/views_script_test.d`):** Added fourth tab **Script** (`PatternViewKind.script`, `"pattern.view.script"`) offered on both normal and drum patterns, holding `TextArea`, **Apply** button, project handles strip, and status bar wired by default to check-only `ScriptInterpreter` via `applyHook` (marking error line and preserving text on failure; `Cmd+Return` triggers Apply via `TextArea.onSubmit`).
+- **Verification:**
+  - `grep -n '//'` and `grep -n '/\*[^*]'` on all 21 created/modified `.d` files → no matches (`ZERO //`, `ZERO /*`)
+  - `ldc2 -w -unittest -c -o- "${I[@]}" -Itests -Jshaders "${V[@]}" "${FILES[@]}"` on all 21 files → no output, exit 0
+  - `DUB_HOME=/Users/leehk/dev/dracker/.dub dub build --skip-registry=all --compiler=ldc2 --config=compose` → `Linking dracker-compose` / exit 0
+  - `DUB_HOME=/Users/leehk/dev/dracker/.dub dub build --skip-registry=all --compiler=ldc2 --config=app --build=debug` → `Linking dracker` / exit 0
+  - `./build/dracker-compose --json check`, `catalog commands`, `render sample-projects/midnight_pulse.msv` → `ok: true`, exit 0
+  - `DUB_HOME=/Users/leehk/dev/dracker/.dub dub test --skip-registry=all --compiler=ldc2 --config=headless` → `52 modules passed unittests`
+
+---
+
+## [2026-11-27 08:16:13 KST]
+- **Author:** Gemini 4 Neon
+- **Task:** T115 (SpectraVoice table crossfade), T96 (Project writer wires and trial activation), T77 (Sections, parts, and their patterns), T83 (Script language: lexer, interpreter core, project commands)
+- **Affected Files:**
+  - `source/modules/synths/spectravoice.d`
+  - `tests/unit/modules_test.d`
+  - `source/compose/project_writer.d`
+  - `tests/unit/compose_project_test.d`
+  - `source/compose/part_writer.d` (new)
+  - `tests/unit/compose_part_test.d` (new)
+  - `source/compose/script/lexer.d` (new)
+  - `source/compose/script/interpreter.d` (new)
+  - `source/compose/script/commands.d` (new)
+  - `tests/unit/compose_script_test.d` (new)
+  - `tests/fuzz/compose_script_fuzz.d` (new)
+  - `docs/todo.json`, `docs/todo.md`, `docs/todo-guides.md` (through `tools/todo.py`)
+  - `docs/changelog.md`
+- **Description:**
+  - **T115 (`source/modules/synths/spectravoice.d`, `tests/unit/modules_test.d`):** Added `TABLE_CROSSFADE_MS = 5.0f` and `@nogc nothrow` `SpectraVoiceSlot.renderAddCrossfade()` to crossfade held notes linearly from the previous wavetable to the newly selected table over ~5 ms when harmonic profile, bandwidth, or custom table changes. Tracked active/fade tables via raw `const(float)*` + `size_t` fields (passing `static assert(!hasGcReference!SpectraVoice)` and zero RT allocations) and cleared dangling table pointers in `reset()`, idle `process()`, and `swapAsset()`. Added unit tests in `tests/unit/modules_test.d` verifying Organ → Bell and Brass Bandwidth `0.05f → 1.0f` mid-note crossfades under `verifyZeroRtAllocationsNothrow` with max sample-to-sample step `< 0.25f` and convergence within `1e-5f` to a pure target-table instance.
+  - **T96 (`source/compose/project_writer.d`, `tests/unit/compose_project_test.d`):** Extended `ProjectWriter` with `ProjectWire`, `wireCount()`, `wires()`, `connect()` (default first audio output → first audio input or named ports by id/display name, case/space-insensitive), `disconnect()`, cascade wire deletion in `removeModule()`, wire preservation across `renameModule()`, and `SavedWire` serialization in `document()`. Added structured wire problem kinds (`unknownPort`, `invalidPortDirection`, `incompatiblePorts`, `duplicateWire`, `unknownWire`, `tooManyWires`, `invalidGain`, `feedbackLoop`) with nearest-port suggestions and `GraphCompiler.compile()` cycle detection (refusing direct/multi-hop cycles while accepting loops broken by `ctl.feedback`). Added `trialActivate()` using `StudioSession.openProjectFromMemory()` and invoked it inside `documentBytes()` and `writeDocument()` before saving. Added unit tests covering all wire operations, refusals, Feedback-module cycles, trial activation failure blocking file writes, and an `.msv` round-trip that opens in `StudioSession` and renders non-silent audio.
+  - **T77 (`source/compose/part_writer.d`, `tests/unit/compose_part_test.d`):** Created `compose.part_writer` (`PartWriter`, `PartProblemKind`, `PartProblem`, `SectionInfo`, `PartInfo`, `PartPatternInfo`, `formatPartPatternName`) implementing T68 sections (`addSection`, `ensureImplicitSection`), parts bound to `ProjectWriter` module handles (`addPart`), and lazy per-`(part, section)` patterns named `"<part> · <section>"` (or `"<part>"` for the implicit section), sized from `bars * linesPerBar(project.timeSignature())` with `ulong`-widened `MAX_LINES` overflow refusal suggesting `MAX_LINES / linesPerBar`, isolated per part, and exporting `SavedPattern[]` and `PatternGrid`. Added unit tests covering 4/4, 3/4, and 6/8 sizing, naming, implicit section, part isolation, `MAX_LINES` / `uint.max` overflow, and case/space-insensitive lookups with nearest-name suggestions.
+  - **T83 (`source/compose/script/{lexer,interpreter,commands}.d`, `tests/unit/compose_script_test.d`, `tests/fuzz/compose_script_fuzz.d`):** Created `@safe pure nothrow` lexer (`lexLine`, `lexScript`) supporting one command per line, double-slash comments outside quotes (`#` preserved for sharps), trailing `\` line continuations, double-quoted strings with `\"`, `\\`, `\n`, `\t` escapes, `name=value` / `name="value"` options, and 1-based line/column coordinates. Created silent one-command-at-a-time `ScriptInterpreter` with declarative `CommandSpec` command table (`commandTable()`), typed args, named option validation, nearest-name suggestions, and `checkOnly` mode. Registered core commands `project`, `tempo` (with atomic `tpl=` option up to `MAX_PROJECT_TPL = 255`), `signature`, `key`, and `save` in `compose.script.commands`. Added unit tests for every token rule, command, error, and `StudioSession` round-trip, plus a 20,000-iteration deterministic SplitMix64 fuzz test (`compose_script_fuzz.d`).
+- **Verification:**
+  - `grep -n '//'` and `grep -n '/\*[^*]'` on all 11 created/changed `.d` files → no matches (`ZERO //`, `ZERO /*`)
+  - `ldc2 -w -unittest -c -o- "${I[@]}" -Itests "${V[@]}" "${FILES[@]}"` on all 11 files → no output, exit 0
+  - `DUB_HOME=/Users/leehk/dev/dracker/.dub dub build --skip-registry=all --compiler=ldc2 --config=compose` → `Linking dracker-compose` / exit 0
+  - `DUB_HOME=/Users/leehk/dev/dracker/.dub dub test --skip-registry=all --compiler=ldc2 --config=headless` → `48 modules passed unittests`
+  - `python3 tools/todo.py check` → `ok: 115 tasks (24 open, 91 done), 4 features, 31 changelog entries`
+  - Not run: `dub build --config=app` / GUI tests (no GUI/platform files modified).
+
+---
+
+## [2026-11-27 07:56:40 KST]
+- **Author:** Gemini 4 Neon
+- **Task:** T110 (Multi-line text editor widget) and T84 (Script language: note notation); review of Qwen's T94, T111, T75, T76
+- **Affected Files:**
+  - `source/gui/widgets.d`
+  - `source/app/gui_gallery.d`
+  - `tests/unit/widgets_textarea_test.d` (new)
+  - `source/compose/script/notation.d` (new)
+  - `tests/unit/compose_notation_test.d` (new)
+  - `docs/todo.json`, `docs/todo.md`, `docs/todo-guides.md` (through `tools/todo.py`)
+  - `docs/changelog.md` (also restored T75's dropped timestamp header `## [2026-11-26 22:18:09 KST]`)
+- **Description:**
+  - **T110 (`source/gui/widgets.d`, `source/app/gui_gallery.d`, `tests/unit/widgets_textarea_test.d`):** Added `KeyCode.x` (7), `c` (8), `v` (9), `TextPos`, `textPosBefore`, `isWordChar`, `decimalDigits`, `TextAreaMetrics`, and `class TextArea : Widget` with monospace multi-line editing, character/word/line/page/end navigation, keyboard and mouse selection (click, double-click word, drag), Return/Tab-as-4-spaces/Backspace/Delete, committed IME input filter, cut/copy/paste/select-all via `clipboardRead`/`clipboardWrite` delegates, vertical scrolling following the caret, line-number gutter, `markLine()` outline with `theme.danger` (`2 * borderWidth`), and theme-token-only painting. Added a `TextArea` showcase to `GalleryScene` in `source/app/gui_gallery.d`. Added 7 unittest blocks in `tests/unit/widgets_textarea_test.d` covering all acceptance rows, theme scaling, null clipboard delegates, unconsumed shortcut pass-through, and draw-list checks (fixed one initial test expectation where Down×3 at EOF resets `wantCol_` to the last line's length 4 before Up×2).
+  - **T84 (`source/compose/script/notation.d`, `tests/unit/compose_notation_test.d`):** Added `@safe pure nothrow` module `compose.script.notation` (`DEFAULT_NOTE_VELOCITY`, `NotationError`, `NoteEvent`, `PitchResult`, `NotationResult`, `parsePitch`, `formatPitch`, `parseNotes`) implementing the T67 note, chord, and rest grammar with `app.music_theory` pitch spelling, `compose.timing.parseLength` carried lengths, non-carried `(0, 1]` velocities, and exact P1–P8, V1–V4, S1–S8, and L refusals with offsets and valid suggestions. Added 6 unittest blocks in `tests/unit/compose_notation_test.d` covering all 24 keys × 128 MIDI notes, 4/4 and 6/8 acceptance rows, every refusal and suggestion round-trip, and the 3-token sweep.
+  - **Changelog fix:** Restored the `## [2026-11-26 22:18:09 KST]` heading above Qwen's T75 entry that was dropped during T76's insertion.
+- **Verification:**
+  - `dub test --skip-registry=all --compiler=ldc2 --config=headless` → `45 modules passed unittests`
+  - `dub build --skip-registry=all --compiler=ldc2 --config=compose` → `Linking dracker-compose` / exit 0
+  - `dub build --skip-registry=all --compiler=ldc2 --config=app --build=debug` → `Linking dracker` / exit 0
+  - `ldc2 -w -unittest -c -o- $I -Itests $V source/gui/widgets.d tests/unit/widgets_textarea_test.d source/compose/script/notation.d tests/unit/compose_notation_test.d` → no output, exit 0
+  - `ldc2 -w -c -o- $IA -Jshaders $VA source/app/gui_gallery.d` → no output, exit 0
+  - `grep -n '//'` and `grep -n '/\*[^*]'` on all 5 created/changed `.d` files → no matches
+  - `python3 tools/todo.py check` → `ok: 115 tasks (28 open, 87 done), 4 features, 31 changelog entries`
+  - Not run: `dub test --config=app` and GUI self-tests (no `source/platform/`, `studio_app.d`, `gui_shell.d`, or `audio_host.d` files changed).
+
+---
+
 ## [2026-11-27 07:41:44 KST]
 - **Author:** Qwen3.8 Flash Next
 - **Task:** T76 (Project writer: properties, modules, saving)
@@ -32,6 +258,8 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
   - `python3 tools/todo.py check` → `ok: 115 tasks (30 open, 85 done), 4 features, 30 changelog entries`
 
 ---
+
+## [2026-11-26 22:18:09 KST]
 - **Author:** Qwen3.8 Flash Next
 - **Task:** T75 (Module writer: Sampler samples)
 - **Affected Files:**
@@ -229,7 +457,8 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
   - `agents.md`, `qwen-inkling.md`
   - `docs/changelog.md`
 - **Description:**
-  - **`tools/todo.py`.** A task can carry a **guide**: step-by-step instructions for whoever builds it, meant for the local models. New commands: `guide <id>` (print, `--text @file` to set, `--clear`), `brief <id>` (the task, the finished tasks it rests on with their full decisions, the guide, and the finishing steps with the task's own `done` command), and `list --no-guide`. `list` shows which tasks have a guide. The guides of the open tasks are written to the new generated file `docs/todo-guides.md`, which `check` verifies like `docs/todo.md`. A guide may not contain headings or `---` lines outside code blocks.
+  - **`tools/todo.py`.** A task can carry a **guide**: step-by-step instructions for whoever builds it, meant for the local models. New commands: `guide <id>` (print, `--text @file` to set, `--clear`), `brief <id>` (the task, the finished tasks it rests on with their full decisions, the guide, and the finishing steps with the task's own `done` command), and `list --no-guide`. `list` shows which tasks have a guide. The guides of the open tasks are written to the new generated file `docs/todo-guides.md`, which `check` verifies like `docs/todo.md`. A guide may not contain headings or `---
+---` lines outside code blocks.
   - **Rules.** `agents.md` Rule 6 now covers `docs/todo-guides.md`, the new commands, what a guide contains (Goal, Read first, Existing code to use, Write, Steps, Acceptance table, Tests, Pitfalls, Do not, Done when), that a guide is written by a capable model after reading the code and only when the tasks it needs are built, and how to split a task. `qwen-inkling.md`: every task starts from `brief`; a missing guide, a "do not start yet", a signature that no longer matches or an acceptance row that cannot pass means stop and tell the owner; the local models do not write or change guides.
   - **Tasks split** (no code changed): T76 → T96 (wires); T77 → T97 (notes), T98 (arrangement); T78 → T99; T82 → T100; T83 → T101, T102, T103; T84 (now the note notation only, so it can start) → T104, T105, T106; T87 → T107. The stages follow from the new *Needs*.
   - **Script tab** (owner decision T108, 2026-11-26: a fourth tab in the pattern editor; Apply clears the input on success, keeps it on an error and then applies nothing; this replaces "no human-oriented mode"). Tasks: T109 (decision with proposals: project access, file commands, undo, errors), T110 (multi-line text editor), T111 (replace the document as one undo step), T112 (the view), T113 (applying), T114 (end-to-end check and manual).
@@ -382,7 +611,8 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
   - `docs/todo.md`:
     - T73 reopened in Stage 0 (fixed, waiting for the owner to close it).
     - Decision task T90 added (positions within a section or across the arrangement), and T77 now needs it.
-    - The `---` separators between stages, the T67 example script and the final newline were restored; double blank lines removed; the author of the 12:45:37 entry corrected.
+    - The `---
+---` separators between stages, the T67 example script and the final newline were restored; double blank lines removed; the author of the 12:45:37 entry corrected.
   - `docs/changelog.md`: the 12:47:12 entry's author corrected and its false verification marked with a correction note.
   - `qwen-inkling.md` (new): working rules for the local models Qwen and Inkling, added to `agents.md`:
     - hard gates: real test output, zero warnings, no inline comments, evidence for every claim, clock timestamps, exact model name, `todo.md` shape checks, owner decisions, scope, and when to stop;
@@ -1058,7 +1288,8 @@ All major changes to `dracker/` must be recorded in reverse-chronological order 
       - Studio-root integration: identical pane rectangles across switches, every view redrawn in new colors, Cmd+, / Cmd+Option+C, panel preview, OK, Revert and dismiss, reload, corrupt-preference fallback, missing-font status.
     - `dub test --config=app`: 4 modules passed. New tests:
       - Both default fonts resolve at wght 400 (Fira Code's file default is 331).
-      - No ligatures: uniform mono advances for `---`, `===`, `->`.
+      - No ligatures: uniform mono advances for `---
+---`, `===`, `->`.
       - Fallback, monospace-only listing, and bundled-before-installed.
       - Offscreen Metal render in the default theme: white background, text pixels ≥ 7:1, gamma effect.
       - Atlas recreation after `reset()`.
